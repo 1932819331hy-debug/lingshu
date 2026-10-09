@@ -30,6 +30,8 @@ import threading
 import weakref
 import functools
 import contextlib
+# 结构事件工作单元用裸名 contextmanager（PR #429）；与上面的 contextlib 同一模块。
+from contextlib import contextmanager
 from typing import Optional, List, Dict, Any, Tuple, Set
 from dataclasses import dataclass, field, asdict, fields as _dc_fields
 from enum import Enum
@@ -1043,7 +1045,9 @@ class LayeredStore:
                 if attempt == 2:
                     raise
                 _t.sleep(1.5 * (2 ** attempt))  # 1.5s / 3s 退避
-        self._lock = threading.Lock()
+        # 可重入锁：结构事件工作单元 `_structure_event_transaction` 会在已持锁的
+        # 写路径内再次取锁（PR #429）。#267 的逐行容错计数原样保留。
+        self._lock = threading.RLock()
         #: #267 逐行容错计数（每次装载面调用刷新；见 `_tolerant_nodes`）。
         self.last_skipped_rows: List[str] = []
 
@@ -1385,6 +1389,42 @@ class LayeredStore:
             c.execute("INSERT OR REPLACE INTO engine_meta (key, value) VALUES (?, ?)",
                       (key, str(value)))
             self.conn.commit()
+
+    @contextmanager
+    def _structure_event_transaction(self):
+        """结构事件工作单元；已有调用方事务时只释放自己的 savepoint。"""
+        with self._lock:
+            conn = self.conn
+            nested = conn.in_transaction
+            savepoint = f"structure_event_{uuid.uuid4().hex}"
+            conn.execute(f"SAVEPOINT {savepoint}" if nested else "BEGIN IMMEDIATE")
+            try:
+                yield conn.cursor()
+                if nested:
+                    conn.execute(f"RELEASE SAVEPOINT {savepoint}")
+                else:
+                    conn.commit()
+            except BaseException:
+                if nested:
+                    conn.execute(f"ROLLBACK TO SAVEPOINT {savepoint}")
+                    conn.execute(f"RELEASE SAVEPOINT {savepoint}")
+                else:
+                    conn.rollback()
+                raise
+
+    def _insert_structure_event(self, node: STNode, cursor):
+        """内部追加：正文、类型、来源、同步标记和操作留痕共用一次提交。"""
+        if node.layer in self.IMMUTABLE_LAYERS and self.role != Role.PRIMARY:
+            raise PermissionError("共享层由父节点主控")
+        cursor.execute("INSERT INTO nodes VALUES (?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?)",
+                       node.to_row())
+        event = node.state_attributes["structure_event"]
+        cursor.execute(
+            "INSERT INTO action_logs "
+            "(ts, action_type, summary, node_ids, outcome, context) VALUES (?,?,?,?,?,?)",
+            (time.time(), "structure_event", node.content,
+             json.dumps([node.id]), json.dumps({"layer": node.layer.value}),
+             json.dumps(event, ensure_ascii=False)))
 
     def get_node(self, node_id: str) -> Optional[STNode]:
         """按 id 取节点，不存在返回 None。"""
@@ -4674,25 +4714,32 @@ class SpacetimeMemoryEngine:
     SUB_PENDING_SYNC_TAG = "pending_sync"
 
     def _write_structure_record(self, record: str, tag: str,
-                                extra_tags: List[str] = None) -> Optional[STNode]:
-        """结构层「重要事件」记录惯例（唯一收口）。
+                                extra_tags: List[str] = None, *,
+                                source: str = "", metadata: Dict = None,
+                                sub_modality: str = "text",
+                                record_class: str = "history",
+                                importance: float = 0.9,
+                                confidence: float = None,
+                                _cursor=None) -> STNode:
+        """结构层「重要事件」记录惯例（#329 唯一收口 · 转发件）。
 
+        第二实参 `tag` 是事件类型；正文的 `[tag] ` 前缀由
+        `_record_structure_event` 统一添加（调用方**不再**自带前缀）。
+
+        实现转发到 `_record_structure_event`（PR #429 的受保护留史），故：
         PRIMARY ⇒ 写结构层（不可遗忘）；SUB ⇒ 写知识层副本，并**一律**带
-        `SUB_PENDING_SYNC_TAG`（待父节点同步为验证副本）。写失败静默（与既有
-        四处一致：记录不阻断主流程）。
+        `SUB_PENDING_SYNC_TAG`（待父节点同步为验证副本）。
+
+        与 #329 原实现的**行为差异**（合并取舍，如实标注）：留史失败**向调用方
+        传播**，不再静默返回 None。静默会让「留史失败即回滚数据变更」失效
+        （见 `migrate_v17_coordinates` 的 #429 事务口径与
+        tests/test_structure_events.py::test_migration_and_history_commit_or_rollback_together）。
+        全仓仅本处定义 + 三处调用，无测试依赖旧的静默语义。
         """
-        tags = [tag] + list(extra_tags or [])
-        try:
-            if self.role == Role.PRIMARY:
-                n = self.add_structure_node(record, importance=0.9)
-            else:
-                n = self.add_perception(record, importance=0.9,
-                                        tags=tags + [self.SUB_PENDING_SYNC_TAG])
-            if n:
-                self.store.tag_node(n.id, tag)
-            return n
-        except Exception:
-            return None
+        return self._record_structure_event(
+            tag, record, extra_tags=extra_tags, source=source, metadata=metadata,
+            sub_modality=sub_modality, record_class=record_class,
+            importance=importance, confidence=confidence, _cursor=_cursor)
 
     # ==================== 边操作 ====================
 
@@ -5296,17 +5343,97 @@ class SpacetimeMemoryEngine:
     #: 守卫 `tests/test_issue329_anchor_kinds_guard.py` 钉死取值并防松动。
     ANCHOR_KINDS = ("pre_access_stance", "introspection", "external_calibration")
 
+    def _record_structure_event(self, kind: str, content: str,
+                                condition_space: ConditionSpace = None,
+                                importance: float = 0.9, source: str = "",
+                                metadata: Dict = None, confidence: float = None,
+                                extra_tags: List[str] = None, sub_modality: str = "text",
+                                record_class: str = "history", _cursor=None) -> STNode:
+        """受信宿主内部留史；外部调用必须走下方带授权闸的公共入口。"""
+        if not isinstance(kind, str) or not kind.strip():
+            raise ValueError("事件类型不能为空")
+        # 角色分派（本类是唯一实现；#329 守卫 G4b 允许的第二处分派在
+        # `register_external_anchor` 的锚点腿）。SUB 腿的 pending_sync 标签
+        # 取单一真源常量 `SUB_PENDING_SYNC_TAG`（#329 守卫 G4a：该字面量在
+        # core.py 只允许出现一次）。
+        if self.role == Role.PRIMARY:
+            tags = ["structure", "structure_event", kind]
+            modality = "structure"
+            layer = MemoryLayer.STRUCTURE
+            confidence_v = 1.0 if confidence is None else confidence
+        else:
+            tags = [self.SUB_PENDING_SYNC_TAG, "structure_event", kind]
+            modality = sub_modality
+            layer = MemoryLayer.KNOWLEDGE
+            confidence_v = 0.8 if confidence is None else confidence
+        cs = condition_space or ConditionSpace(
+            "结构事件", "事件记录", (0, float('inf')), "历史记录，不是执行授权")
+        tags += [tag for tag in (extra_tags or []) if tag not in tags]
+        node = STNode(
+            id=f"struct_event_{uuid.uuid4().hex}",
+            content=f"[{kind}] {content}",
+            modality=modality,
+            spatial_coordinates={}, temporal_coordinate=time.time(),
+            condition_space=cs, importance=importance,
+            confidence=confidence_v,
+            layer=layer,
+            tags=tags,
+            state_attributes={"structure_event": {
+                "kind": kind, "source": source, "record_class": record_class,
+                "metadata": metadata or {}}})
+        if _cursor is not None:
+            self.store._insert_structure_event(node, _cursor)
+        else:
+            with self.store._structure_event_transaction() as cursor:
+                self.store._insert_structure_event(node, cursor)
+        return node
+
+    def record_structure_event(self, kind: str, content: str,
+                               condition_space: ConditionSpace = None,
+                               importance: float = 0.9, designer_key: str = None,
+                               *, source: str = "", metadata: Dict = None) -> STNode:
+        """授权外部输入的公共留史入口；记录事件，不批准规则或执行动作。
+
+        PRIMARY 追加 STRUCTURE；其他角色追加 KNOWLEDGE + pending_sync。
+        独立事件不走 M5 正文去重，缺少辅助来源说明不阻断记录。
+        source/metadata 是来源描述，不是身份认证或权限依据。
+        """
+        if not verify_designer(designer_key):
+            raise PermissionError(
+                "D-007 设计者认证失败：密钥无效或未配置 AEIS_DESIGNER_KEY（fail-closed）")
+        return self._record_structure_event(
+            kind, content, condition_space, importance, source, metadata, confidence=0.8)
+
+    VERSION_EVENT_STATUSES = ("recorded", "planned", "applied", "failed",
+                              "rolled_back", "uncertain")
+
+    def record_version_event(self, version: str, content: str = "",
+                             condition_space: ConditionSpace = None,
+                             designer_key: str = None, *, from_version: str = None,
+                             status: str = "recorded", source: str = "",
+                             metadata: Dict = None) -> STNode:
+        """追加版本迭代历史；默认只是 recorded，不执行升级或证明部署完成。"""
+        if not isinstance(version, str) or not version.strip():
+            raise ValueError("版本不能为空")
+        if status not in self.VERSION_EVENT_STATUSES:
+            raise ValueError(f"未知版本记录状态: {status}")
+        cs = condition_space or ConditionSpace(
+            "版本迭代", "发布流程", (0, float('inf')), "版本历史，不是执行授权")
+        return self.record_structure_event(
+            "version_iteration", content or f"版本 {version}（{status}）",
+            condition_space=cs, designer_key=designer_key, source=source,
+            metadata={"version": version, "from_version": from_version,
+                      "status": status, "details": metadata or {}})
+
     def register_external_anchor(self, kind: str, content: str,
                                  condition_space: ConditionSpace = None,
-                                 designer_key: str = None) -> STNode:
-        """接入前立场 / 自省记录 / 外部校准输入。
-        PRIMARY 写结构层（不可遗忘）；SUB 写知识层副本（待父节点同步为验证副本）。
+                                 designer_key: str = None, *,
+                                 source: str = "", metadata: Dict = None) -> STNode:
+        """接入前立场 / 自省记录 / 外部校准输入（D-007 授权闸保持不变）。
 
-        D-007 授权闸（issue #109）：外部锚点是「外部内容 → 不可遗忘共享层」的
-        入口，先前**无任何授权**即写结构层（`confidence=1.0`、不可删），且绕过
-        「提案→复核→终裁」全链。现补齐与 `adjudicate_promotion` **同款**的
-        fail-closed 密钥闸：未配置/不匹配 `AEIS_DESIGNER_KEY` 一律拒绝
-        （`PermissionError`），不做「降级到知识层」的静默放行。"""
+        PRIMARY 写结构层；其他角色写知识层副本并明确标记 pending_sync。
+        来源说明随节点保存，不代表外部断言已验证；同步仍由父节点负责。
+        """
         if not verify_designer(designer_key):
             raise PermissionError(
                 "D-007 设计者认证失败：密钥无效或未配置 AEIS_DESIGNER_KEY（fail-closed）")
@@ -5314,21 +5441,20 @@ class SpacetimeMemoryEngine:
             raise ValueError(f"未知锚点类型: {kind}")
         cs = condition_space or ConditionSpace(
             f"外部锚点:{kind}", "外部校准输入", (0, float('inf')), "方向性自检参照")
+        # 写入机制（原子留史 + structure_event 元数据）与其余三处共用 `_record_structure_event`，
+        # 不再内联构造节点；SUB 腿的 pending_sync 标签仍取单一真源常量 `SUB_PENDING_SYNC_TAG`。
+        # 锚点腿保留自己的角色分派：tests/test_issue329_anchor_kinds_guard.py 的 G4b
+        # 把「core.py 内的角色分派恰为 2 处」钉死（单一收口辅助 +
+        # 外部锚点自身分支），该守卫在 main 上先于本 PR 落地，不得为凑绿而改。
         if self.role == Role.PRIMARY:
-            return self.add_structure_node(
-                content=f"[{kind}] {content}", importance=0.9, condition_space=cs)
-        node = STNode(
-            id=f"ext_{uuid.uuid4().hex[:8]}_{int(time.time()*1000)}",
-            content=f"[{kind}] {content}", modality="anchor",
-            spatial_coordinates={}, temporal_coordinate=time.time(),
-            condition_space=cs, importance=0.9, confidence=0.8,
-            layer=MemoryLayer.KNOWLEDGE,
-            # SUB 写知识层副本 ⇒ 与 `_write_structure_record` 同一惯例，**一律**带
-            # `SUB_PENDING_SYNC_TAG`（issue #329：此前四处同惯例内联复制、
-            # `pending_sync` 只一处带 ⇒ 已收归单一真源）。
-            tags=["external_anchor", kind, self.SUB_PENDING_SYNC_TAG])
-        self.store.add_node(node)
-        return node
+            return self._record_structure_event(
+                kind, content, condition_space=cs, source=source, metadata=metadata,
+                extra_tags=["external_anchor"], sub_modality="anchor",
+                record_class="external_anchor", confidence=1.0)
+        return self._record_structure_event(
+            kind, content, condition_space=cs, source=source, metadata=metadata,
+            extra_tags=["external_anchor"], sub_modality="anchor",
+            record_class="external_anchor", confidence=0.8)
 
     # ==================== 信任状态（M3 · D-002） ====================
 
@@ -7249,17 +7375,22 @@ class SpacetimeMemoryEngine:
 
     def adjust_attention_weight(self, key: str, value: float, source: str, reason: str,
                                 role: str = "reflect") -> bool:
-        """注意力权重动态调整（DEVIATION-002/004）：
-        - role='reflect'：反思单元提案（基线调整，须验证单元复核 + 维生系统终裁——调用方保证）
-        - role='vitals'：维生系统 P0 危机临时覆盖（事后验证单元复核）
-        变更记入 weight_adjustment_log + 结构层（不可遗忘）"""
+        """注意力权重动态调整（DEVIATION-002/004）。
+
+        role='reflect' 须调用方完成复核/终裁；role='vitals' 为危机临时覆盖。
+        已执行动作的留史失败向调用方报告，不再静默返回成功。
+        """
         if not self._attention_policy:
             return False
         if key not in self._attention_policy.preference_weights:
             return False
         self._attention_policy.set_weight(key, value, source, reason, role)
-        record = f"[attention_weight] {key}={value}（{role} · {source}）{reason}"
-        self._write_structure_record(record, "attention_weight")
+        # 保留 #329 单一收口辅助的调用形态（第二实参=tag 字面量），
+        # 正文不再自带 [tag] 前缀（由辅助统一加），来源/元数据取 PR #429 的结构事件字段。
+        self._write_structure_record(
+            f"{key}={value}（{role} · {source}）{reason}", "attention_weight",
+            source=source,
+            metadata={"key": key, "value": value, "role": role, "reason": reason})
         return True
 
     # ==================== v1.7 多模态（MULTIMODAL-REV1 · D-001~D-005） ====================
@@ -7301,35 +7432,46 @@ class SpacetimeMemoryEngine:
         未削判别力：迁移**判据**仍是 Python 侧 `startswith(("protocol_",
         "radical_", "neural_"))`，SQL 只做超集筛。
         判据来源：经验标定（本件 #279，无理论章节规定启动期迁移的短路口径）——
-        口径取「无候选行 ⇒ 零解析」；追不到更早出处。"""
+        口径取「无候选行 ⇒ 零解析」；追不到更早出处。
+
+        PR #429（合并保留）：数据修改、事件节点与操作记录收进**同一工作单元**；
+        留史失败回滚迁移并向调用方传播（不再静默）。调用方已有事务时只释放自己的
+        savepoint。"""
+        # #279：只读候选检查——候选集为空即零 Python 侧解析，且不争写锁。
         c = self.store.conn.cursor()
-        migrated = 0
         c.execute(self._V17_CANDIDATE_SQL)
-        for row in c.fetchall():
-            nid, sp_json, se_json = row[0], row[1], row[2]
-            sp = json.loads(sp_json or "{}")
-            se = json.loads(se_json or "{}") if se_json else {}
-            semantic_keys = [k for k in sp if k.startswith(("protocol_", "radical_", "neural_"))]
-            if not semantic_keys:
-                continue
-            se.setdefault("protocol", {}).setdefault("concept", {})
-            se.setdefault("radical", {})
-            se.setdefault("neural", {})
-            for k in semantic_keys:
-                v = sp.pop(k)
-                if k.startswith("protocol_"):
-                    se["protocol"]["concept"][k[len("protocol_"):]] = v
-                elif k.startswith("radical_"):
-                    se["radical"][k[len("radical_"):]] = v
-                elif k.startswith("neural_"):
-                    se["neural"][k[len("neural_"):]] = v
-            c.execute("UPDATE nodes SET spatial_coordinates=?, semantic_coordinates=? WHERE id=?",
-                      (json.dumps(sp), json.dumps(se), nid))
-            migrated += 1
-        self.store.conn.commit()
-        if migrated:
-            event = f"[migration] v1.7 坐标字段分离：{migrated} 节点语义键迁移至 semantic_coordinates"
-            self._write_structure_record(event, "migration", extra_tags=["v1.7"])
+        if not c.fetchall():
+            return {"migrated_nodes": 0}
+        migrated = 0
+        with self.store._structure_event_transaction() as c:
+            c.execute(self._V17_CANDIDATE_SQL)
+            for row in c.fetchall():
+                nid, sp_json, se_json = row[0], row[1], row[2]
+                sp = json.loads(sp_json or "{}")
+                se = json.loads(se_json or "{}") if se_json else {}
+                semantic_keys = [k for k in sp if k.startswith(
+                    ("protocol_", "radical_", "neural_"))]
+                if not semantic_keys:
+                    continue
+                se.setdefault("protocol", {}).setdefault("concept", {})
+                se.setdefault("radical", {})
+                se.setdefault("neural", {})
+                for k in semantic_keys:
+                    v = sp.pop(k)
+                    if k.startswith("protocol_"):
+                        se["protocol"]["concept"][k[len("protocol_"):]] = v
+                    elif k.startswith("radical_"):
+                        se["radical"][k[len("radical_"):]] = v
+                    elif k.startswith("neural_"):
+                        se["neural"][k[len("neural_"):]] = v
+                c.execute("UPDATE nodes SET spatial_coordinates=?, semantic_coordinates=? WHERE id=?",
+                          (json.dumps(sp), json.dumps(se), nid))
+                migrated += 1
+            if migrated:
+                self._write_structure_record(
+                    f"v1.7 坐标字段分离：{migrated} 节点语义键迁移至 semantic_coordinates",
+                    "migration", extra_tags=["v1.7"], source="migrate_v17_coordinates",
+                    metadata={"version": "v1.7", "migrated_nodes": migrated}, _cursor=c)
         return {"migrated_nodes": migrated}
 
     @_transactional
@@ -8086,6 +8228,10 @@ class SpacetimeMemoryEngine:
         §4 修法形状 4（「应用时复用 `set_dedup_config` 的钳制」）。
         削掉的判别力：越界终裁值被**静默钳到边界**（不报错、不拒绝终裁）——与
         `set_dedup_config` 现行处置同口径。
+
+        PR #429（合并保留）：应用配置仍走 #118/#153 的唯一真源
+        `_apply_verifier_standard`（回放路径同口径）；留史正文取**钳制后**的配置值，
+        并按结构事件记录附带 metadata（standard_id/param/value）。
         """
         result = self.store.adjudicate_verifier_standard(vid, adjudicator, approved,
                                                          designer_key=designer_key)
@@ -8093,10 +8239,13 @@ class SpacetimeMemoryEngine:
             return False
         if result["status"] == "approved":
             self._apply_verifier_standard(result["param"], result["value"])
-            record = (f"[verifier_standard] {result['param']}="
+            record = (f"{result['param']}="
                       f"{self._verifier_config.get(result['param'], result['value'])}"
                       f" 终裁通过（{adjudicator}）")
-            self._write_structure_record(record, "verifier_standard")
+            self._write_structure_record(
+                record, "verifier_standard", source=adjudicator,
+                metadata={"standard_id": vid, "param": result["param"],
+                          "value": result["value"]})
         return True
 
     def _apply_verifier_standard(self, param: str, value) -> None:
