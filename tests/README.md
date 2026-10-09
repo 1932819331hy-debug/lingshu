@@ -1,19 +1,24 @@
-# tests/ · 运行方式与已知状态
+# tests/ · 当前运行方式
 
-> 本文档登记测试件的双模式运行方式、已知红与耗时档位。改动结论均以**能被独立复跑**为准。
+完整门禁由 [.github/workflows/gate.yml](../.github/workflows/gate.yml) 定义：
 
-## 一键运行
+1. 安装 `pip install -e ".[full,dev]"`。
+2. 逐一运行 workflow 的 `SCRIPT_TESTS`（`python -X utf8 <文件>`），任一非零退出码即失败。
+3. 使用 `python -X utf8 -m pytest tests/ -v`，并通过 `--ignore` 排除已在前一步独立执行的脚本文件。所有其他 pytest 用例都参加检查。
 
-```bash
-pip install -e ".[full,dev]"     # world/nn/gen 需 numpy+Pillow；dev 提供 pytest
-python -m pytest tests/ -v -rs --ignore=tests/test_hex_search.py --ignore=tests/test_hex_hier.py
-                                 # ↑ 快档（≈80s）；两个重件见下表
-python -m pytest tests/ -v -rs   # 全量（≈20min，含两个重件）
+部分脚本在模块导入时执行或退出，直接对目录运行 pytest 不能替代上述完整门禁。脚本列表统一以 workflow 为准，不在这里维护另一份名单。
+
+脑适配器测试需要公开 `dsh-memory` 代码目录，由 `MDCG_BRAIN_PYTHONPATH` 指定。CI 会 clone 公开仓并实际运行；只有公开仓不可达时才显示具体 SKIP 原因。它不使用真实记忆数据库。
+
+结构服务业务回归运行：
+
+```text
+python -X utf8 -m pytest tests/test_structure_events.py tests/test_structure_writer.py -q
 ```
 
-## 双模式说明
+TLS 子进程测试使用 OpenSSL CLI 在临时目录生成证书与私钥，文件不会进入仓库。GitHub Ubuntu runner 提供该工具；本地需先安装 OpenSSL CLI。Windows 的临时 ACL 调整只作用于测试自身目录。
 
-测试件支持两种入口，断言集一致：
+两条 `test_hex_text` 历史 known-fail 现在已通过原断言，gate 已移除对应 deselect；没有添加 xfail。旧 intake 中的 6/16、7/12 是历史导出读数，不能用来描述当前实现。
 
 | 形态 | 文件 | 说明 |
 |---|---|---|
@@ -62,3 +67,5 @@ PR 另有 `pr-lint.yml` 标题门与 `repro-bot.yml` 复跑机器人。本地全
 - 新增根 `conftest.py`（sys.path 注入）已进 main；同 PR 自带的 ci.yml 工作流
   **未被采纳**（与 main 的 gate.yml 重复且更窄，该文件从未落仓）——CI 真源为
   `gate.yml`。
+
+SciPy 属可选后端，未安装时其现有专属测试显式 skip；不要将 skip 记为运行通过。核心和 NumPy 路径正常运行。

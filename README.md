@@ -44,7 +44,7 @@
 
 ## 代码主体
 
-身体侧模块化导出 v0.1 已入仓——**`lingshu` Python 包**（core 存算一体 8 件 ·
+身体侧模块化导出 v0.1 已入仓——**`lingshu` Python 包**（core 存算一体 11 件 ·
 world 世界模型 27 件 · nn 自研神经网络 14 件 · gen 图像生成 7 件）：
 
 ```bash
@@ -53,7 +53,7 @@ pip install -e ".[full]"     # 含 numpy / Pillow（world / nn / gen 的常规�
 ```
 
 结构事件与版本历史的写入接口、授权及同步边界见
-[结构事件写入说明](docs/structure-events.md)。
+[结构历史与受保护写服务](docs/structure-events.md)。
 
 **已测版本矩阵**（2026-10-08 实测，供选版参考）：Python 3.12.x · numpy 2.3.5 / 2.4.2 / 2.5.3 ·
 Pillow 12.2.0 / 12.3.0——`pyproject.toml` 中 extras 的版本区间由此收敛，**区间外未测不承诺**。

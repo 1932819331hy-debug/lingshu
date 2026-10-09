@@ -80,6 +80,11 @@ STDLIB_ALLOWED = frozenset({
     # 修复时 core.py 引入——标准库；守卫按设计判红「未知裸名」，此处补分类而非放宽判据）
     "sys", "os", "importlib", "warnings", "pathlib",
     "weakref", "functools", "contextlib",
+    # PR #429 的受保护写服务（structure_service / structure_permissions）
+    # 另引入 ctypes/datetime/logging/socket/socketserver/ssl/struct——同为标准库，
+    # 按同一口径补分类（D0b 断言本表 ⊆ sys.stdlib_module_names）。
+"sys", "os", "importlib", "warnings", "pathlib", "contextlib",
+    "ctypes", "datetime", "logging", "socket", "socketserver", "ssl", "struct",
     # 并发 / 时间 / 唯一定名（queue：2026-10-09 采纳 PR #260 时 brain_store.py 引入——
     # 标准库、与 threading 同族；守卫按设计判红「未知裸名」，此处补分类而非放宽判据）
     "threading", "queue", "time", "uuid",

@@ -1050,6 +1050,9 @@ class LayeredStore:
         self._lock = threading.RLock()
         #: #267 逐行容错计数（每次装载面调用刷新；见 `_tolerant_nodes`）。
         self.last_skipped_rows: List[str] = []
+        self._structure_writer_active = bool(self.get_meta("structure_writer_schema"))
+        if self._structure_writer_active:
+            self.conn.execute("PRAGMA foreign_keys=ON")
 
     def _connect(self, dsn: str):
         """建立本线程的连接并登记，返回登记用的连接槽（`_ThreadConn`）。
@@ -1069,6 +1072,8 @@ class LayeredStore:
             _ckw["factory"] = _LockRetryConnection
         c = sqlite3.connect(dsn, **_ckw)
         c.row_factory = sqlite3.Row
+        if getattr(self, "_structure_writer_active", False):
+            c.execute("PRAGMA foreign_keys=ON")
         # #425：旧实现只在文件库设 busy_timeout，内存库整段跳过 ⇒ 连 SQLITE_BUSY 档
         # 都没有等待。现两档都设；但 busy handler 对 SQLITE_LOCKED 无效（实测 0.0s
         # 立即抛），故内存库另由 `_LockRetryConnection` 重试兜底。
@@ -1425,6 +1430,122 @@ class LayeredStore:
             (time.time(), "structure_event", node.content,
              json.dumps([node.id]), json.dumps({"layer": node.layer.value}),
              json.dumps(event, ensure_ascii=False)))
+
+    # ---- 结构层「重要事件」记录惯例（唯一真源 · #329） ----
+    # 沿革：该惯例原在四处内联复制（adjust_attention_weight / migrate_v17_coordinates /
+    # adjudicate_verifier_standard / register_external_anchor）；#329 收归单一真源后，
+    # PR #429 把存储侧实现下沉到 LayeredStore（structure_service 直接用 store 入口），
+    # 故本常量与辅助随之下沉——引擎侧 `_write_structure_record` 只是转发件。
+    SUB_PENDING_SYNC_TAG = "pending_sync"
+
+    def _write_structure_record(self, record: str, tag: str,
+                                extra_tags: List[str] = None, *,
+                                source: str = "", metadata: Dict = None,
+                                sub_modality: str = "text",
+                                record_class: str = "history",
+                                importance: float = 0.9,
+                                confidence: float = None,
+                                _cursor=None) -> STNode:
+        """结构层「重要事件」记录惯例（唯一收口 · 转发件）。
+
+        第二实参 `tag` 是事件类型，正文的 `[tag] ` 前缀由
+        `_record_structure_event` 统一添加（调用方不再自带前缀）。
+        PRIMARY ⇒ 结构层（不可遗忘）；SUB ⇒ 知识层副本且**一律**带
+        `SUB_PENDING_SYNC_TAG`。留史失败向调用方传播。
+        """
+        return self._record_structure_event(
+            tag, record, extra_tags=extra_tags, source=source, metadata=metadata,
+            sub_modality=sub_modality, record_class=record_class,
+            importance=importance, confidence=confidence, _cursor=_cursor)
+
+    def _record_structure_event(self, kind: str, content: str,
+                                condition_space: ConditionSpace = None,
+                                importance: float = 0.9, source: str = "",
+                                metadata: Dict = None, confidence: float = None,
+                                extra_tags: List[str] = None, sub_modality: str = "text",
+                                record_class: str = "history", _cursor=None) -> STNode:
+        """受信宿主内部留史；外部输入经引擎授权入口或认证服务。"""
+        if not isinstance(kind, str) or not kind.strip():
+            raise ValueError("事件类型不能为空")
+        # 角色分派（本类是唯一实现；#329 守卫 G4b 允许的第二处分派在引擎的
+        # register_external_anchor 锚点腿）。SUB 腿的 pending_sync 标签取单一真源
+        # 常量 SUB_PENDING_SYNC_TAG（#329 守卫 G4a：该字面量在 core.py 只允许一次）。
+        if self.role == Role.PRIMARY:
+            tags = ["structure", "structure_event", kind]
+            modality = "structure"
+            layer = MemoryLayer.STRUCTURE
+            confidence_v = 1.0 if confidence is None else confidence
+        else:
+            tags = [self.SUB_PENDING_SYNC_TAG, "structure_event", kind]
+            modality = sub_modality
+            layer = MemoryLayer.KNOWLEDGE
+            confidence_v = 0.8 if confidence is None else confidence
+        cs = condition_space or ConditionSpace(
+            "结构事件", "事件记录", (0, float('inf')), "历史记录，不是执行授权")
+        tags += [tag for tag in (extra_tags or []) if tag not in tags]
+        node = STNode(
+            id=f"struct_event_{uuid.uuid4().hex}",
+            content=f"[{kind}] {content}",
+            modality=modality,
+            spatial_coordinates={}, temporal_coordinate=time.time(),
+            condition_space=cs, importance=importance,
+            confidence=confidence_v,
+            layer=layer,
+            tags=tags,
+            state_attributes={"structure_event": {
+                "kind": kind, "source": source, "record_class": record_class,
+                "metadata": metadata or {}}})
+        if _cursor is not None:
+            self._insert_structure_event(node, _cursor)
+        else:
+            with self._structure_event_transaction() as cursor:
+                self._insert_structure_event(node, cursor)
+        return node
+
+
+    def migrate_v17_coordinates(self) -> Dict:
+        """D-003 坐标分离：数据修改与迁移历史共用一个事务，任一步失败均回滚。"""
+        # 常规启动通常已无旧字段：先做只读候选检查，避免每次启动争写锁。
+        candidates = self.conn.execute(
+            "SELECT spatial_coordinates FROM nodes WHERE "
+            "instr(spatial_coordinates, '\"protocol_') > 0 OR "
+            "instr(spatial_coordinates, '\"radical_') > 0 OR "
+            "instr(spatial_coordinates, '\"neural_') > 0").fetchall()
+        if not any(any(k.startswith(("protocol_", "radical_", "neural_"))
+                       for k in json.loads(row[0] or "{}")) for row in candidates):
+            return {"migrated_nodes": 0}
+        migrated = 0
+        with self._structure_event_transaction() as c:
+            c.execute("SELECT id, spatial_coordinates, semantic_coordinates FROM nodes")
+            for row in c.fetchall():
+                nid, sp_json, se_json = row[0], row[1], row[2]
+                sp = json.loads(sp_json or "{}")
+                se = json.loads(se_json or "{}") if se_json else {}
+                semantic_keys = [k for k in sp if k.startswith(
+                    ("protocol_", "radical_", "neural_"))]
+                if not semantic_keys:
+                    continue
+                se.setdefault("protocol", {}).setdefault("concept", {})
+                se.setdefault("radical", {})
+                se.setdefault("neural", {})
+                for k in semantic_keys:
+                    v = sp.pop(k)
+                    if k.startswith("protocol_"):
+                        se["protocol"]["concept"][k[len("protocol_"):]] = v
+                    elif k.startswith("radical_"):
+                        se["radical"][k[len("radical_"):]] = v
+                    elif k.startswith("neural_"):
+                        se["neural"][k[len("neural_"):]] = v
+                c.execute("UPDATE nodes SET spatial_coordinates=?, semantic_coordinates=? WHERE id=?",
+                          (json.dumps(sp), json.dumps(se), nid))
+                migrated += 1
+            if migrated:
+                self._write_structure_record(
+                    f"v1.7 坐标字段分离：{migrated} 节点语义键迁移至 semantic_coordinates",
+                    "migration", extra_tags=["v1.7"], source="migrate_v17_coordinates",
+                    metadata={"version": "v1.7", "migrated_nodes": migrated}, _cursor=c)
+        return {"migrated_nodes": migrated}
+
 
     def get_node(self, node_id: str) -> Optional[STNode]:
         """按 id 取节点，不存在返回 None。"""
@@ -3976,30 +4097,39 @@ class LayeredStore:
         self.conn.commit()
         return True
 
-    @_transactional
+    # 无 @_transactional：#429 起本方法要么由调用方经 `_cursor` 传入事务，要么自开
+    # `_structure_event_transaction` 工作单元。挂 @_transactional 会在 `_tx()` 出口
+    # **提前 commit** 调用方尚未完成的事务（实测：裁决 UPDATE 先落盘，随后外层回滚
+    # 已无效）。事务边界见 `_structure_event_transaction`。
     def adjudicate_verifier_standard(self, vid: str, adjudicator: str,
-                                     approved: bool, designer_key: str = None) -> Optional[Dict]:
+                                     approved: bool, designer_key: str = None,
+                                     *, _cursor=None) -> Optional[Dict]:
         """维生系统终裁（D-007 需设计者密钥）：仅 cs_approved（独立复核+条件空间复核通过）可终裁（A-2 制衡）
 
         #118：身份互斥——`adjudicator` 不得等于 `proposer` / `independent_reviewer` /
         `cs_reviewer`（终裁人与前三步两两互斥）。旧实现只验密钥不验角色 ⇒ 同一
         身份可走完四步「制衡」。判据来源：待裁清单 **C-4 / D-02**；设计稿 §4-3。
+
+        PR #429：`_cursor` 允许调用方把裁决、持久配置与留史收进同一工作单元。
         """
         if not verify_designer(designer_key):
-            raise PermissionError(
-                "D-007 设计者认证失败：密钥无效或未配置 AEIS_DESIGNER_KEY（fail-closed）")
-        c = self.conn.cursor()
-        c.execute("SELECT * FROM verifier_standards WHERE id=?", (vid,))
-        row = c.fetchone()
+            raise PermissionError("D-007 设计者认证失败：密钥无效或未配置 AEIS_DESIGNER_KEY（fail-closed）")
+        if _cursor is None:
+            with self._structure_event_transaction() as cursor:
+                return self.adjudicate_verifier_standard(
+                    vid, adjudicator, approved, designer_key, _cursor=cursor)
+        _cursor.execute("SELECT * FROM verifier_standards WHERE id=?", (vid,))
+        row = _cursor.fetchone()
         if not row or row[9] != "cs_approved":
             return None
         if adjudicator in (row[5], row[6], row[7]):
             return None  # 身份互斥：终裁人与提议/独立复核/条件空间复核同人
         status = "approved" if approved else "denied"
-        c.execute("UPDATE verifier_standards SET adjudicator=?, status=?, decided_at=? WHERE id=?",
-                  (adjudicator, status, time.time(), vid))
-        self.conn.commit()
+        _cursor.execute(
+            "UPDATE verifier_standards SET adjudicator=?,status=?,decided_at=? WHERE id=?",
+            (adjudicator, status, time.time(), vid))
         return {"id": row[0], "param": row[2], "value": row[3], "status": status}
+
 
     def list_escalation_points(self, enabled_only: bool = True) -> List[Dict]:
         """列升级点（危机触发器清单，默认仅已启用的）。"""
@@ -4091,6 +4221,15 @@ class LayeredStore:
         stats["total_edges"] = _te
         stats["verified_edges"] = int(_ve)
         return stats
+
+    def close_current_thread(self):
+        """服务请求收尾时释放本线程连接，不关闭其他线程的连接。"""
+        with self._lock:
+            connection = getattr(self._local, "conn", None)
+            if connection is not None:
+                connection.close()
+                self._conns.remove(connection)
+                del self._local.conn
 
     def close(self):
         """关闭本实例登记的全部连接（Agent 生命周期终点调用）。"""
@@ -4214,6 +4353,21 @@ class SpacetimeMemoryEngine:
         self._setup_body()
         # ---- issue #156：组件装配状态快照（self_check 面 · 只增字段） ----
         self._component_assembly = self._component_assembly_status()
+        self._restore_structure_configuration()
+
+    def _restore_structure_configuration(self):
+        saved = self.store.get_meta("verifier_config").get("verifier_config")
+        if saved:
+            self._verifier_config.update(json.loads(saved))
+            self._dedup_static = self._verifier_config["dedup_static"]
+            if self._cognition:
+                self._cognition.deviation_threshold = self._verifier_config["deviation_threshold"]
+        saved = self.store.get_meta("attention_weights").get("attention_weights")
+        if saved and self._attention_policy:
+            weights = json.loads(saved)
+            for key in self._attention_policy.preference_weights:
+                if key in weights:
+                    self._attention_policy.preference_weights[key] = weights[key]
 
     # ==================== 组件装配状态（issue #156） ====================
 
@@ -4706,13 +4860,9 @@ class SpacetimeMemoryEngine:
         self.store.add_node(node)
         return node
 
-    # ---- 结构层「重要事件」记录惯例（唯一真源） ----
-    # 此前该惯例在四处**内联复制**（adjust_attention_weight / migrate_v17_coordinates /
-    # adjudicate_verifier_standard / register_external_anchor），格式统一为 `[tag] 内容`
-    # 且带同款角色分支；其中 `pending_sync` 标签**只有一处**带、另三处漏 ⇒ 同一惯例
-    # 的实现已漂移（lingshu issue #329 附带缺陷）。现收归单一真源：本常量 + 本辅助。
-    SUB_PENDING_SYNC_TAG = "pending_sync"
-
+    # ---- 结构层「重要事件」记录惯例（#329 唯一真源 · 引擎转发件） ----
+    # 唯一真源（常量 SUB_PENDING_SYNC_TAG + 实现）已随 PR #429 下沉到 LayeredStore
+    # （structure_service 直接用 store 入口）；本方法只转发，保留引擎侧调用形态。
     def _write_structure_record(self, record: str, tag: str,
                                 extra_tags: List[str] = None, *,
                                 source: str = "", metadata: Dict = None,
@@ -4726,20 +4876,40 @@ class SpacetimeMemoryEngine:
         第二实参 `tag` 是事件类型；正文的 `[tag] ` 前缀由
         `_record_structure_event` 统一添加（调用方**不再**自带前缀）。
 
-        实现转发到 `_record_structure_event`（PR #429 的受保护留史），故：
+        实现转发到 LayeredStore 的唯一真源（PR #429 的受保护留史）：
         PRIMARY ⇒ 写结构层（不可遗忘）；SUB ⇒ 写知识层副本，并**一律**带
         `SUB_PENDING_SYNC_TAG`（待父节点同步为验证副本）。
-
-        与 #329 原实现的**行为差异**（合并取舍，如实标注）：留史失败**向调用方
-        传播**，不再静默返回 None。静默会让「留史失败即回滚数据变更」失效
-        （见 `migrate_v17_coordinates` 的 #429 事务口径与
-        tests/test_structure_events.py::test_migration_and_history_commit_or_rollback_together）。
-        全仓仅本处定义 + 三处调用，无测试依赖旧的静默语义。
+        留史失败**向调用方传播**，不再静默返回 None——静默会让
+        「留史失败即回滚数据变更」失效（见 `migrate_v17_coordinates` 的 #429 事务口径）。
         """
-        return self._record_structure_event(
-            tag, record, extra_tags=extra_tags, source=source, metadata=metadata,
+        return self.store._write_structure_record(
+            record, tag, extra_tags=extra_tags, source=source, metadata=metadata,
             sub_modality=sub_modality, record_class=record_class,
             importance=importance, confidence=confidence, _cursor=_cursor)
+
+    def get_current_structure_nodes(self) -> List[STNode]:
+        """现行结构：排除历史，只读最新、未撤销、未到期的批准。
+
+        未使用新事件格式的旧结构保留原读取语义；完整历史仍用 store 读取。
+        """
+        nodes = self.store.get_layer_nodes(MemoryLayer.STRUCTURE)
+        active = set()
+        if self.store.get_meta("structure_writer_schema"):
+            from datetime import datetime, timezone
+            now = datetime.now(timezone.utc).isoformat(timespec="microseconds")
+            rows = self.store.conn.execute(
+                "SELECT r.id FROM structure_heads h JOIN structure_records r ON r.id=h.record_id "
+                "JOIN structure_proposals p ON p.id=r.proposal_id "
+                "WHERE p.operation='set' AND (p.valid_until IS NULL OR p.valid_until>?)", (now,))
+            active = {row[0] for row in rows}
+        result = []
+        for node in nodes:
+            event = node.state_attributes.get("structure_event")
+            if not event or event.get("record_class") == "external_anchor":
+                result.append(node)
+            elif event.get("record_class") == "normative" and node.id in active:
+                result.append(node)
+        return result
 
     # ==================== 边操作 ====================
 
@@ -5343,50 +5513,9 @@ class SpacetimeMemoryEngine:
     #: 守卫 `tests/test_issue329_anchor_kinds_guard.py` 钉死取值并防松动。
     ANCHOR_KINDS = ("pre_access_stance", "introspection", "external_calibration")
 
-    def _record_structure_event(self, kind: str, content: str,
-                                condition_space: ConditionSpace = None,
-                                importance: float = 0.9, source: str = "",
-                                metadata: Dict = None, confidence: float = None,
-                                extra_tags: List[str] = None, sub_modality: str = "text",
-                                record_class: str = "history", _cursor=None) -> STNode:
-        """受信宿主内部留史；外部调用必须走下方带授权闸的公共入口。"""
-        if not isinstance(kind, str) or not kind.strip():
-            raise ValueError("事件类型不能为空")
-        # 角色分派（本类是唯一实现；#329 守卫 G4b 允许的第二处分派在
-        # `register_external_anchor` 的锚点腿）。SUB 腿的 pending_sync 标签
-        # 取单一真源常量 `SUB_PENDING_SYNC_TAG`（#329 守卫 G4a：该字面量在
-        # core.py 只允许出现一次）。
-        if self.role == Role.PRIMARY:
-            tags = ["structure", "structure_event", kind]
-            modality = "structure"
-            layer = MemoryLayer.STRUCTURE
-            confidence_v = 1.0 if confidence is None else confidence
-        else:
-            tags = [self.SUB_PENDING_SYNC_TAG, "structure_event", kind]
-            modality = sub_modality
-            layer = MemoryLayer.KNOWLEDGE
-            confidence_v = 0.8 if confidence is None else confidence
-        cs = condition_space or ConditionSpace(
-            "结构事件", "事件记录", (0, float('inf')), "历史记录，不是执行授权")
-        tags += [tag for tag in (extra_tags or []) if tag not in tags]
-        node = STNode(
-            id=f"struct_event_{uuid.uuid4().hex}",
-            content=f"[{kind}] {content}",
-            modality=modality,
-            spatial_coordinates={}, temporal_coordinate=time.time(),
-            condition_space=cs, importance=importance,
-            confidence=confidence_v,
-            layer=layer,
-            tags=tags,
-            state_attributes={"structure_event": {
-                "kind": kind, "source": source, "record_class": record_class,
-                "metadata": metadata or {}}})
-        if _cursor is not None:
-            self.store._insert_structure_event(node, _cursor)
-        else:
-            with self.store._structure_event_transaction() as cursor:
-                self.store._insert_structure_event(node, cursor)
-        return node
+    def _record_structure_event(self, *args, **kwargs) -> STNode:
+        """受信宿主共用存储事务；公开入口先执行其授权检查。"""
+        return self.store._record_structure_event(*args, **kwargs)
 
     def record_structure_event(self, kind: str, content: str,
                                condition_space: ConditionSpace = None,
@@ -7341,6 +7470,7 @@ class SpacetimeMemoryEngine:
     def set_attention_policy(self, policy):
         """注入自定义注意力策略（duck-typed：filter_attention/allocate_depth/attention_shift/attend）"""
         self._attention_policy = policy
+        self._restore_structure_configuration()
 
     def get_attention_policy(self):
         return self._attention_policy
@@ -7375,23 +7505,35 @@ class SpacetimeMemoryEngine:
 
     def adjust_attention_weight(self, key: str, value: float, source: str, reason: str,
                                 role: str = "reflect") -> bool:
-        """注意力权重动态调整（DEVIATION-002/004）。
+        """受信内存策略调整；持久配置与留史同一事务，失败恢复权重。
 
-        role='reflect' 须调用方完成复核/终裁；role='vitals' 为危机临时覆盖。
-        已执行动作的留史失败向调用方报告，不再静默返回成功。
+        注入的 set_weight 必须只改内存，不能执行外部 I/O。
+        role='reflect' 沿用调用方复核/终裁责任。
         """
-        if not self._attention_policy:
+        policy = self._attention_policy
+        if not policy or key not in policy.preference_weights:
             return False
-        if key not in self._attention_policy.preference_weights:
-            return False
-        self._attention_policy.set_weight(key, value, source, reason, role)
-        # 保留 #329 单一收口辅助的调用形态（第二实参=tag 字面量），
-        # 正文不再自带 [tag] 前缀（由辅助统一加），来源/元数据取 PR #429 的结构事件字段。
-        self._write_structure_record(
-            f"{key}={value}（{role} · {source}）{reason}", "attention_weight",
-            source=source,
-            metadata={"key": key, "value": value, "role": role, "reason": reason})
+        with self.store._lock:
+            if self.store.conn.in_transaction:
+                raise RuntimeError("配置调整需要独立事务；请先结束调用方事务")
+            previous = dict(policy.preference_weights)
+            try:
+                with self.store._structure_event_transaction() as cursor:
+                    policy.set_weight(key, value, source, reason, role)
+                    weights = dict(policy.preference_weights)
+                    cursor.execute(
+                        "INSERT OR REPLACE INTO engine_meta(key,value) VALUES (?,?)",
+                        ("attention_weights", json.dumps(weights)))
+                    self._write_structure_record(
+                        f"{key}={weights[key]}（{role} · {source}）{reason}", "attention_weight",
+                        source=source, metadata={"key": key, "value": weights[key],
+                                                 "role": role, "reason": reason}, _cursor=cursor)
+            except BaseException:
+                policy.preference_weights.clear()
+                policy.preference_weights.update(previous)
+                raise
         return True
+
 
     # ==================== v1.7 多模态（MULTIMODAL-REV1 · D-001~D-005） ====================
 
@@ -7420,59 +7562,8 @@ class SpacetimeMemoryEngine:
 
     @_transactional
     def migrate_v17_coordinates(self) -> Dict:
-        """D-003 迁移：spatial_coordinates 中语义键 → semantic_coordinates；迁移事件记入结构层（不可遗忘）
-
-        issue #279（启动期开销）：本方法在 `__init__` 里**每次构造**都被调用
-        （core.py:2426），旧实现对 `nodes` 无条件 `SELECT *` 全表 `fetchall()` 并
-        逐行 `json.loads`——即便一行待迁移的都没有（v1.7 之后的库是常态），每次
-        构造仍付一次全表物化 + 全表 JSON 解析，规模上去即启动变慢。
-        修法：候选行下推到 SQL（`_V17_CANDIDATE_SQL`），**候选集为空即零 Python
-        侧解析**（幂等短路）。结果集与旧实现逐字等价（论证见 `_V17_CANDIDATE_SQL`
-        的 docstring：假阴性不可能、假阳性不改变结果集）。
-        未削判别力：迁移**判据**仍是 Python 侧 `startswith(("protocol_",
-        "radical_", "neural_"))`，SQL 只做超集筛。
-        判据来源：经验标定（本件 #279，无理论章节规定启动期迁移的短路口径）——
-        口径取「无候选行 ⇒ 零解析」；追不到更早出处。
-
-        PR #429（合并保留）：数据修改、事件节点与操作记录收进**同一工作单元**；
-        留史失败回滚迁移并向调用方传播（不再静默）。调用方已有事务时只释放自己的
-        savepoint。"""
-        # #279：只读候选检查——候选集为空即零 Python 侧解析，且不争写锁。
-        c = self.store.conn.cursor()
-        c.execute(self._V17_CANDIDATE_SQL)
-        if not c.fetchall():
-            return {"migrated_nodes": 0}
-        migrated = 0
-        with self.store._structure_event_transaction() as c:
-            c.execute(self._V17_CANDIDATE_SQL)
-            for row in c.fetchall():
-                nid, sp_json, se_json = row[0], row[1], row[2]
-                sp = json.loads(sp_json or "{}")
-                se = json.loads(se_json or "{}") if se_json else {}
-                semantic_keys = [k for k in sp if k.startswith(
-                    ("protocol_", "radical_", "neural_"))]
-                if not semantic_keys:
-                    continue
-                se.setdefault("protocol", {}).setdefault("concept", {})
-                se.setdefault("radical", {})
-                se.setdefault("neural", {})
-                for k in semantic_keys:
-                    v = sp.pop(k)
-                    if k.startswith("protocol_"):
-                        se["protocol"]["concept"][k[len("protocol_"):]] = v
-                    elif k.startswith("radical_"):
-                        se["radical"][k[len("radical_"):]] = v
-                    elif k.startswith("neural_"):
-                        se["neural"][k[len("neural_"):]] = v
-                c.execute("UPDATE nodes SET spatial_coordinates=?, semantic_coordinates=? WHERE id=?",
-                          (json.dumps(sp), json.dumps(se), nid))
-                migrated += 1
-            if migrated:
-                self._write_structure_record(
-                    f"v1.7 坐标字段分离：{migrated} 节点语义键迁移至 semantic_coordinates",
-                    "migration", extra_tags=["v1.7"], source="migrate_v17_coordinates",
-                    metadata={"version": "v1.7", "migrated_nodes": migrated}, _cursor=c)
-        return {"migrated_nodes": migrated}
+        """迁移与留史共用存储事务；无遗留坐标时保持只读。"""
+        return self.store.migrate_v17_coordinates()
 
     @_transactional
     def ingest_frame(self, frame_data: Dict, entity_hint: str = None,
@@ -8218,35 +8309,48 @@ class SpacetimeMemoryEngine:
 
     def adjudicate_verifier_standard(self, vid: str, adjudicator: str, approved: bool,
                                      designer_key: str = None) -> bool:
-        """A-2 第④步：维生系统终裁（D-007 需设计者密钥）。通过 → 应用配置 + 写入结构层（不可遗忘）
+        """A-2 终裁：裁决、持久配置与历史一起提交，失败时内存配置一并回退。
 
-        #118：应用配置时**复用 `set_dedup_config` 的值域钳制**。旧实现原样写入
-        （`self._dedup_static = result["value"]`）⇒ 最严格的四步制衡路径反而**无钳制**
-        （可写入 0.1 之类越界阈值，绕过公开入口 `set_dedup_config` 的
-        `min(0.95, max(0.5, ...))`）。判据来源：`docs/plans/待裁清单_v0.1.md`
-        **D-32**（钳制落点）＋ 设计稿 `docs/plans/治理与写入边界_修复设计_v0.1.md`
-        §4 修法形状 4（「应用时复用 `set_dedup_config` 的钳制」）。
-        削掉的判别力：越界终裁值被**静默钳到边界**（不报错、不拒绝终裁）——与
-        `set_dedup_config` 现行处置同口径。
-
-        PR #429（合并保留）：应用配置仍走 #118/#153 的唯一真源
-        `_apply_verifier_standard`（回放路径同口径）；留史正文取**钳制后**的配置值，
-        并按结构事件记录附带 metadata（standard_id/param/value）。
+        #118/#153：应用配置走唯一真源 `_apply_verifier_standard`（含 dedup_static 值域
+        钳制）。#429：裁决、`engine_meta` 持久化与留史收进同一工作单元；任一步失败 ⇒
+        盘上回滚**且**内存配置回退（否则「留史失败」会留下一个盘上没有、内存里生效的
+        配置——正是本件要消的不一致）。
         """
-        result = self.store.adjudicate_verifier_standard(vid, adjudicator, approved,
-                                                         designer_key=designer_key)
-        if not result:
-            return False
-        if result["status"] == "approved":
-            self._apply_verifier_standard(result["param"], result["value"])
-            record = (f"{result['param']}="
-                      f"{self._verifier_config.get(result['param'], result['value'])}"
-                      f" 终裁通过（{adjudicator}）")
-            self._write_structure_record(
-                record, "verifier_standard", source=adjudicator,
-                metadata={"standard_id": vid, "param": result["param"],
-                          "value": result["value"]})
+        # 提交与发布都持锁，后续终裁才能基于刚提交的配置继续修改。
+        with self.store._lock:
+            if self.store.conn.in_transaction:
+                raise RuntimeError("终裁配置需要独立事务；请先结束调用方事务")
+            before_config = dict(self._verifier_config)
+            before_dedup = self._dedup_static
+            try:
+                with self.store._structure_event_transaction() as cursor:
+                    result = self.store.adjudicate_verifier_standard(
+                        vid, adjudicator, approved, designer_key=designer_key, _cursor=cursor)
+                    if not result:
+                        return False
+                    if result["status"] == "approved":
+                        self._apply_verifier_standard(result["param"], result["value"])
+                        cursor.execute(
+                            "INSERT OR REPLACE INTO engine_meta(key,value) VALUES (?,?)",
+                            ("verifier_config", json.dumps(dict(self._verifier_config))))
+                        record = (f"{result['param']}="
+                                  f"{self._verifier_config.get(result['param'], result['value'])}"
+                                  f" 终裁通过（{adjudicator}）")
+                        self._write_structure_record(
+                            record, "verifier_standard", source=adjudicator,
+                            metadata={"standard_id": vid, "param": result["param"],
+                                      "value": self._verifier_config.get(result["param"],
+                                                                         result["value"])},
+                            _cursor=cursor)
+            except BaseException:
+                # 盘上已随工作单元回滚；内存配置必须一并回退（见 docstring）。
+                self._verifier_config.clear()
+                self._verifier_config.update(before_config)
+                self._dedup_static = before_dedup
+                raise
+
         return True
+
 
     def _apply_verifier_standard(self, param: str, value) -> None:
         """应用一条验证标准到运行配置（`dedup_static` 走值域钳制）。
@@ -8275,6 +8379,11 @@ class SpacetimeMemoryEngine:
         边界（削掉的判别力）：只回放 `status='approved'` 的行——`denied`/
         `cs_rejected` 等终态不回放（其语义是「未通过」）；**不**校验行内 value 与
         盘上结构记录是否一致（本件只保证「终裁通过 ⇒ 重启后仍生效」）。
+
+        PR #429 合并保留：本方法（main 的 #153 实现）与 PR #429 新增的
+        `_restore_structure_configuration()`（从 `engine_meta` 读回已生效配置）
+        同时存在：本方法在后者的**前**执行，故 engine_meta 中更新的读数仍胜出；
+        而 engine_meta 缺失时（旧库）本方法照旧把 #153 的保证补齐。
         """
         rows = [r for r in self.store.list_verifier_standards("approved")
                 if r.get("param")]
@@ -8282,7 +8391,6 @@ class SpacetimeMemoryEngine:
         for r in rows:
             self._apply_verifier_standard(r["param"], r["value"])
         return len(rows)
-
     def list_verifier_standards(self, status: str = None) -> List[Dict]:
         return self.store.list_verifier_standards(status)
 
@@ -9098,7 +9206,7 @@ class SpacetimeMemoryEngine:
         返回诊断报告
         """
         anchors = self.get_anchors()
-        structures = self.store.get_layer_nodes(MemoryLayer.STRUCTURE)
+        structures = self.get_current_structure_nodes()
         self_nodes = self.store.get_layer_nodes(MemoryLayer.SELF)
         report = {
             "anchor_ok": len(anchors) > 0,

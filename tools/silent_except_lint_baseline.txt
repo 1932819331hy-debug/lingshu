@@ -6,6 +6,10 @@
 #   两组读数对表：issue 原基线 a215d8b = 108/81；本 worktree b846086 实测 = 151 宽 / 114 静默。
 #   （并行批次已改源码的那棵树会更高——本基线取**本工作区** b846086 的值，不与其它工作区混比。）
 #   重生成后请更新上一行的 HEAD 号。
+#   2026-10-13 重生成（PR #429 rebase 到 main cb3a6ea 后）：lingshu/core/core.py 46→45
+#   —— #329 的 `_write_structure_record` 原 `except Exception: return None`（静默）在本次
+#   合并中改为**向调用方传播**（静默会让「留史失败即回滚数据变更」失效，见该处 docstring），
+#   故少一条静默；新增 lingshu/core/structure_service.py = 0；TOTAL 114→113。
 # ★基线可移植性：本值是 b846086 快照。合入其它在飞批次（#243/#248/#183/#299…）后
 #   若计数上升，先判因——新增的真缺陷 ⇒ 改代码；刻意静默且已写明理由 ⇒ 更新本基线
 #   并在下方「用户登记段」追加一行带日期/commit 的记录（不要只改数字）。
@@ -22,9 +26,10 @@
 
 lingshu/_pathguard.py	17
 lingshu/core/component_resolver.py	7
-lingshu/core/core.py	46
+lingshu/core/core.py	45
 lingshu/core/longterm_gate.py	11
 lingshu/core/provenance.py	4
+lingshu/core/structure_service.py	0
 lingshu/nn/hex_cnn.py	0
 lingshu/world/brain_store.py	1
 lingshu/world/channel_credibility.py	2
@@ -38,4 +43,4 @@ lingshu/world/world3d.py	2
 lingshu/world/world_learner.py	3
 lingshu/world/world_model.py	2
 
-# TOTAL 114
+# TOTAL 113
