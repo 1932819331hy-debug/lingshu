@@ -1,5 +1,5 @@
 [build-system]
-requires = ["setuptools>=61"]
+requires = ["setuptools>=77"]
 build-backend = "setuptools.build_meta"
 
 [project]
@@ -13,7 +13,8 @@ readme = "README.md"
 # 必然解析失败；且 CI 矩阵（gate.yml）只跑 3.12/3.13，从未覆盖 3.10/3.11。
 # 故下界收到实测下界 3.12＝CI 的阻断档（tests/test_gate_python_floor_and_matrix.py 会核此一致性）。
 requires-python = ">=3.12"
-license = { text = "MIT" }
+license = "MIT"
+license-files = ["LICENSE"]
 dependencies = []
 
 [project.optional-dependencies]
