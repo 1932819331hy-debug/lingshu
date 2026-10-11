@@ -2999,7 +2999,7 @@ class LayeredStore:
         """结构重要性重算（v2.2，设计规格 §13/§14，2026-08-20）。
 
         importance_v2 = min(1.0, importance + min(β·min(ci,C)/C + γ·conn, BOOST_CAP))
-        只升不降（当前 importance 为地板，延迟提升语义）；ci=因果出度，
+        只升不降（**原值 + 已施加的结构提升**为地板，延迟提升语义）；ci=因果出度，
         conn=总度数/max_deg；无结构数据（度数/因果双低）的节点不动。
 
         v2.2 新增【因果上游度传播】——越上游影响越大：
@@ -3033,6 +3033,20 @@ class LayeredStore:
         后「未验证边授予保护」这条路径已不存在，而既有已登记的「结构保护」行仍永久
         生效（`protections` 无 TTL，见 `_is_forget_protected` 边界），撤销面属 #257/#261
         的保护名单回收范畴。
+
+        #299：旧实现 `new_imp = min(1.0, imp + boost)` 每次以**当前** importance
+        为底重算再累加 ⇒ 「重算」实为「累加」：结构一条边未变，反复调用仍持续
+        抬升（5 次把 0.3 推到 1.0），`BOOST_CAP` 形同虚设、函数不幂等。
+        修法（最小）：应用时把**本次结构提升总量**写入
+        `state_attributes.structural_boost`（复用 `_write_influence` 的 `key`
+        参数）；重算时以 `base = imp - structural_boost` 为地板，
+        `new_imp = min(1.0, base + boost)`、`delta = new_imp - imp`——结构增强时
+        只补差额、结构不变时 delta=0（不动），单节点总结构提升 ≤ `boost_cap`。
+        判据来源：公开 issue #299「修复建议（最小补丁）」。
+        needs-owner-decision（issue 自列，如实保留）：① 「重算」语义取「相对原值、
+        总提升 ≤ BOOST_CAP」——若设计本意是允许跨周期逐步累积（延迟提升），应另
+        写明累积上限；② 补丁前已被多次提升的存量节点无 `structural_boost` 标记，
+        会以当前值为底（不回滚历史累加），一次性校正属数据迁移决策，本件不做。
         """
         c_ = self.conn.cursor()
         c_.execute("SELECT source_id, target_id, relation_type, confidence, verified "
@@ -3101,7 +3115,18 @@ class LayeredStore:
             ci = min(co, c) / c
             conn = d / max_deg
             boost = min(beta * ci + gamma * conn, boost_cap)
-            new_imp = min(1.0, imp + boost)
+            # #299：旧实现 `new_imp = min(1.0, imp + boost)` 每次以**当前**
+            # （已被上次提升过的）importance 为底 ⇒ 反复调用持续累加、不收敛，
+            # BOOST_CAP 形同虚设（结构不变 5 次把 0.3 推到 1.0）。
+            # 修法（最小）：以「原值 + 本次结构目标提升」为准——读回上次已施加的
+            # structural_boost（`sb`）作地板 `base = imp - sb`，`new_imp =
+            # min(1.0, base + boost)`，`delta = new_imp - imp`；结构不变时
+            # delta=0（不动），结构增强时只补差额，总提升 ≤ boost_cap。
+            # 判据来源：公开 issue #299「修复建议（最小补丁）」。
+            sb = self._read_state_attr(nid, "structural_boost", 0.0)
+            sb = sb if isinstance(sb, (int, float)) else 0.0
+            base = imp - sb
+            new_imp = min(1.0, base + boost)
             delta = round(new_imp - imp, 4)
             if delta >= min_delta:
                 movers.append({"node_id": nid, "importance_old": round(imp, 4),
@@ -3110,6 +3135,8 @@ class LayeredStore:
                                "concept_influence": infl})
                 if not dry_run:
                     self.update_node_importance(nid, delta)
+                    self._write_influence(nid, round(sb + delta, 6),
+                                          key="structural_boost")
                     applied += 1
         movers.sort(key=lambda x: x["boost"], reverse=True)
         top_influence = sorted(influence.items(), key=lambda x: -x[1])[:10]
@@ -3128,8 +3155,13 @@ class LayeredStore:
                 "movers": movers[:50]}
 
     @_transactional
-    def _write_influence(self, node_id: str, infl: float):
-        """concept_influence 写入 state_attributes（可检索/可查）。"""
+    def _write_influence(self, node_id: str, infl: float,
+                         key: str = "concept_influence"):
+        """把结构量写入 state_attributes（可检索/可查）。
+
+        #299：新增 `key` 参数（默认 `concept_influence`，旧行为不变），供
+        `recalc_structural_importance` 复用同一通道写入 `structural_boost`。
+        """
         c = self.conn.cursor()
         c.execute("SELECT state_attributes FROM nodes WHERE id=?", (node_id,))
         row = c.fetchone()
@@ -3139,10 +3171,29 @@ class LayeredStore:
                 sa = json.loads(row[0])
             except Exception:
                 sa = {}
-        sa["concept_influence"] = infl
+        sa[key] = infl
         c.execute("UPDATE nodes SET state_attributes=? WHERE id=?",
                   (json.dumps(sa, ensure_ascii=False), node_id))
         self.conn.commit()
+
+    def _read_state_attr(self, node_id: str, key: str, default=None):
+        """读单个 state_attributes 键（缺键/非法 JSON/非 dict ⇒ 返回 default）。
+
+        #299：`recalc_structural_importance` 需要读回上次已施加的
+        `structural_boost` 作为地板，故加此小 helper。
+        """
+        c = self.conn.cursor()
+        c.execute("SELECT state_attributes FROM nodes WHERE id=?", (node_id,))
+        row = c.fetchone()
+        if not row or not row[0]:
+            return default
+        try:
+            sa = json.loads(row[0])
+        except Exception:
+            return default
+        if not isinstance(sa, dict):
+            return default
+        return sa.get(key, default)
 
     def _protect_upstream(self, node_id: str, infl: float, floor: float):
         """越上游越要记录：保护登记 + no_forget + importance 保底。"""
@@ -3230,6 +3281,20 @@ class LayeredStore:
         削掉的判别力：**V2/V3 的「自报等级」不再单独构成 `verified`**——调用方
         必须至少给一条证据；本件不引入「独立复核人」判据（D-35 明确 V2/V3 是
         自报等级，不要求外部复核面）。
+
+        #301：重写标签时剥离清单只含小写 `refuted`，漏剥本函数自己写入的大写
+        级别（`REFUTED`/`X`/任意调用方级别）与 `insight_event` 自身 ⇒ 反复验证
+        会累积重复标签、且已验证洞见仍挂旧 `REFUTED`（按标签取证伪的查询会误判）。
+        修法（最小）：剥离集合补 `insight_event` 与上一轮记录的级别 `prev_level`。
+        判据来源：公开 issue #301「修复建议（最小补丁）」——「剥离集合改为
+        `{pending,verified,refuted,V1,V2,V3,insight_event,prev_level}`」。状态判定、
+        importance 提升逻辑均不变。
+
+        #384：证据去重只与「合并前的旧列表」比，不在**本次传入的 `add` 内部**
+        去重 ⇒ 传 `['x','x','x']` 即得 `evidence_count=3`，误判 V1 `verified`、
+        importance 直升 0.9（而分 3 次提交同一句仍是 pending）。修法（最小）：
+        逐条与**已合并结果**比后再追加（保持出现顺序），两处重复一并覆盖。
+        判据来源：公开 issue #384 标题所述最小复现（`['x','x','x']` ⇒ verified）。
         """
         node = self.get_node(insight_id)
         if node is None or "insight_event" not in node.tags:
@@ -3241,7 +3306,13 @@ class LayeredStore:
         ev = list(ver.get("evidence", []))
         if evidence:
             add = evidence if isinstance(evidence, list) else [evidence]
-            ev = ev + [e for e in add if e not in ev]
+            # #384：只与合并前的旧列表比 ⇒ 本次传入的 add 内部重复不去重，
+            # 传 ['x','x','x'] 即得 evidence_count=3 ⇒ 误判 V1 verified、
+            # importance 直升 0.9。改为「与已合并结果比」逐条去重（保持出现顺序），
+            # 同时覆盖旧列表与本次提交内部两处重复。
+            for e in add:
+                if e not in ev:
+                    ev.append(e)
         level = (level or "").upper()
         status = "pending"
         if level in ("REFUTED", "X"):
@@ -3251,11 +3322,17 @@ class LayeredStore:
         elif level in ("V2", "V3"):
             # #38：零证据不得自报 verified（B-9/D-34）；有证据才认自报等级（D-35）。
             status = "verified" if len(ev) >= 1 else "pending"
+        # #301：剥除清单漏了本函数自己写入的大写级别（REFUTED/X/任意自定义级别）
+        # 与 insight_event 自身 ⇒ 反复验证会累积重复标签、残留旧级别。剥离集合
+        # 加上 "insight_event" 与上一轮记录的级别（prev_level），覆盖任意自定义级别。
+        prev_level = ver.get("level") if isinstance(ver, dict) else None
         ver = {"level": level, "evidence": ev, "status": status, "updated_at": now}
         ins["verification"] = ver
         sa["insight"] = ins
-        tags = [t for t in node.tags
-                if t not in ("pending", "verified", "refuted", "V1", "V2", "V3")]
+        _strip = {"pending", "verified", "refuted", "V1", "V2", "V3", "insight_event"}
+        if prev_level:
+            _strip.add(prev_level)
+        tags = [t for t in node.tags if t not in _strip]
         tags += ["insight_event", status, level]
         new_imp = node.importance
         if status == "verified" and (new_imp is None or new_imp < 0.9):
@@ -3273,6 +3350,20 @@ class LayeredStore:
 
         候选=全部 insight_event 节点；验证状态优先读 state_attributes，
         旧样本（无结构化 verification）按 tags 兜底（verified/refuted/pending）。
+
+        #281：条件统计旧实现按 `x["conditions"].get(k)` 的**真值**分组，把
+        「键存在但值为假」（`False`/`0`/`""`）与「键不存在」（未记录该条件）混同
+        ——未测样本被当作「该条件为假」计入 `without` 组，统计口径失真。修法（最小）：
+        **只在该键存在（已记录）的样本内**按真值分 with/without，键不存在的样本
+        不进入本条件的统计。判据来源：公开 issue #281「修复建议 1」——「未显式提供
+        （confidence=0.3）的条件不进入对应统计」。
+        边界（削掉的判别力，如实标注）：本件只修「键不存在 vs 键存在但值为假」的
+        混同，**不**改 `_normalize_conditions` 给未提供条件填默认值的行为 ⇒ 经
+        `insight_record` 写入的节点 5 个条件键**恒存在**（默认值），故本件对这类
+        样本的分组结果与旧口径相同；`pressure`/`tone` 因默认值为非空字符串恒为真、
+        分组仍出不了统计的问题（issue #281 根因 2/3，需按取值分组）**不在本件**。
+        `pending = n - nv` 把 refuted 计入 pending、以及 REFUTED 后 importance 不
+        回落（同 issue 附带两处）亦**不在本件**。
         """
         c = self.conn.cursor()
         c.execute("SELECT id, tags, state_attributes FROM nodes WHERE tags LIKE '%insight_event%'")
@@ -3296,8 +3387,14 @@ class LayeredStore:
         layer_status = "degraded" if n < 20 else ("watch" if n < 40 else "reliable")
         cond_stats = []
         for k in ("premise_questioned", "externalized", "pressure", "tone", "cross_domain"):
-            with_ = [x for x in candidates if x["conditions"].get(k)]
-            without = [x for x in candidates if not x["conditions"].get(k)]
+            # #281：旧实现 `x["conditions"].get(k)` 按**真值**分组，把「键存在但值为
+            # 假」（False/0/""）与「键不存在」（未记录该条件）混同——两者都落进
+            # without 组 ⇒ 未测的条件被当作「该条件为假」的样本，统计口径失真。
+            # 改为**只在该键存在（已记录）的样本内**按真值分 with/without 两组；
+            # 键不存在的样本不进入本条件的统计。
+            present = [x for x in candidates if k in x["conditions"]]
+            with_ = [x for x in present if x["conditions"].get(k)]
+            without = [x for x in present if not x["conditions"].get(k)]
             if len(with_) >= 5 and len(without) >= 5:
                 p1 = sum(1 for x in with_ if x["status"] == "verified") / len(with_)
                 p0 = sum(1 for x in without if x["status"] == "verified") / len(without)
