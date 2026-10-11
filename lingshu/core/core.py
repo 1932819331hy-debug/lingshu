@@ -2330,8 +2330,13 @@ class LayeredStore:
         like_params = []
         for t in terms:
             for frag in self._like_fragments(t):
-                like_parts.append("content LIKE ? OR tags LIKE ?")
-                like_params.extend([f"%{frag}%", f"%{frag}%"])
+                # #183：预筛的 `%{frag}%` 此前原样拼入 `LIKE ?`——查询里的
+                # `%` / `_` 被当通配符 ⇒ `search_content("%")` / `search_content("_")`
+                # 返回整库（且 `_` 任意单字符误配）。现经 `_escape_like` 转义并加
+                # `ESCAPE '\'`，使这两个字符只匹配真正含它的内容。
+                like_parts.append("content LIKE ? ESCAPE '\\' OR tags LIKE ? ESCAPE '\\'")
+                esc = f"%{self._escape_like(frag)}%"
+                like_params.extend([esc, esc])
         like_cond = "(" + " OR ".join(like_parts) + ")"
         where = " AND ".join(conds + [like_cond]) if conds else like_cond
         # #35：预筛候选池必须**显式定序**再截断。旧实现两处 `LIMIT` 均无 `ORDER BY`
@@ -2350,7 +2355,15 @@ class LayeredStore:
                   f"ORDER BY importance DESC, last_access DESC LIMIT 300",
                   params + like_params)
         rows = c.fetchall()
-        if not rows:
+        # #183：预筛已转义（`%`/`_` 按字面匹配）。但**空结果会触发下面的全表
+        # 二元组兜底**，把整库当零分候选返回 ⇒ `search_content("%")` /
+        # `search_content("_")` 在库内无字面 `%`/`_` 时仍返回全库（issue 判据
+        # 要求「只匹配真正含这两个字符的内容」）。全表兜底是**内容召回**网
+        # （补「重组短语无连续子串」的漏检）——查询若**全由 LIKE 通配符构成**，
+        # 则无内容信号可供兜底，且转义后的预筛已按字面正确定位。故仅对「纯通配符
+        # 查询」跳过兜底；非纯通配符查询的兜底口径**逐字不变**（`test_core_search_
+        # discrimination::test_document_without_query_scores_zero` 等既有行为保住）。
+        if not rows and any(ch not in "%_" for ch in q):
             # 检索增强（v1.12.1 · AEIS-BENCH-01 发现）：LIKE 预筛落空
             # （查询为重组短语，原文无连续子串命中）→ 回退全表二元组 Jaccard。
             # 节点量级小（千级），全表计算代价可忽略；消除连续性漏检。
@@ -2922,10 +2935,37 @@ class LayeredStore:
     # ==================== v1.3 扩展（P0-1/P0-3） ====================
 
     def get_nodes_by_tag(self, tag: str, limit: int = 50) -> List[STNode]:
-        """按标签检索节点（实体上下文组装用）"""
+        """按标签**精确**检索节点（实体上下文组装用）。
+
+        #183：旧实现 `tags LIKE '%{tag}%'` 有两个面——
+        ① **子串误配**：`LIKE '%ent:car_1%'` 命中 `ent:car_12` / `ent:carX1`；
+           `cycle:c1` 命中 `c10…c19`。
+        ② **通配符注入**：`_` 匹配任意单字符、`%` 匹配全部 ⇒
+           `get_nodes_by_tag("%")` / `get_nodes_by_tag("_")` 返回整库。
+        现走 `json_each` 做**元素级精确匹配**（`tags` 列是 JSON 数组文本，见
+        `_dumps_tags`——故不能写 `tags = ?`）。`json_valid` 前置短路：坏行
+        （非法 JSON）不参与、也不让整条查询抛 `OperationalError`（与
+        `_tolerant_nodes` 的「单条坏行不毒化整条检索链」同口径）。
+
+        ★调用方 survey（#183 改前）：仓内 `get_nodes_by_tag` 的全部调用点
+        （`vprim` ×2、`cycle:{id}`、`cycle_record_full`、`scene_model.
+        load_world_from_memory(tag="spatial")`）传入的都是**完整标签字面量**，
+        **无一依赖子串/前缀语义**，故此处直接改精确匹配、不另设
+        `get_nodes_by_tag_prefix`。（另注：`visual_check` 的 `screen_state` 检索
+        走的是**独立** SQL 且显式 `tags LIKE '%screen_state%'`，不经本方法，
+        见 core.py `visual_check` 内 #271 注释。）
+
+        判据来源：公开 issue #183（两个面的复现）；`json_each` 精确匹配口径
+        沿用任务书建议 1（Python 3.12 sqlite3 内建 JSON1，无额外依赖）。
+        阈值本体**未改**（默认 limit=50）。
+        """
         c = self.conn.cursor()
-        c.execute("SELECT * FROM nodes WHERE tags LIKE ? ORDER BY importance DESC, last_access DESC LIMIT ?",
-                  (f"%{tag}%", limit))
+        c.execute("SELECT * FROM nodes WHERE EXISTS ("
+                  "SELECT 1 FROM json_each("
+                  "CASE WHEN json_valid(nodes.tags) THEN nodes.tags ELSE '[]' END) "
+                  "WHERE value = ?) "
+                  "ORDER BY importance DESC, last_access DESC LIMIT ?",
+                  (tag, limit))
         return [STNode.from_row(tuple(r)) for r in c.fetchall()]
 
     @_transactional
@@ -5579,7 +5619,16 @@ class SpacetimeMemoryEngine:
             except Exception as e:
                 return {"status": "simloop_not_ready", "error": str(e)}
         if action == "setup":
-            wal = p.get("wal_path") or os.path.join("data", "wm_simloop_wal.jsonl")
+            # #248：默认 WAL 路径不再写死相对 cwd 的 "data/"。旧实现
+            # `os.path.join("data", "wm_simloop_wal.jsonl")` 相对**进程 cwd**，
+            # 且每次 setup 新建实例却对同一文件追加写 ⇒ 同文件 seq 重复
+            # （实测 [0,1,0,1]）。现默认路径沿用本仓既有的 `LINGSHU_DATA_ROOT`
+            # 数据根约定（同 `activation.py:62`：环境变量优先、缺省 "data"），
+            # 并可经参数显式覆盖；单调性由 `SimulationLoop` 侧续编号保证
+            # （见 wm_simloop.py `_resume_seq_from_wal`）。
+            wal = p.get("wal_path") or os.path.join(
+                os.environ.get("LINGSHU_DATA_ROOT", "data"),
+                "wm_simloop_wal.jsonl")
             sl_ = SimulationLoop(size=int(p.get("size", 40)),
                                  seed=int(p.get("seed", 42)), wal_path=wal)
             sl_.scene.create_scene(trees=int(p.get("trees", 0)), water=False)
@@ -5710,7 +5759,12 @@ class SpacetimeMemoryEngine:
                 from ..world.spacetime_consistency import SpacetimeConsistency
             except Exception as e:
                 return {"status": "stc_not_ready", "error": str(e)}
-        if not hasattr(self, '_stc'):
+        # #243：`init` 必须有独立分支——docstring/兜底错误信息都列了它，旧实现
+        # 无此分支，`init` 落到 `hasattr` 惰性构造：①首次调用被顺带构造却返回
+        # `status=error`（未知动作）；②此前调过任何动作则 `init` 参数**完全不生效**。
+        # 现按给定参数（重新）构造并返回 `status=ok` ＋ 当前状态。惰性构造只用
+        # 类默认值（各构造类默认值与门面默认逐位相同），故非 init 路径行为不变。
+        if action == "init":
             self._stc = SpacetimeConsistency(
                 size=int(p.get('size', 24)),
                 ground_level=int(p.get('ground_level', 1)),
@@ -5720,6 +5774,9 @@ class SpacetimeMemoryEngine:
                 drift_ticks=int(p.get('drift_ticks', 5)),
                 consistent_rate=float(p.get('consistent_rate', 0.85)),
                 min_consistent_ticks=int(p.get('min_consistent_ticks', 50)))
+            return {"status": "ok", "report": self._stc.consistency_report()}
+        if not hasattr(self, '_stc'):
+            self._stc = SpacetimeConsistency()
         if action == "create":
             r = self._stc.create_scene(trees=int(p.get("trees", 4)),
                                        water=bool(p.get("water", True)))
@@ -5786,11 +5843,16 @@ class SpacetimeMemoryEngine:
                 from ..world.world_model import UnifiedWorldModel
             except Exception as e:
                 return {"status": "wm_not_ready", "error": str(e)}
-        if not hasattr(self, '_wmodel'):
+        # #243：`init` 独立分支（旧实现缺此分支 ⇒ 首次返回 error 却顺带构造、
+        # 后续调用参数完全不生效）。惰性构造只用默认值，见 #243 说明。
+        if action == "init":
             self._wmodel = UnifiedWorldModel(
                 size=int(p.get('size', 24)),
                 ground_level=int(p.get('ground_level', 1)),
                 seed=int(p.get('seed', 42)))
+            return {"status": "ok", "model": self._wmodel.state()}
+        if not hasattr(self, '_wmodel'):
+            self._wmodel = UnifiedWorldModel()
         if action == "create":
             r = self._wmodel.world.create_scene(trees=int(p.get("trees", 2)),
                                                 water=bool(p.get("water", False)))
@@ -5855,12 +5917,17 @@ class SpacetimeMemoryEngine:
                 from ..world.world_learner import WorldLearner
             except Exception as e:
                 return {"status": "wl_not_ready", "error": str(e)}
-        if not hasattr(self, '_wlearner'):
+        # #243：`init` 独立分支（旧实现缺此分支 ⇒ 首次返回 error 却顺带构造、
+        # 后续调用参数完全不生效）。惰性构造只用默认值，见 #243 说明。
+        if action == "init":
             self._wlearner = WorldLearner(
                 size=int(p.get('size', 24)),
                 ground_level=int(p.get('ground_level', 1)),
                 seed=int(p.get('seed', 42)),
                 window=int(p.get('window', 6)))
+            return {"status": "ok", "learner": self._wlearner.state()}
+        if not hasattr(self, '_wlearner'):
+            self._wlearner = WorldLearner()
         if action == "create":
             r = self._wlearner.world.create_scene(trees=int(p.get("trees", 2)),
                                                   water=bool(p.get("water", False)))
@@ -5930,12 +5997,17 @@ class SpacetimeMemoryEngine:
                 from ..world.curiosity_explorer import CuriosityExplorer
             except Exception as e:
                 return {"status": "cx_not_ready", "error": str(e)}
-        if not hasattr(self, '_curious'):
+        # #243：`init` 独立分支（旧实现缺此分支 ⇒ 首次返回 error 却顺带构造、
+        # 后续调用参数完全不生效）。惰性构造只用默认值，见 #243 说明。
+        if action == "init":
             self._curious = CuriosityExplorer(
                 size=int(p.get('size', 24)),
                 ground_level=int(p.get('ground_level', 1)),
                 seed=int(p.get('seed', 42)),
                 window=int(p.get('window', 6)))
+            return {"status": "ok", "explorer": self._curious.state()}
+        if not hasattr(self, '_curious'):
+            self._curious = CuriosityExplorer()
         if action == "create":
             r = self._curious.world.create_scene(trees=int(p.get("trees", 2)),
                                                  water=bool(p.get("water", False)))
@@ -6007,7 +6079,9 @@ class SpacetimeMemoryEngine:
                 from ..world.seven_layer_loop import SevenLayerLoop
             except Exception as e:
                 return {"status": "sll_not_ready", "error": str(e)}
-        if not hasattr(self, '_sll'):
+        # #243：`init` 独立分支（旧实现缺此分支 ⇒ 首次返回 error 却顺带构造、
+        # 后续调用参数完全不生效）。惰性构造只用默认值，见 #243 说明。
+        if action == "init":
             self._sll = SevenLayerLoop(
                 size=int(p.get('size', 24)),
                 ground_level=int(p.get('ground_level', 1)),
@@ -6015,6 +6089,9 @@ class SpacetimeMemoryEngine:
                 window=int(p.get('window', 6)),
                 budget=int(p.get('budget', 2)),
                 policy=str(p.get('policy', 'curiosity')))
+            return {"status": "ok", "loop": self._sll.state()}
+        if not hasattr(self, '_sll'):
+            self._sll = SevenLayerLoop()
         if action == "create":
             r = self._sll.create_scene(trees=int(p.get("trees", 2)),
                                        water=bool(p.get("water", False)))
