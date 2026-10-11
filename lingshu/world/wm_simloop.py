@@ -27,7 +27,7 @@ WAL（append-only 单调）：{seq, ts, tick, kind ∈ episode|growth|confirm|re
 逐节点逐边一致（WAL = 世界图演化的可逆投影；被 REVERT 的假设在快照消失但
 revert 事件留痕）。
 
-设计稿：docs/世界模型推演循环显式化_设计稿_v0.1.md
+设计稿：docs/世界模型推演循环显式化_设计稿_v0.1.md（该文档不在本仓，属上游/私域件）
 （含 Nature co-design 八特性 checklist 审计与 v0.1 诚实边界）
 
 纯标准库 · 零外部依赖 · 零 LLM（D-005）· SimLoop 自身零 rng（确定性外推）

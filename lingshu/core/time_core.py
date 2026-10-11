@@ -7,7 +7,7 @@
 衰减率 γ 按对象配置；任何在本模块之外出现的衰减核实现
 （exp(-t/τ)、×(1-factor)、EMA 保持率）都是 bug——
 由 tools/time_core_lint.py 按 E5 口径机械化审计。
-规范依据：docs/概念钉死批_GPT四点评审_v0.1.md 钉死 3。
+规范依据：docs/概念钉死批_GPT四点评审_v0.1.md 钉死 3（该文档不在本仓，属上游/私域件）。
 """
 import math
 

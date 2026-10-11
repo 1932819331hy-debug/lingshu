@@ -24,8 +24,8 @@
 本文件是契约的**唯一权威实现**（协议内 · 纯标准库 · 零依赖）：
   · 写入方：`lingshu_runtime.py` / `voice_daemon.py` 为保持自包含进程，内联同等
     规则，但取值必须落在本文件取值域内；
-  · 工具链：`AEIS/tools/provenance.py` 是薄壳 re-export；
-    `AEIS/tools/audit_provenance.py` 用本契约对全库做合规普查。
+  · 工具链（上游仓 / 未随本仓导出）：`AEIS/tools/provenance.py` 是薄壳 re-export；
+    `AEIS/tools/audit_provenance.py` 用本契约对全库做合规普查（两者均不在本仓）。
 """
 from __future__ import annotations
 

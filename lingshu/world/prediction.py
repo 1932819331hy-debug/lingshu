@@ -29,7 +29,7 @@ except Exception:  # 本仓形态：回落仓内 core 的同名实现（char_big
 
 
 class PredictionEngine:
-    """预测引擎：'图结构的过去 + 结构 → 候选未来集合'（非确定性输出）"""
+    """预测引擎：'图结构的过去 + 结构 → 候选未来集合'（候选集合确定性；日志含 time.time() 时间戳）"""
 
     MIN_SAMPLES = 50          # D-006：最低样本量（置信区间收敛）
     BASE_HIT_RATE = 0.40      # D-006：基线阈值（工程初值，非协议承诺）
