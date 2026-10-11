@@ -342,12 +342,28 @@ class STNode:
 
         #185：`importance` / `confidence` 经 `_finite_clamp` 归一（非有限值回落
         0.0/0.5 缺省、有限值钳到 [0,1]）——见 `_finite_clamp` docstring。
-        `temporal_coordinate` 非有限时回落 `last_access`（同列族的时间戳兜底）。
+        `temporal_coordinate` 非有限时回落 **`created_at`**（同列族的时间戳兜底）。
+
+        ★回落目标为何是 `created_at` 而非 `last_access`（2026-10-11 修正）：
+        本列在此前（P1-core 批次初版）回落 `last_access`，那是**写库时刻的
+        wall-clock**——逐节点不同，且与库外时钟分辨率（Windows `time.time()`
+        ≈15.6ms）绑定 ⇒ 同一批写入的节点可能落进不同 tick，`temporal_coordinate`
+        从「同一时刻」被拆成两个值，`time_radius=0` 的同刻查询**时红时绿**
+        （实测：两次写入间 sleep 0.05s 即稳定复现红；不 sleep 则绿）。
+        而读侧 `spatiotemporal_query` 的既有回落口径本就是
+        `node.temporal_coordinate if ... is not None else node.created_at or 0`
+        ——`created_at` 才是本仓既定的时间兜底真源；改回它即让「写侧归一」与
+        「读侧兜底」同口径，且逐节点确定（不再随时钟 tick 抖动）。
+        判据来源：既有回归 `tests/test_spatiotemporal_zero_radius.py::
+        test_created_at_fallback_does_not_replace_explicit_zero_timestamp`
+        （其名即「created_at fallback」）＋ 读侧 `spatiotemporal_query` 的同款兜底。
+        边界（削掉的判别力）：`created_at` 为 0/None 的极端节点仍会落 0.0，
+        不另造第三种兜底——保持「写侧只归一、兜底真源唯一」。
         """
         return (
             self.id, self.content, self.modality,
             json.dumps(self.spatial_coordinates),
-            _finite_or(self.temporal_coordinate, self.last_access),
+            _finite_or(self.temporal_coordinate, self.created_at),
             self.condition_space.to_json(),
             _finite_clamp(self.importance, 0.0, 1.0),
             _finite_clamp(self.confidence, 0.0, 1.0),
