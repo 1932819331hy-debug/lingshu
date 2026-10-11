@@ -3189,7 +3189,12 @@ class LayeredStore:
             return default
         try:
             sa = json.loads(row[0])
-        except Exception:
+        except (ValueError, TypeError):
+            # 窄口径（#170 建议 b）：`json.loads` 只抛这两类——`JSONDecodeError`
+            # 是 `ValueError` 子类，入参非 str/bytes 抛 `TypeError`。本处「坏档当
+            # 缺键」是刻意静默（读一个可选标记，不该因脏数据中断重算），故不记
+            # 审计行；但**不写成宽 `except Exception`**——那会把真正的编程错误
+            # （如 cursor 用法错）一并吞成默认值。
             return default
         if not isinstance(sa, dict):
             return default
