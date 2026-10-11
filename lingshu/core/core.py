@@ -36,9 +36,9 @@ from enum import Enum
 
 # 统一时间核（钉死批条款3：衰减核形状唯一，实现收口 aeis/time_core.py）
 try:
-    from .time_core import cred_step
+    from .time_core import cred, cred_step
 except ImportError:  # 直跑 fallback（裸名互导）
-    from .time_core import cred_step
+    from .time_core import cred, cred_step
 
 # 组件发现面收口（issue #156）：白名单组件的裸名导入不再经 cwd/空串 sys.path 条目解析。
 # v2 精确范围：① 本包 import 期由 _pathguard 消除 cwd/空串 sys.path 解析（覆盖**一切**
@@ -889,6 +889,19 @@ class LayeredStore:
     #: 各线程看到同一份数据。名字按实例唯一，避免同一进程内的多个实例互相串库。
     _MEMORY_DSN = "file:lingshu_mem_{}?mode=memory&cache=shared"
 
+    #: 衰减「一个周期」的秒数（#176）。`decay_cycle(factor=…)` 的 `factor` 语义
+    #: 保持「每周期衰减量」，本常量把「周期」从「一次调用」改钉成**流逝时间**——
+    #: 与 `SpacetimeMemoryEngine.start_auto_decay(interval=60.0)` 的默认周期一致。
+    #: 判据来源：`lingshu/core/time_core.py` 章程（连续核 `cred(x0,x_inf,γ,dt)`，
+    #: γ 为单位时间速率）＋ `cred_step` docstring「n 步后 x·(1-decay)^n =
+    #: x·e^(n·ln(1-decay))，衰减率 γ = -ln(1-decay) 每周期」——本件即令「周期」
+    #: = 60 秒，从而 γ(每秒) = -ln(1-factor)/60。取值 60.0 与 start_auto_decay
+    #: 默认 interval 同源（经验标定，仓内无规定该常量的理论章节）。
+    _DECAY_PERIOD_SECONDS = 60.0
+
+    #: `decay_cycle` 的引擎元数据键（持久化「上次衰减的墙钟时刻」，#176）。
+    _LAST_DECAY_META_KEY = "_last_decay_at"
+
     def __init__(self, db_path: str = ":memory:", role: Role = Role.PRIMARY):
         # #382：相对 db_path 必须**在构造期**钉成绝对路径。旧实现原样存下相对路径，
         # 而 sqlite3 在**每次 connect 时**按当时的 cwd 解析相对路径 ⇒ 同一进程内
@@ -976,6 +989,13 @@ class LayeredStore:
                 c.execute("PRAGMA journal_size_limit=512000000")
         except Exception:
             pass
+        # #93：外键强制是**连接级**开关——SQLite 默认 `foreign_keys=OFF`，建表块里
+        # 声明的两条 `FOREIGN KEY ... REFERENCES nodes(id)` 因此**没有约束力**，
+        # 孤儿边（source_id/target_id 指向不存在节点）可经 `add_edge` / `import_all`
+        # 静默落库。每个连接建立时开启（内存库与文件库同一路径）。不放在上面的
+        # try 里：若静默吞掉失败，外键会「看起来开了其实没开」，与 #93 的「不静默」
+        # 取向相反——故本句独立执行，异常原样抛出（sqlite3 恒支持该 PRAGMA）。
+        c.execute("PRAGMA foreign_keys=ON")
         slot = _ThreadConn(c)
         self._local.slot = slot
         self._conns.add(slot)
@@ -1360,9 +1380,13 @@ class LayeredStore:
                       " WHERE relation_type=? AND (source_id=? OR target_id=?)",
                       (EdgeType.OPPOSITE.value, node_id, node_id))
             peers = {t if s == node_id else s for s, t in c.fetchall()}
-            c.execute("DELETE FROM nodes WHERE id=?", (node_id,))
             # #168：删边经唯一真源（对不可变层对端的边先落审计）
+            # #93：**先删边再删节点**——开启 `PRAGMA foreign_keys=ON` 后，节点仍被
+            # 关联边引用时 `DELETE FROM nodes` 会抛 `FOREIGN KEY constraint failed`
+            # （无 `ON DELETE CASCADE`）。旧顺序（先删节点后删边）在无外键强制的年代
+            # 无害，开外键后即整条删除路径报错；顺序反了必红。
             self._strip_incident_edges(c, node_id)
+            c.execute("DELETE FROM nodes WHERE id=?", (node_id,))
             for peer in peers:
                 c.execute("SELECT COUNT(*) FROM edges WHERE relation_type=?"
                           " AND (source_id=? OR target_id=?)",
@@ -1408,6 +1432,9 @@ class LayeredStore:
         try:
             obs = sqlite3.connect(self.db_path, timeout=0)
             try:
+                # #93：本连接独立于 `_connect`（访问计数为尽力而为的旁路写），
+                # 连接级外键开关必须逐连接重设，否则该连接上外键不生效。
+                obs.execute("PRAGMA foreign_keys=ON")
                 obs.execute(
                     'UPDATE nodes SET access_count = access_count + 1,'
                     ' last_access = ? WHERE id=?', (time.time(), node_id))
@@ -2033,8 +2060,54 @@ class LayeredStore:
 
     # ---------- 衰减引擎 ----------
 
+    def _decay_dt(self, now) -> float:
+        """本轮衰减的**流逝时间**（秒，≥0），并持久化「上次衰减时刻」（#176）。
+
+        `now is None` ⇒ 返回一个周期（`_DECAY_PERIOD_SECONDS`），即**保持旧的
+        「每次调用 = 一个周期」步进语义**（既有测试/调用方一律走此路径，行为逐字
+        不变）。`now` 给出（生产路径 `start_auto_decay` 经注入时钟给出）⇒ 返回
+        `now - 上次衰减时刻`，并把本次时刻写回 `engine_meta`——于是**遗忘量只取决于
+        流逝时间**：`interval=1` 与 `interval=60` 在相同墙钟时间里遗忘量相等，
+        停机一周后重启的首次衰减一次性补足该周。
+        判据来源：公开 issue #176 建议 1（`dt = now - last_decay_at`）＋
+        `lingshu/core/time_core.py` 章程（连续核 `cred` 以真实时间 dt 为自变量）。
+        边界（削掉的判别力，如实标注）：首次进入时间模式（无 `_last_decay_at`
+        记录）时按**一个周期**计 dt，而非 0——避免「刚部署/刚重启首轮不衰减」；
+        取此口径与 `start_auto_decay` 的周期语义一致。
+        """
+        if now is None:
+            return self._DECAY_PERIOD_SECONDS
+        last = self.get_meta(self._LAST_DECAY_META_KEY).get(self._LAST_DECAY_META_KEY)
+        try:
+            last_f = float(last)
+        except (TypeError, ValueError):
+            last_f = None
+        dt = self._DECAY_PERIOD_SECONDS if last_f is None else (now - last_f)
+        if dt < 0:
+            dt = 0.0          # 时钟回拨：不前进（不反向增信）
+        self.set_meta(self._LAST_DECAY_META_KEY, str(now))
+        return dt
+
+    def _decay_value(self, x: float, factor: float, dt: float) -> float:
+        """连续核衰减一步：`cred(x, 0, γ, dt)`，γ = -ln(1-factor)/周期（#176）。
+
+        与旧离散核 `cred_step(x, factor) = x·(1-factor)` 的关系：取 `dt = 一个周期`
+        时 `cred(x,0,γ,周期) = x·e^(-γ·周期) = x·(1-factor)`——**逐字相同**，故
+        未提供 `now` 的既有调用行为不变；`dt` 为任意值时按连续核演化，从而
+        「n 次小步」与「一次大步」在相同总 Δt 下结果相等（核形状唯一）。
+        判据来源：`lingshu/core/time_core.py` 章程「X(t)=X∞+(X0−X∞)·e^(−γ·t)」＋
+        `cred_step` docstring「γ = -ln(1-decay) 每周期」。
+        """
+        if x is None:
+            return 0.0
+        ratio = 1.0 - factor
+        if ratio <= 0.0:
+            return 0.0
+        gamma = -math.log(ratio) / self._DECAY_PERIOD_SECONDS
+        return cred(x, 0.0, gamma, dt)
+
     @_transactional
-    def decay_cycle(self, factor: float = 0.02, min_confidence: float = 0.1):
+    def decay_cycle(self, factor: float = 0.02, min_confidence: float = 0.1, now=None):
         """
         对未验证的边执行指数衰减。
         不可变层（锚点/结构/自我）的节点不受影响（其关联边也不衰减）。
@@ -2067,7 +2140,25 @@ class LayeredStore:
         边界（削掉的判别力）：本件只**保留**不可变层端点的边不被衰减删除；
         这些边仍随**对端节点**在情境层自然遗忘/FIFO 淘汰中被整条删除
         （经 `_strip_incident_edges` 落 `immutable_edge_stripped` 审计，见 #168）。
+
+        #176（遗忘按「调用次数」而非流逝时间）：旧实现每调用一次就乘一次
+        `(1-factor)`，与真实时间无关 ⇒ `start_auto_decay(interval=1)` 与
+        `interval=60` 在相同墙钟时间里遗忘量相差 60 倍、手动多调几次等于时间快进、
+        进程停机一周重启后**零遗忘**。现按 `now`（注入时钟给出的墙钟时刻）取
+        `dt = now - 上次衰减时刻`，用**连续核** `cred(x,0,γ,dt)`（γ = -ln(1-factor)
+        每周期）演化——「相同 Δt 下调用 1 次与调用 60 次结果相等」。
+        `now=None`（既有测试/直接调用）**保持旧步进语义**（每次 = 一个周期），
+        故现有调用方行为逐字不变；时间模式由 `start_auto_decay`（生产路径）经
+        `_decay_uses_clock` 自动进入。判据来源：公开 issue #176 建议 1+2 ＋
+        `lingshu/core/time_core.py` 章程（核形状唯一，见 `_decay_value`）。
+        边界（削掉的判别力，如实标注）：①**副本合一未做**——issue 建议 3
+        （删除 `world/time_core.py` 与 `gen/hex_composite.py` 的副本）属架构改动，
+        不在本件范围，`lingshu/core/time_core.py` 与 `lingshu/world/time_core.py`
+        仍是两份字节相同的副本；②`now=None` 时不做时间记账（既有测试语义优先）；
+        ③仅把「周期」钉为 `_DECAY_PERIOD_SECONDS`（默认 60s，与
+        `start_auto_decay` 默认 interval 同源），未把 γ 拆成独立配置项。
         """
+        dt = self._decay_dt(now)
         with self._lock:
             c = self.conn.cursor()
             # 获取所有未验证的边
@@ -2127,7 +2218,8 @@ class LayeredStore:
                 conf = edge.confidence
                 if conf is None or not math.isfinite(conf):
                     conf = 0.0
-                new_conf = cred_step(conf, factor)
+                # #176：连续核按流逝时间 dt 演化（dt=周期时 == 旧 cred_step）。
+                new_conf = self._decay_value(conf, factor, dt)
                 if new_conf < min_confidence:
                     # 低于最小置信度，删除边
                     c.execute("DELETE FROM edges WHERE id=?", (edge.id,))
@@ -2165,11 +2257,13 @@ class LayeredStore:
                 # 视为「已耗尽」→ 0.0（低于阈值 ⇒ 走删除）。
                 if imp is None or not math.isfinite(imp):
                     imp = 0.0
-                new_imp = cred_step(imp, factor)
+                # #176：连续核按流逝时间 dt 演化（dt=周期时 == 旧 cred_step）。
+                new_imp = self._decay_value(imp, factor, dt)
                 if new_imp < min_confidence:
-                    c.execute("DELETE FROM nodes WHERE id=?", (nid,))
+                    # #93：先删边再删节点（外键开启后顺序反了会 FK constraint failed）。
                     # #168：删边经唯一真源（对不可变层对端的边先落审计）
                     self._strip_incident_edges(c, nid)
+                    c.execute("DELETE FROM nodes WHERE id=?", (nid,))
                 else:
                     c.execute("UPDATE nodes SET importance=? WHERE id=?", (new_imp, nid))
             # #29③：KNOWLEDGE 层**置信度**衰减（长期知识不淡出内容，但未确证的断言
@@ -2191,7 +2285,7 @@ class LayeredStore:
                 if self._is_forget_protected(self.get_node(nid), protected_set):
                     continue
                 c.execute("UPDATE nodes SET confidence=? WHERE id=?",
-                          (cred_step(conf, factor), nid))
+                          (self._decay_value(conf, factor, dt), nid))
             self.conn.commit()
 
     # ==================== 检索层（M1） ====================
@@ -2920,9 +3014,10 @@ class LayeredStore:
         doomed = ids[keep:]
         with self._lock:
             for nid in doomed:
-                c.execute("DELETE FROM nodes WHERE id=?", (nid,))
+                # #93：先删边再删节点（外键开启后顺序反了会 FK constraint failed）。
                 # #168：删边经唯一真源（对不可变层对端的边先落审计）
                 self._strip_incident_edges(c, nid)
+                c.execute("DELETE FROM nodes WHERE id=?", (nid,))
             self.conn.commit()
         return len(doomed)
 
@@ -3728,6 +3823,11 @@ class SpacetimeMemoryEngine:
         with self.store._tx():
             yield self.store.conn
 
+    #: `_reuse_tracker` 保留的最近轮数上界（#208）。**经验标定，追不到理论出处**——
+    #: 仓内无规定该上界的理论章节；取值只需覆盖「当前轮 + 极少近邻轮」即可满足
+    #: 同轮去重语义（见 `_note_reuse` docstring 边界）。
+    _REUSE_TRACKER_ROUNDS = 5
+
     def __init__(self, db_path: str = ":memory:", identity: str = "协议实例", role: Role = Role.PRIMARY):
         self.store = LayeredStore(db_path, role=role)
         self.role = role
@@ -3739,6 +3839,9 @@ class SpacetimeMemoryEngine:
         self._decay_thread = None
         self._running = False
         self._decay_wake = threading.Event()   # #37：可唤醒的等待（替代裸 sleep）
+        # #176：衰减时钟（可替换）。None ⇒ `decay_cycle()` 走旧的「每次=一个周期」
+        # 步进；`start_auto_decay(clock=…)` 置入后，每次衰减按真实流逝时间演化。
+        self._decay_clock = None
         # #184：后台衰减线程的**最近一次**周期异常（None=从未失败）。循环内捕获并
         # 记录后继续跑（旧实现异常直接冒泡出线程 ⇒ 线程静默退出、遗忘机制整体停摆，
         # 而 `_running` 仍为 True ⇒ 对外不可观测）。经 `self_check()` 的
@@ -4997,12 +5100,39 @@ class SpacetimeMemoryEngine:
         T4 修复（2026-08-30）：内存 tracker 之外同步落库 flywheel_reuse 表
         （session_id 区分进程实例）——跨进程累计，心跳/对话端任一进程的
         flywheel_metrics 都能读到全实例复用观测（此前心跳进程 tracker 恒空）。
-        写库失败不阻断检索主流程（复用观测是工程观测值，DEVIATION-004）。"""
+        写库失败不阻断检索主流程（复用观测是工程观测值，DEVIATION-004）。
+
+        #208（同轮同节点重复落库 + tracker 无上界）：旧实现把**整份累计 bucket**
+        重新 `INSERT`，而 bucket 在本轮内只增不减 ⇒ 同一轮每检索一次，之前已记录
+        的节点就再插一遍（issue 实测同轮同节点行数 [3,2,4]、总 9 行，去重后应为 3）；
+        下游按行数统计的复用率被放大。另 `_reuse_tracker` 按轮次编号的 dict **从不
+        清理**，常驻进程持续增长。修法（issue 建议 1「只插入 new」路线）：
+          · `new = set(node_ids) - bucket` → `bucket |= new` → **只插入 `new`**；
+          · tracker 只保留最近 `_REUSE_TRACKER_ROUNDS` 轮（更旧的轮次整键删除）。
+        取「只插入 new」而非「表加 UNIQUE + INSERT OR IGNORE」：`_init_tables` 对
+        既有库是 `CREATE TABLE IF NOT EXISTS`，**加不了**新 UNIQUE 约束 ⇒ 需迁移；
+        纯代码改动对既有库直接生效。
+        判据来源：公开 issue #208（期望「同轮同节点在库中只有一行；内存 tracker 有
+        上界」＋ 建议修复代码）＋ 本函数 docstring「同轮同节点去重」。
+        边界（削掉的判别力）：`_REUSE_TRACKER_ROUNDS` 取 **经验标定，追不到理论
+        出处**——仓内无规定该上界的理论章节，取值参照「同轮去重只需覆盖当前轮及
+        极少近邻轮」的用法；越界的历史轮次不再参与去重（其行已落库，重复计数面
+        只在本轮内，故无功能损失）。
+        """
         if not node_ids:
             return
         rnd = self._interaction_count
         bucket = self._reuse_tracker.setdefault(rnd, set())
-        bucket.update(node_ids)
+        # #208：只落「本轮新增」的节点——旧实现插入整个累计 bucket，同轮同节点被
+        # 每次检索重复插入一遍（issue 实测 [3,2,4] / 总 9）。
+        new = set(node_ids) - bucket
+        if not new:
+            return
+        bucket |= new
+        # #208：tracker 只保留最近 K 轮（更旧键整键删除），防常驻进程无界增长。
+        cutoff = rnd - self._REUSE_TRACKER_ROUNDS + 1
+        for old in [r for r in self._reuse_tracker if r < cutoff]:
+            del self._reuse_tracker[old]
         try:
             conn = self.store.conn
             conn.execute(
@@ -5012,7 +5142,7 @@ class SpacetimeMemoryEngine:
             conn.executemany(
                 "INSERT INTO flywheel_reuse (session_id, round, node_id, ts) "
                 "VALUES (?, ?, ?, ?)",
-                [(self._session_id, rnd, nid, ts) for nid in sorted(bucket)])
+                [(self._session_id, rnd, nid, ts) for nid in sorted(new)])
             conn.commit()
         except Exception:
             pass  # 观测落库失败静默（不阻断检索）
@@ -7261,19 +7391,27 @@ class SpacetimeMemoryEngine:
         降级口径（issue #16）：目标库不存在的表跳过并计入 `skipped_tables`；
         否则导出产物一旦含 `entities` 行，回灌同样抛 `OperationalError`。
 
+        #93（悬挂引用不再静默落库）：本方法所在连接已开 `PRAGMA
+        foreign_keys=ON`（见 `LayeredStore._connect`），备份里指向不存在节点的边
+        若照旧 `INSERT OR REPLACE` 会抛 `FOREIGN KEY constraint failed` 并**中断
+        整次导入**。故本方法在导入 `edges` 前**按库内节点集合预筛**：孤儿边
+        **不导入**，其条数/样本随返回值交付（`orphan_edges` /
+        `orphan_edges_sample`），`integrity_ok` 一并置 False。这是「跳过并报告」
+        而非「拒绝整次导入」——取此口径以保持既有返回体形状与「部分恢复」语义
+        （nodes 等完好表照常导入），同时把「恢复了损坏备份」当场暴露。
+
         返回值指标口径（**勿与 `verify_integrity()` 的 `orphan_edges` 混用**）：
         `dangling_rows` 是**按「违规行」去重**的计数——导入后跑 `PRAGMA
         foreign_key_check`，该指令对**每一条**被违反的外键约束各回一行；同一行若
         其两条外键（`source_id`、`target_id`）**都**悬挂，就回两行（rowid 相同、
         fkid 不同）。这里按 `(表名, rowid)` 去重后取 `len` ⇒ **同一条两端全悬挂
-        的边只算 1**（两端各断一根的**两条**边则算 2，因为是两行）。
-        对照 `verify_integrity()["orphan_edges"]`：那是**按「边×端点」累加**
-        （`orphan_source + orphan_target`）⇒ 同一条两端全悬挂的边算 **2**。
-        故「一条两端都悬挂的边」这一最小场景下，两处给出的是 **1 与 2** —— 两者都
-        判 `integrity_ok=False`（都判不通过），但**不是同一个数**，读者勿当成同一
-        指标（该口径差由 `tests/test_core_dangling_metric_parity.py` 钉住）。
-        另注：`dangling_rows` 覆盖**全部**声明外键的表，`orphan_edges` 只统计
-        `edges` 表（本仓当前仅 `edges` 声明外键，两处范围恰好一致）。
+        的边只算 1**（两端各断一根的**两条**边则算 2，因为是两行）。经 #93 预筛后
+        该值在正常路径恒为 0（悬挂边根本未落库），保留作白名单裁剪后仍悬挂的兜底。
+        本方法另返 `orphan_edges`（int，被预筛跳过的**边条数**，按边计 1，不按端点
+        累加）与 `orphan_edges_sample`（前 20 条样本）——**与** `verify_integrity()`
+        的 `orphan_edges`（按边×端点累加）**同名不同义**，读者勿混用。
+        另注：`dangling_rows` 覆盖**全部**声明外键的表，本方法 `orphan_edges` 与
+        `verify_integrity()` 的 `orphan_edges` 都只统计 `edges` 表。
         """
         with open(input_path, "r", encoding="utf-8") as f:
             data = json.load(f)
@@ -7290,6 +7428,7 @@ class SpacetimeMemoryEngine:
         counts = {}
         skipped = []
         discarded = {}
+        orphan_rows = []
         for table in self.M13_TABLES:
             if table not in existing:
                 skipped.append(table)
@@ -7310,6 +7449,18 @@ class SpacetimeMemoryEngine:
                 continue
             placeholders = ",".join("?" for _ in cols)
             col_sql = ",".join(cols)
+            # #93：外键开启（`PRAGMA foreign_keys=ON`）后，指向不存在节点的边会让
+            # `INSERT OR REPLACE` 抛 `FOREIGN KEY constraint failed` 并**中断整次
+            # 导入**。故先按库内节点集合预筛：孤儿边**不导入**、计入返回值
+            # `orphan_edges` 并给样本（「跳过并报告」，保持既有返回体形状）。
+            # 节点集合取库内当前 `nodes`——备份的 `nodes` 表已在上一轮迭代导入
+            # （`M13_TABLES` 中 nodes 先于 edges），故备份自带的合法端点已被覆盖。
+            if table == "edges":
+                node_ids = {r[0] for r in c.execute("SELECT id FROM nodes")}
+                keep = [r for r in rows
+                        if r.get("source_id") in node_ids and r.get("target_id") in node_ids]
+                orphan_rows = [r for r in rows if r not in keep]
+                rows = keep
             for r in rows:
                 c.execute(f"INSERT OR REPLACE INTO {table} ({col_sql}) VALUES ({placeholders})",
                           tuple(r.get(col) for col in cols))
@@ -7322,16 +7473,21 @@ class SpacetimeMemoryEngine:
                 node_ids=[i for i in immutable_rows if i],
                 outcome={"requires_review": True, "immutable_rows": len(immutable_rows)})
         self.store.conn.commit()
-        # 恢复自检：SQLite 默认不强制外键（连接未开 PRAGMA foreign_keys），备份
-        # 自带的悬挂边会被原样恢复，事后只能靠调用方主动调 verify_integrity；
-        # 故导入后当场体检，把「恢复了损坏备份」这件事随返回值交付（不拦写入）。
+        # 恢复自检：导入后跑 `PRAGMA foreign_key_check` 体检。经上方 #93 预筛，正常
+        # 路径下应恒为空；保留本步作为「白名单列裁剪后仍出现悬挂」的兜底观测
+        # （不拦写入，随返回值交付）。
         c.execute("PRAGMA foreign_key_check")
         # 按 (表名, rowid) 去重 ⇒ 两端全悬挂的**同一条边**只计 1。对照
         # verify_integrity()["orphan_edges"] 按边×端点累加，同一场景计 2；两处
         # 口径不同（详见本方法 docstring），不要把这一个数当成那一个数。
         dangling = {(table, rid) for table, rid, *_ in c.fetchall()}
         return {"imported": counts, "skipped_tables": skipped,
-                "dangling_rows": len(dangling), "integrity_ok": not dangling,
+                "dangling_rows": len(dangling),
+                "orphan_edges": len(orphan_rows),
+                "orphan_edges_sample": [
+                    {"id": r.get("id"), "source_id": r.get("source_id"),
+                     "target_id": r.get("target_id")} for r in orphan_rows[:20]],
+                "integrity_ok": not dangling and not orphan_rows,
                 "discarded_keys": discarded,
                 "immutable_rows": [i for i in immutable_rows if i],
                 "requires_review": bool(immutable_rows)}
@@ -8125,9 +8281,19 @@ class SpacetimeMemoryEngine:
 
     # ==================== 衰减与维护 ====================
 
-    def decay_cycle(self, factor: float = 0.02, min_confidence: float = 0.1):
-        """执行一次衰减周期（v1.16：透传 min_confidence 给 store 层）"""
-        self.store.decay_cycle(factor, min_confidence=min_confidence)
+    def decay_cycle(self, factor: float = 0.02, min_confidence: float = 0.1, now=None):
+        """执行一次衰减周期（v1.16：透传 min_confidence 给 store 层）。
+
+        #176（时间核章程）：本方法新增 `now` 形参（默认 None，向后兼容）并透传给
+        store 层——`now` 给出时按 `dt = now - 上次衰减时刻` 用连续核演化（遗忘只
+        取决于流逝时间）；`now=None` 时 store 层保持旧的「每次调用 = 一个周期」
+        步进语义（既有测试/调用方行为逐字不变）。生产路径由 `start_auto_decay`
+        注入时钟：`self._decay_clock` 非 None 时本方法自动以 `self._decay_clock()`
+        取值，从而「调用频率无关」。
+        """
+        if now is None and self._decay_clock is not None:
+            now = self._decay_clock()
+        self.store.decay_cycle(factor, min_confidence=min_confidence, now=now)
 
     @_transactional
     def forget_advisor(self, stale_days: float = 30.0, low_value: float = 0.2,
@@ -8214,8 +8380,13 @@ class SpacetimeMemoryEngine:
     #: 中才会用到这个上界）。
     _DECAY_JOIN_TIMEOUT = 30.0
 
-    def start_auto_decay(self, interval: float = 60.0):
+    def start_auto_decay(self, interval: float = 60.0, clock=None):
         """启动后台衰减线程。
+
+        #176：新增 `clock` 形参（默认 None ⇒ `time.time`）——注入引擎时钟，使
+        每次后台衰减按**真实流逝时间**演化（`interval` 只决定采样频率，不再决定
+        遗忘量）。判据来源：公开 issue #176 建议 2「给引擎注入时钟（`clock=time.time`
+        可替换）」。
 
         #37：等待改为**可唤醒**的 `Event.wait(interval)`（旧实现 `time.sleep`）——
         使 `stop_auto_decay` 能立即唤醒线程，而不是等满一个 interval。
@@ -8252,6 +8423,9 @@ class SpacetimeMemoryEngine:
         self._running = True
         self._decay_wake.clear()
         self._decay_last_error = None
+        # #176：置入时钟 ⇒ `decay_cycle()` 每次按真实流逝时间衰减（interval 只控
+        # 采样频率）。`clock=None` 回退 `time.time`（生产默认）。
+        self._decay_clock = clock if clock is not None else time.time
 
         def loop():
             # #37：唤醒后**先判 `_running` 再决定是否 `decay_cycle`**。旧实现是
@@ -8286,6 +8460,9 @@ class SpacetimeMemoryEngine:
         """
         self._running = False
         self._decay_wake.set()
+        # #176：停止后清除注入时钟 ⇒ 后续手动 `decay_cycle()` 回到「每次=一个周期」
+        # 的旧步进语义（避免停线程后残留的时间记账改变手动调用的行为）。
+        self._decay_clock = None
         t = self._decay_thread
         if t is not None and t.is_alive() and t is not threading.current_thread():
             t.join(timeout=self._DECAY_JOIN_TIMEOUT)
