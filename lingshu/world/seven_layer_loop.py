@@ -63,6 +63,12 @@ class SevenLayerLoop:
         self.explorer = CuriosityExplorer(size=size, ground_level=ground_level,
                                           seed=seed, window=window, world=self.world)
         self.budget = max(1, int(budget))
+        # issue #233（B）：策略名白名单 fail-closed——未知策略在构造点即拒，
+        # 不再「拼错即静默轮询、审计照抄拼错的策略名」。
+        if policy not in CuriosityExplorer.POLICY_NAMES:
+            raise ValueError(
+                "未知 policy %r（可用：%s）——拒绝静默退化为轮询（issue #233）"
+                % (policy, "/".join(CuriosityExplorer.POLICY_NAMES)))
         self.policy = policy
         self.audit: List[Dict] = []
         self.hit_history: List[float] = []
@@ -88,20 +94,29 @@ class SevenLayerLoop:
     def _verify(self, predictions: Dict) -> Dict:
         """L5 锚定验证：外部观察者全实体对比（有世界访问权）。"""
         hits, total = 0, 0
+        point_hits = 0
+        distances, bounds = [], []
         details = []
         for eid, p in predictions.items():
             e = self.world.entities.get(eid)
             if e is None:
                 continue
             dist = math.dist(p["predicted"], tuple(e.pos))
+            distances.append(dist)
+            bounds.append(p["bound"])
+            point_hits += dist < self.explorer.hit_threshold
             hit = dist < p["bound"]
             if hit:
                 hits += 1
             total += 1
             details.append({"entity": eid, "mode": p["mode"], "hit": hit,
                             "distance": round(dist, 4)})
-        rate = round(hits / total, 4) if total else 1.0
+        rate = round(hits / total, 4) if total else None
         return {"hits": hits, "total": total, "hit_rate": rate,
+                "bound_coverage": rate,
+                "point_hit_rate": round(point_hits / total, 4) if total else None,
+                "mean_distance": round(sum(distances) / total, 4) if total else None,
+                "mean_bound": round(sum(bounds) / total, 4) if total else None,
                 "details": details}
 
     def step(self) -> Dict:
@@ -127,13 +142,14 @@ class SevenLayerLoop:
                              "entities": len(self.world.entities)}
         # L1 感知机（好奇选定的实体，缸中之脑）
         self.explorer.observe(entities=chosen)
+        anomalies = self.explorer._count_anomalies(chosen)
         rec["L1_perception"] = {"observed": list(chosen),
-                                "observed_count": len(chosen)}
+                                "observed_count": len(chosen), "anomalies": anomalies}
         # L5 锚定验证（外部观察者全实体）
         ver = self._verify(pred["predictions"])
-        rec["L5_verification"] = {"hit_rate": ver["hit_rate"],
-                                  "hits": ver["hits"], "total": ver["total"]}
-        self.hit_history.append(ver["hit_rate"])
+        rec["L5_verification"] = {key: val for key, val in ver.items() if key != "details"}
+        if ver["hit_rate"] is not None:
+            self.hit_history.append(ver["hit_rate"])
         # L2 时空记忆图（观测序列 + 世界图）
         rec["L2_memory"] = {"history_len": len(self.explorer.history),
                             "entities": {eid: list(n.pos)
@@ -153,17 +169,28 @@ class SevenLayerLoop:
 
         自举：若尚无观测，先做一轮初始全带宽感知（闭环启动需要认知种子——
         与单元测试/引擎调用方行为一致，保证闭环自增强度量可比）。
+
+        issue #233（A）：返回的 `"ticks"` 改为**真实推进的闭环 tick 数**
+        （`self.tick` 增量），且 `n <= 0` 不再偷跑 1 个 tick。旧码
+        `for _ in range(max(1, int(n)))` 配 `"ticks": int(n)`——`run(0)` 的
+        同一个返回 dict 里 `ticks=0` 而 `loop_tick=1`、`run(-5)` 报
+        `ticks=-5` 却已推进 1 个 tick（自相矛盾，且与 docstring「运行 n tick」
+        不符）。判据＝《PR 审核细则 v0.1》§三.4 判据外置：字段语义须由断言
+        钉住（`ticks` == 实际推进数）。
         """
         if not self.explorer.history:
             self.explorer.observe()
             self.explorer.run(n=self.explorer.window)
-        for _ in range(max(1, int(n))):
+        start = self.tick
+        for _ in range(max(0, int(n))):
             self.step()
-        return {"status": "ok", "ticks": int(n), "loop_tick": self.tick,
+        return {"status": "ok", "ticks": self.tick - start, "loop_tick": self.tick,
                 "overall_hit_rate": self._overall_hit_rate()}
 
-    def _overall_hit_rate(self) -> float:
-        return round(sum(self.hit_history) / len(self.hit_history), 4)             if self.hit_history else 1.0
+    def _overall_hit_rate(self) -> Optional[float]:
+        total = sum(rec["L5_verification"]["total"] for rec in self.audit)
+        hits = sum(rec["L5_verification"]["hits"] for rec in self.audit)
+        return round(hits / total, 4) if total else None
 
     # ---- 闭环报告与审计 ----
 
@@ -189,10 +216,10 @@ class SevenLayerLoop:
             "L7_decision": {"policy": self.policy, "budget": self.budget,
                             "obs_distribution": dict(self.explorer.obs_counts)},
             "closed_loop_enhancement": {
-                "early_hit_rate": round(sum(early) / len(early), 4) if early else 1.0,
-                "late_hit_rate": round(sum(late) / len(late), 4) if late else 1.0,
+                "early_hit_rate": round(sum(early) / len(early), 4) if early else None,
+                "late_hit_rate": round(sum(late) / len(late), 4) if late else None,
                 "improvement": round(sum(late) / len(late) - sum(early) / len(early), 4)
-                if early and late else 0.0},
+                if early and late else None},
             "loop_closed": True,
         }
 

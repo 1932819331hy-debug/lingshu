@@ -18,6 +18,11 @@
      类间差 ≈ 0 而件内 > 0 的维不可分（比值 = +∞）：记进 `indistinguishable_dims`，
      该维比值输出 null、排序时排最前，且**不参与** `median_ratio`——不写成 0.0
      （0 = 「件内比类间还稳」= 最优，正好把最坏情形藏成最好）。
+     同理（#356）：若**没有任何 prompt 有 ≥2 张可读图**，「件内散布」本身**无定义**
+     ⇒ `within_prompt_defined=False`、`within_prompt_sd`/比值/`median_ratio` 逐项 null，
+     也不补成 0.0。
+     命令行 `--seeds` 值域 1..len(SEEDS)、`--prompts` ≥ 1（#355；越界即 argparse 报错，
+     不再静默截断/产出空语料）。
 
 红线：白箱（零 LLM、纯 stdlib+numpy+PIL）；读图/量测**只读复用** `hexgen_c1_real` 的确定性实现；
       生成侧只用**本地 Qwen-Image-2.1 管线**（即被研究的黑箱本体，与既有语料同源同参数）。
@@ -28,6 +33,7 @@
     --prompts 8 --seeds 5     # 子集大小与每 prompt 张数
 """
 import argparse
+import hashlib
 import io
 import json
 import os
@@ -37,8 +43,11 @@ import time
 import numpy as np
 from PIL import Image
 
-sys.path.insert(0, ".")
-sys.path.insert(0, "experiments")
+#   #108 修：删去原先的 `sys.path.insert(0, ".")` / `sys.path.insert(0, "experiments")`——
+#   import 期把**相对路径**写进 `sys.path`，其解析目标由判定时的 cwd 决定（判据同
+#   `lingshu/_pathguard.py::_is_relative_entry`：相对条目非受控面；issue #288·D-2）。
+#   本模块只用包内相对 import（`from . import ...`），不需要这两个条目；`experiments/`
+#   目录在本仓不存在（`git ls-files experiments` 为空）。
 from . import hexgen_c1_real as C          # 只读复用：解析器/读出链/度量（旁路，不改它）
 
 QWEN = (r"<local-path>"
@@ -104,13 +113,28 @@ def gen(prompts, seeds=SEEDS, outdir=OUTDIR):
             "rows": rows}
 
 
+def _stable_id(sid, seed) -> int:
+    """确定性整数 id：`blake2b` 摘要前 8 字节 % 10**9。
+
+    #198：原式 `hash((r["sid"], r["seed"])) % 10 ** 9` 用**内建 `hash()`**——
+    `str` 的哈希受 `PYTHONHASHSEED` 随机化（Python 3 默认逐进程随机）⇒ 同一份语料
+    在两个进程里给出**不同 id**，报告不可复现、跨进程对不上。改用
+    `hashlib.blake2b`（摘要稳定、与进程无关；同仓 `semantic_anchor_graph.py:90`
+    亦用哈希摘要造 id）。数值域与旧式一致（`% 10**9`），下游只当不透明标识用。
+    """
+    raw = ("%s|%s" % (sid, seed)).encode("utf-8")
+    return int.from_bytes(hashlib.blake2b(raw, digest_size=8).digest(), "big") % 10 ** 9
+
+
 def load_multi(rows):
     """把多 seed 语料读成 `hexgen_c1_real` 的 item 形状（真值由**同一**确定性解析器给出）。"""
     items = []
     for r in rows:
         truth = C.parse_prompt(r["prompt"])
-        img = np.asarray(Image.open(r["path"]))[..., :3].astype(np.float64)
-        items.append({"file": r["path"], "id": hash((r["sid"], r["seed"])) % 10 ** 9,
+        #   与 `hexgen_c1_real.load_items` 同一口径：先 `.convert("RGB")` 再取数组
+        #   （`[..., :3]` 对 L/P 模式图会静默取到亮度值/调色板索引）。
+        img = np.asarray(Image.open(r["path"]).convert("RGB")).astype(np.float64)
+        items.append({"file": r["path"], "id": _stable_id(r["sid"], r["seed"]),
                       "shape": truth["shape"] if truth else None,
                       "color": truth["color"] if truth else None,
                       "img": img, "truth": truth, "prompt": r["prompt"],
@@ -164,10 +188,18 @@ def summarize(reads, items):
         t = truth_of.get(sid)
         if not t:
             continue
+        #   花纹列读者只出**二档** `plain`/`patterned`（`predict` 的 `pattern`，见
+        #   hexgen_c1_real.py:958），而 prompt 真值是**三档**（`plain`/`striped`/`dotted`，
+        #   `parse_prompt`，hexgen_c1_real.py:120）。两者必须先降到同一档再比：判据取
+        #   C 线既有口径 `evaluate` 的 `tpat`（hexgen_c1_real.py:1074-1075，「花纹（二档
+        #   plain vs patterned）」列）。直接拿二档读出比三档真值，会让所有 striped/dotted
+        #   件恒判不兑现（issue #390）。代价：二档比较**削掉了 striped vs dotted 的判别力**
+        #   —— 该列现在只能判「有无花纹」；三档读出的判别力由 C 线 `pattern3_rate` 承担。
+        tpat = "plain" if t["pattern"] == "plain" else "patterned"
         for r in rs:
             hon["shape"].append(float(r["shapes"] == sorted([t["shape"]] * t["n"])))
             hon["color"].append(float(r["colors"] == sorted([t["color"]] * t["n"])))
-            hon["pattern"].append(float(r["patterns"] == sorted([t["pattern"]] * t["n"])))
+            hon["pattern"].append(float(r["patterns"] == sorted([tpat] * t["n"])))
             hon["count"].append(float(r["n_read"] == t["n"]))
 
     #   ③ 件内方差 vs 类间差（逐特征）
@@ -213,16 +245,30 @@ def summarize(reads, items):
         between = np.stack(means).std(axis=0, ddof=1)
     else:
         between = np.zeros(len(dims))
-    within_m = np.median(np.stack(within), axis=0) if within else np.zeros(len(dims))
-    #   类间差 ≈ 0 而件内散布 > 0 的维：比值在数学上无定义（= +∞）。它既不能落进 0.0
-    #   （0 = 「件内比类间还稳」= 最优，恰好把最坏情形写成最好），也不该悄悄混进
-    #   median_ratio；故单独点名 indistinguishable_dims、该维比值输出 null、排序时排最前。
-    indistinguishable = (between <= 1e-9) & (within_m > 0)
-    defined = ~indistinguishable
-    ratio = np.zeros(len(dims))
-    ratio[defined] = within_m[defined] / np.maximum(between[defined], 1e-9)
-    order = np.argsort(-np.where(indistinguishable, np.inf, ratio))
-    med = float(np.median(ratio[defined])) if bool(defined.any()) else float("nan")
+    #   #356：`within` 为空 = **没有任何 prompt 有 ≥2 张可读图** ⇒ 「件内散布」无定义。
+    #   原式 `... if within else np.zeros(len(dims))` 把它补成 0.0——而 0.0 在本尺子里
+    #   意为「件内比类间还稳」＝最优，恰把「根本没有件内样本」伪装成最好。判据来源：本模块
+    #   对同类情形（类间 ≈ 0 而件内 > 0）的既有口径就是「不写成 0.0」（docstring :18-20）。
+    #   故该情形逐维输出 null 并点名 `within_prompt_defined=False`；比值与中位比一并 null。
+    within_defined = bool(within)
+    within_m = np.median(np.stack(within), axis=0) if within_defined else None
+    if within_defined:
+        #   类间差 ≈ 0 而件内散布 > 0 的维：比值在数学上无定义（= +∞）。它既不能落进 0.0
+        #   （0 = 「件内比类间还稳」= 最优，恰好把最坏情形写成最好），也不该悄悄混进
+        #   median_ratio；故单独点名 indistinguishable_dims、该维比值输出 null、排序时排最前。
+        indistinguishable = (between <= 1e-9) & (within_m > 0)
+        defined = ~indistinguishable
+        ratio = np.zeros(len(dims))
+        ratio[defined] = within_m[defined] / np.maximum(between[defined], 1e-9)
+        order = np.argsort(-np.where(indistinguishable, np.inf, ratio))
+        med = float(np.median(ratio[defined])) if bool(defined.any()) else float("nan")
+    else:
+        #   件内无定义 ⇒ 既没有「不可分」可判、也没有「最差」可排；worst_dims 退回维度原序
+        #   （长度不变，下游 `hexgen_self_source.py:1257` 的打印不崩）。
+        indistinguishable = np.zeros(len(dims), dtype=bool)
+        ratio = np.zeros(len(dims))
+        order = np.arange(len(dims))
+        med = float("nan")
     return {
         "n_prompt": len(by_sid), "n_img": len(reads),
         "n_img_empty": n_empty,
@@ -233,10 +279,15 @@ def summarize(reads, items):
                     for k, v in hon.items()},
         "within_vs_between": {
             "dims": dims,
-            "within_prompt_sd": [round(float(x), 5) for x in within_m],
+            #   #356：件内散布是否有定义（无 ≥2 张可读图的 prompt ⇒ False，逐维 null）
+            "within_prompt_defined": within_defined,
+            "within_prompt_sd": ([None] * len(dims) if not within_defined
+                                 else [round(float(x), 5) for x in within_m]),
             "between_class_sd": [round(float(x), 5) for x in between],
-            "ratio_within_over_between": [None if indistinguishable[i] else round(float(ratio[i]), 3)
-                                          for i in range(len(dims))],
+            "ratio_within_over_between": ([None] * len(dims) if not within_defined else
+                                          [None if indistinguishable[i]
+                                           else round(float(ratio[i]), 3)
+                                           for i in range(len(dims))]),
             "indistinguishable_dims": [dims[i] for i in np.where(indistinguishable)[0]],
             "median_ratio": round(med, 3) if med == med else None,
             "worst_dims": [dims[i] for i in order[:5]],
@@ -244,10 +295,39 @@ def summarize(reads, items):
     }
 
 
+def _positive_int(text):
+    """argparse `type=`：`--prompts` / `--seeds` 的**值域下界**（issue #355）。
+
+    判据来源：本模块 CLI 语义——`--seeds N` 取 `SEEDS[:N]`（main 内 `seeds = SEEDS[:a.seeds]`）、
+    `--prompts N` 取 `pick_prompts(N)` 的前 N 条。`N <= 0` 时原式**静默**产出空语料或反向切片
+    （`SEEDS[:0] == ()`；`SEEDS[:-1]` 丢掉末位 seed），报告却照写——`argparse` 只 `type=int`，
+    无值域约束，故按缺陷判据加下界。"""
+    try:
+        v = int(text)
+    except (TypeError, ValueError):
+        raise argparse.ArgumentTypeError("必须是整数：%r" % (text,))
+    if v < 1:
+        raise argparse.ArgumentTypeError("必须是 ≥1 的整数（收到 %d）" % v)
+    return v
+
+
+def _seed_count(text):
+    """`--seeds` 的**值域上界**（issue #355）：`SEEDS[:N]` 在 `N > len(SEEDS)` 时静默截断，
+    用户要的 seed 数与实际渲染数不符。判据来源：`SEEDS`（模块常量）即全部可用 seed，
+    超过它没有语义。"""
+    v = _positive_int(text)
+    if v > len(SEEDS):
+        raise argparse.ArgumentTypeError(
+            "最多 %d（SEEDS=%s），收到 %d" % (len(SEEDS), list(SEEDS), v))
+    return v
+
+
 def main():
     ap = argparse.ArgumentParser()
-    ap.add_argument("--prompts", type=int, default=8)
-    ap.add_argument("--seeds", type=int, default=len(SEEDS))
+    ap.add_argument("--prompts", type=_positive_int, default=8,
+                    help="prompt 子集条数（≥1）")
+    ap.add_argument("--seeds", type=_seed_count, default=len(SEEDS),
+                    help="每 prompt 渲染张数（1..%d）" % len(SEEDS))
     ap.add_argument("--gen", action="store_true")
     ap.add_argument("--measure", action="store_true")
     ap.add_argument("--out", default=OUT)

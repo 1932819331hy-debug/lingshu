@@ -21,6 +21,12 @@ import time
 from dataclasses import dataclass, field, asdict
 from typing import Dict, List, Optional, Tuple
 
+#: 渲染位图单边像素上限（issue #416）。`Image.new("RGB", (w, h))` 直接按
+#: w*h*3 字节分配，任意大尺寸即内存耗尽（`world3d` 门面把用户参数原样透传）。
+#: 4096 已远超本模块参考视角（默认 800×600）两个量级，够用且单张 ≈50MB。
+#: 判据来源：经验标定（本件 #416）——仓内无规定渲染尺寸上限的理论章节，追不到。
+MAX_SCREEN_DIM = 4096
+
 # ---------------------------------------------------------------------------
 # 类别视觉词典：语义 → 真实尺寸/颜色/形状（伪 3D 的先验）
 # ---------------------------------------------------------------------------
@@ -188,9 +194,12 @@ class Camera3D:
     def focal(self, screen_w: int) -> float:
         return (screen_w / 2) / math.tan(math.radians(self.fov_deg) / 2)
 
-    def project(self, p3: Tuple[float, float, float],
-                screen_w: int, screen_h: int) -> Optional[Tuple[float, float]]:
-        """世界 3D 点 → 屏幕 2D 点（含相机旋转/平移）。"""
+    def to_camera(self, p3: Tuple[float, float, float]) -> Tuple[float, float, float]:
+        """世界 3D 点 → 相机坐标（平移 + yaw 绕 Y + pitch 绕 X）。
+
+        相机坐标 z = 前向深度（画家算法/透视尺度口径）；与 project 同一变换，
+        保证「投影-关联」可回代（见 docs/theory/世界模型与语义时空图_完整理论
+        整理与实现路线.md §3.2：已知相机参数下的精确映射，非猜测）。"""
         x, y, z = p3
         # 平移至相机
         x -= self.cx
@@ -201,12 +210,42 @@ class Camera3D:
         x, z = x * cos_y + z * sin_y, -x * sin_y + z * cos_y
         cos_p, sin_p = math.cos(self.pitch), math.sin(self.pitch)
         y, z = y * cos_p - z * sin_p, y * sin_p + z * cos_p
+        return (x, y, z)
+
+    def project(self, p3: Tuple[float, float, float],
+                screen_w: int, screen_h: int) -> Optional[Tuple[float, float]]:
+        """世界 3D 点 → 屏幕 2D 点（含相机旋转/平移）。"""
+        x, y, z = self.to_camera(p3)
         if z <= 0.1:            # 相机后方
             return None
         f = self.focal(screen_w)
         sx = screen_w / 2 + f * x / z
         sy = screen_h / 2 - f * y / z
         return (sx, sy)
+
+    def depth_of(self, p3: Tuple[float, float, float]) -> float:
+        """相机前向深度（相机坐标 z）——画家算法排序与透视尺度口径。"""
+        return self.to_camera(p3)[2]
+
+    def unproject(self, px: float, py: float, depth: float,
+                  screen_w: int, screen_h: int) -> Tuple[float, float, float]:
+        """屏幕像素 + 相机前向深度 → 世界 3D 点（project 的精确逆）。
+
+        与 project 共用同一变换，故 project(unproject(px,py,Z)) == (px,py)
+        （「投影-关联」可回代验证）。"""
+        f = self.focal(screen_w)
+        x_cam = (px - screen_w / 2) * depth / f
+        y_cam = (screen_h / 2 - py) * depth / f
+        z_cam = depth
+        # 逆 pitch（绕 X）
+        cos_p, sin_p = math.cos(self.pitch), math.sin(self.pitch)
+        y1 = y_cam * cos_p + z_cam * sin_p
+        z1 = -y_cam * sin_p + z_cam * cos_p
+        # 逆 yaw（绕 Y）
+        cos_y, sin_y = math.cos(self.yaw), math.sin(self.yaw)
+        x2 = x_cam * cos_y - z1 * sin_y
+        z2 = x_cam * sin_y + z1 * cos_y
+        return (self.cx + x2, self.cy + y1, self.cz + z2)
 
 
 # ---------------------------------------------------------------------------
@@ -243,9 +282,16 @@ class Object3D:
             (x + hw, y + hh, z + hd), (x - hw, y + hh, z + hd),
         ]
 
-    def depth(self) -> float:
-        """相机距离（画家算法排序用）。"""
-        return self.center[2]
+    def depth(self, cam: "Camera3D" = None) -> float:
+        """相机前向深度（画家算法排序与透视尺度用）。
+
+        有相机时取相机坐标 z（与 project 同一变换）；无相机时退回世界 z
+        （仅当相机正对 Z 轴时二者相等）。判据来源：docs/theory/世界模型与语义
+        时空图_完整理论整理与实现路线.md §3.2 投影-关联——遮挡/尺度须按相机
+        坐标，不能用世界坐标冒充。"""
+        if cam is None:
+            return self.center[2]
+        return cam.depth_of(self.center)
 
 
 class World3D:
@@ -262,8 +308,8 @@ class World3D:
                   horizon_ratio: float = 0.45) -> Optional[Object3D]:
         """VPrim(2D bbox) → 3D 物体。
 
-        反投影：Z = f * 真实宽 / 像素宽；X/Y 由光心反推。
-        深度启发式：地面物体贴地（底部在地面 y=0）；天空物体保持高度。
+        反投影：Z = f * 真实宽 / 像素宽；X/Y/Z 由相机位姿反投影（project 的逆）。
+        深度启发式：地面物体贴地（底部在地面 y=0）；天空物体不低于地平线。
         同类近距物体 → 更新（时间序列收敛）。
         """
         try:
@@ -275,23 +321,27 @@ class World3D:
         cx_px = (x1 + x2) / 2
         cy_px = (y1 + y2) / 2
         w_px = max(1.0, x2 - x1)
-        f = self.camera.focal(screen_w)
-        # 反投影深度
+        cam = self.camera
+        f = cam.focal(screen_w)
+        # 反投影深度（相机前向深度）
         real_w = spec.size[0]
         Z = f * real_w / w_px
-        # 世界 X/Y（相机正对 Z 轴）
-        X = (cx_px - screen_w / 2) * Z / f
-        Y = (screen_h / 2 - cy_px) * Z / f
+        # 世界 X/Y/Z：按相机位姿反投影（project 的逆——「投影-关联」可回代，
+        # 见 docs/theory/世界模型与语义时空图_完整理论整理与实现路线.md §3.2）
+        X, Y, Zw = cam.unproject(cx_px, cy_px, Z, screen_w, screen_h)
         # 深度启发式：贴地/天空约束
         if spec.ground:
-            Y = spec.size[1] / 2          # 底部贴地
+            Y = spec.size[1] / 2          # 底部贴地（世界 y）
         else:
-            # 天空物体：保持视差高度，且不低于地平线
+            # 天空物体：不低于地平线——取同深度地平线像素的世界高度作下界
+            # （旧式 (screen_h-horizon_px)*Z/f*0.5 的 0.5 为经验标定，追不到出处；
+            #   此处改为该参数的几何含义：地平线像素→世界高度，随相机位姿走）
             horizon_px = screen_h * horizon_ratio
-            Y = max(Y, (screen_h - horizon_px) * Z / f * 0.5)
+            _, y_horizon, _ = cam.unproject(cx_px, horizon_px, Z, screen_w, screen_h)
+            Y = max(Y, y_horizon)
         obj = Object3D(
             category=vprim.category,
-            center=(round(X, 2), round(Y, 2), round(Z, 2)),
+            center=(round(X, 2), round(Y, 2), round(Zw, 2)),
             size=spec.size, color=spec.color, shape=spec.shape,
             confidence=vprim.confidence, source=vprim.source)
         # 时间序列收敛：同类 + 距离近 → 更新位置
@@ -314,9 +364,20 @@ class World3D:
     def render(self, screen_w: int = 800, screen_h: int = 600,
                camera: Camera3D = None, background: Tuple[int, int, int] = (20, 24, 40),
                ground_color: Tuple[int, int, int] = (30, 34, 50)) -> "PIL.Image":
-        """画家算法渲染：远→近绘制 3D 物体投影。返回 PIL Image。"""
+        """画家算法渲染：远→近绘制 3D 物体投影。返回 PIL Image。
+
+        #416：位图分配前先判单边上限 `MAX_SCREEN_DIM`——`Image.new` 按
+        w*h*3 字节直接分配，任意大尺寸即内存耗尽（旧实现不设上限、静默分配）。
+        超限 fail-closed 抛 `ValueError`（**不**静默钳到上限——静默钳会让调用方
+        以为拿到了请求的尺寸）。判据来源：经验标定（本件 #416），追不到更早出处。
+        """
         from PIL import Image, ImageDraw
 
+        if screen_w > MAX_SCREEN_DIM or screen_h > MAX_SCREEN_DIM:
+            raise ValueError(
+                "#416 渲染尺寸超上限：screen_w=%r screen_h=%r > MAX_SCREEN_DIM=%d"
+                "（位图按 w*h*3 字节分配，拒绝以防内存耗尽）"
+                % (screen_w, screen_h, MAX_SCREEN_DIM))
         cam = camera or self.camera
         img = Image.new("RGB", (screen_w, screen_h), background)
         draw = ImageDraw.Draw(img)
@@ -324,8 +385,8 @@ class World3D:
         horizon_px = screen_h * 0.45
         draw.rectangle([0, int(horizon_px), screen_w, screen_h], fill=ground_color)
 
-        # 画家算法：按深度降序（远先画）
-        for obj in sorted(self.objects, key=lambda o: -o.depth()):
+        # 画家算法：按相机深度降序（远先画）
+        for obj in sorted(self.objects, key=lambda o: -o.depth(cam)):
             self._draw_object(draw, obj, cam, screen_w, screen_h, horizon_px)
         return img
 
@@ -340,7 +401,16 @@ class World3D:
         parts = get_shape(obj.category)
         if parts:
             # 按部件组合绘制（每个部件是相对物体的局部坐标）
-            for part in parts:
+            # #312：部件之间须按深度排序（远→近）——旧实现按 SHAPE_LIBRARY 定义
+            # 顺序画，定义在后的远侧部件盖住近侧部件（dog 后腿画在身体上、table
+            # 后腿压住桌面）。排序键 = 相机光心到部件包围盒**最近点**的距离，非
+            # 中心距：树干插进树冠时按中心距排序会把树干画到树冠前面（见守卫
+            # test_312_nested_parts_not_flipped_tree）。
+            # 判据来源：docs/theory/世界模型与语义时空图_完整理论整理与实现路线.md
+            # §3.2 透视投影 + 画家算法（近物遮远物）。
+            eye = (cam.cx, cam.cy, cam.cz)
+            for part in sorted(parts,
+                               key=lambda p: -self._part_near_dist(obj, p, eye)):
                 self._draw_part(draw, obj, part, cam, screen_w, screen_h)
             return
         # 回退：单一图元
@@ -352,6 +422,20 @@ class World3D:
             self._draw_pyramid(draw, obj, cam, screen_w, screen_h)
         else:  # box
             self._draw_box(draw, obj, cam, screen_w, screen_h)
+
+    @staticmethod
+    def _part_near_dist(obj: Object3D, part: Dict, eye) -> float:
+        """相机光心 → 部件包围盒（AABB）最近点的距离（#312 的部件深度排序键）。
+
+        用最近点而非部件中心：嵌套部件（树干插进树冠）按中心距排序会翻转前后。
+        光心落在 AABB 内 ⇒ 距离 0（该部件必然最靠近相机）。"""
+        c = [obj.center[k] + part["pos"][k] for k in range(3)]
+        gap2 = 0.0
+        for k in range(3):
+            gap = abs(eye[k] - c[k]) - part["size"][k] / 2.0
+            if gap > 0:
+                gap2 += gap * gap
+        return math.sqrt(gap2)
 
     def _draw_part(self, draw, obj: Object3D, part: Dict,
                    cam: Camera3D, screen_w: int, screen_h: int) -> None:
@@ -382,32 +466,67 @@ class World3D:
         else:
             self._draw_box(draw, temp, cam, screen_w, screen_h)
 
-    def _project_corners(self, obj: Object3D, cam: Camera3D,
-                         screen_w: int, screen_h: int):
-        pts = []
-        for p3 in obj.corners():
-            p2 = cam.project(p3, screen_w, screen_h)
-            if p2 is None:
-                return None
-            pts.append(p2)
-        return pts
+    # 近平面（相机坐标 z 下限）——与 project() 的 z<=0.1 判定同一口径
+    NEAR_EPS = 0.1
+
+    @classmethod
+    def _clip_near(cls, poly_cam, near):
+        """Sutherland-Hodgman：多边形对相机近平面 z >= near 裁剪（相机坐标）。
+
+        #403：任一角点落到近平面之后时只裁掉该部分，不得整物丢弃。
+        判据来源：docs/theory/世界模型与语义时空图_完整理论整理与实现路线.md
+        §3.2 透视投影——近平面裁剪是多边形部分可见问题，非全有或全无。"""
+        out = []
+        n = len(poly_cam)
+        for i in range(n):
+            a = poly_cam[i]
+            b = poly_cam[(i + 1) % n]
+            a_in = a[2] >= near
+            b_in = b[2] >= near
+            if a_in:
+                out.append(a)
+            if a_in != b_in:
+                t = (near - a[2]) / (b[2] - a[2])
+                out.append(tuple(a[k] + t * (b[k] - a[k]) for k in range(3)))
+        return out
+
+    def _project_face(self, face3, cam: Camera3D, screen_w: int, screen_h: int):
+        """3D 面 → 屏幕多边形（近平面裁剪后投影）；完全在近平面后 ⇒ []。"""
+        cam_pts = [cam.to_camera(p) for p in face3]
+        clipped = self._clip_near(cam_pts, self.NEAR_EPS)
+        if len(clipped) < 3:
+            return []
+        f = cam.focal(screen_w)
+        return [(screen_w / 2 + f * p[0] / p[2], screen_h / 2 - f * p[1] / p[2])
+                for p in clipped]
 
     def _draw_box(self, draw, obj, cam, sw, sh):
-        pts = self._project_corners(obj, cam, sw, sh)
-        if not pts:
-            return
-        # 6 个面（近端 4 面可见性由深度序决定——MVP 画全部面，画家序）
+        c = obj.corners()
+        # 6 个面（轴对齐盒：外法线沿 ±X/±Y/±Z）
+        # #311：旧实现按写死顺序画全部 6 个面、不做任何剔除——背对相机的面最后
+        # 才画，盖住可见面（俯视/仰视时前面只剩约 58%~63% 像素着色正确）。
+        # 凸的轴对齐盒只画朝向相机的面：外法线 · (相机光心 − 面心) > 0，在任意
+        # 相机位姿下都是精确判定，无需再给面排序。
+        # 判据来源：docs/theory/世界模型与语义时空图_完整理论整理与实现路线.md
+        # §3.2 透视投影——可见面须位于相机一侧（凸体面剔除为精确判定）。
+        eye = (cam.cx, cam.cy, cam.cz)
         faces = [
-            (pts[0], pts[1], pts[2], pts[3]),   # 前面
-            (pts[4], pts[5], pts[6], pts[7]),   # 后面
-            (pts[0], pts[1], pts[5], pts[4]),   # 底面
-            (pts[3], pts[2], pts[6], pts[7]),   # 顶面
-            (pts[1], pts[2], pts[6], pts[5]),   # 右面
-            (pts[0], pts[3], pts[7], pts[4]),   # 左面
+            ((c[0], c[1], c[2], c[3]), (0.0, 0.0, -1.0)),   # 前面
+            ((c[4], c[5], c[6], c[7]), (0.0, 0.0, 1.0)),    # 后面
+            ((c[0], c[1], c[5], c[4]), (0.0, -1.0, 0.0)),   # 底面
+            ((c[3], c[2], c[6], c[7]), (0.0, 1.0, 0.0)),    # 顶面
+            ((c[1], c[2], c[6], c[5]), (1.0, 0.0, 0.0)),    # 右面
+            ((c[0], c[3], c[7], c[4]), (-1.0, 0.0, 0.0)),   # 左面
         ]
+        hw, hh, hd = obj.size[0] / 2, obj.size[1] / 2, obj.size[2] / 2
         r, g, b = obj.color
         # 简单着色：面法线 → 明暗（顶面亮，侧面暗）
-        for i, face in enumerate(faces):
+        for i, (face, normal) in enumerate(faces):
+            face_center = (obj.center[0] + normal[0] * hw,
+                           obj.center[1] + normal[1] * hh,
+                           obj.center[2] + normal[2] * hd)
+            if sum(normal[k] * (eye[k] - face_center[k]) for k in range(3)) <= 0:
+                continue        # 背对相机 ⇒ 不可见，剔除
             shade = 1.0
             if i == 3:      # 顶面
                 shade = 1.15
@@ -419,9 +538,12 @@ class World3D:
                 shade = 0.95
             color = (min(255, int(r * shade)), min(255, int(g * shade)),
                      min(255, int(b * shade)))
+            poly = self._project_face(face, cam, sw, sh)
+            if len(poly) < 3:
+                continue
             try:
-                draw.polygon([(p[0], p[1]) for p in face], fill=color,
-                             outline=tuple(min(255, int(c * 0.7)) for c in color))
+                draw.polygon([(p[0], p[1]) for p in poly], fill=color,
+                             outline=tuple(min(255, int(v * 0.7)) for v in color))
             except Exception:
                 pass
 
@@ -430,7 +552,7 @@ class World3D:
         if c is None:
             return
         f = cam.focal(sw)
-        r_px = f * obj.size[0] / 2 / max(0.1, obj.depth())
+        r_px = f * obj.size[0] / 2 / max(0.1, obj.depth(cam))
         r_px = max(2, min(r_px, 500))
         x, y = c
         # 简单着色：高光偏移
@@ -446,19 +568,34 @@ class World3D:
         self._draw_box(draw, obj, cam, sw, sh)
 
     def _draw_pyramid(self, draw, obj, cam, sw, sh):
-        pts = self._project_corners(obj, cam, sw, sh)
-        if not pts:
+        c = obj.corners()
+        base = (c[0], c[1], c[5], c[4])       # 底面四角（下-近左/近右/远右/远左）
+        # #313：塔尖 = 底面中心 + 高度（obj.size[1]），经相机投影。旧实现把塔尖
+        # 写成「底面投影均值 − 30」——30 是写死像素常数，既不看 size[1] 也不看
+        # 相机，于是 0.5m 与 8m 高的金字塔（mountain/crystal/crown/ice_cream/鸟喙）
+        # 渲染完全一样。判据来源：docs/theory/世界模型与语义时空图_完整理论整理
+        # 与实现路线.md §3.2 透视投影——图元顶点须经同一投影映射（投影-关联）。
+        x, y, z = obj.center
+        apex3 = (x, y + obj.size[1] / 2, z)
+        apex = cam.project(apex3, sw, sh)
+        if apex is None:          # 塔尖落在相机后方 ⇒ 不画
             return
-        apex = ((pts[0][0] + pts[1][0] + pts[4][0] + pts[5][0]) / 4,
-                (pts[0][1] + pts[1][1] + pts[4][1] + pts[5][1]) / 4 - 30)
-        try:
-            draw.polygon([(pts[0][0], pts[0][1]), (pts[1][0], pts[1][1]), apex],
-                         fill=obj.color, outline=tuple(min(255, int(v * 0.7)) for v in obj.color))
-            draw.polygon([(pts[4][0], pts[4][1]), (pts[5][0], pts[5][1]), apex],
-                         fill=tuple(min(255, int(v * 0.9)) for v in obj.color),
-                         outline=tuple(min(255, int(v * 0.7)) for v in obj.color))
-        except Exception:
-            pass
+        # 四个侧面（旧实现只画前/后两个三角面，左/右侧面缺失）：按底边中点到
+        # 相机光心的欧氏距离从远到近绘制（画家算法）。
+        eye = (cam.cx, cam.cy, cam.cz)
+        sides = []
+        for i in range(4):
+            a3, b3 = base[i], base[(i + 1) % 4]
+            mid = ((a3[0] + b3[0]) / 2, (a3[1] + b3[1]) / 2, (a3[2] + b3[2]) / 2)
+            poly = self._project_face((a3, b3, apex3), cam, sw, sh)
+            if len(poly) >= 3:
+                sides.append((math.dist(eye, mid), poly))
+        for _, poly in sorted(sides, key=lambda t: -t[0]):
+            try:
+                draw.polygon([(p[0], p[1]) for p in poly], fill=obj.color,
+                             outline=tuple(min(255, int(v * 0.7)) for v in obj.color))
+            except Exception:
+                pass
 
     # ---- 序列化 ----
 
@@ -470,9 +607,9 @@ class World3D:
         }
 
     def scene_text(self) -> str:
-        """3D 场景语义描述（时空图文本形态）。"""
+        """3D 场景语义描述（时空图文本形态）——按相机深度降序（远→近）。"""
         parts = []
-        for o in sorted(self.objects, key=lambda x: -x.depth()):
+        for o in sorted(self.objects, key=lambda x: -x.depth(self.camera)):
             x, y, z = [round(v, 1) for v in o.center]
             parts.append(f"{o.category}@3D({x},{y},{z})")
         return "；".join(parts) if parts else "（空场景）"
@@ -496,21 +633,53 @@ class World3D:
         obs = ViewObs(cam, (cx_px, cy_px), screen_w, screen_h)
         if not hasattr(self, "_mv"):
             self._mv = MultiViewFusion()
+        if not hasattr(self, "_mv_objects"):
+            self._mv_objects = {}
         spec = self.visual.get(category, default_spec(category))
         result = self._mv.add_observation(
             category, obs, size=spec.size, color=spec.color,
             shape=spec.shape, confidence=confidence)
         # 融合成功 → 更新世界物体
+        # #136：多视角融合的**同一个物体桶**只对应 objects 里的一个世界物体。
+        # 旧实现每个视角三角化成功即 append——同一把椅子看 N 次得到 N-1 个重复
+        # 对象（下游 build_anchor_graph/计数/关系推断把它当多个实体）。此处按
+        # 融合桶记住 Object3D 引用：首次成桶时 append，后续视角**原地更新** center。
         if result["center_3d"] is not None:
-            obj = Object3D(
-                category=category, center=tuple(result["center_3d"]),
-                size=spec.size, color=spec.color, shape=spec.shape,
-                confidence=confidence, source="multiview")
-            self.objects.append(obj)
-            result["object_added"] = True
+            track = self._mv_track_of(category, obs)
+            key = id(track) if track is not None else None
+            obj = self._mv_objects.get(key) if key is not None else None
+            if obj is None:
+                obj = Object3D(
+                    category=category, center=tuple(result["center_3d"]),
+                    size=spec.size, color=spec.color, shape=spec.shape,
+                    confidence=confidence, source="multiview")
+                self.objects.append(obj)
+                if key is not None:
+                    self._mv_objects[key] = obj
+                result["object_added"] = True
+                result["object_updated"] = False
+            else:
+                obj.center = tuple(result["center_3d"])
+                obj.confidence = confidence
+                obj.ts = time.time()
+                result["object_added"] = False
+                result["object_updated"] = True
         else:
             result["object_added"] = False
+            result["object_updated"] = False
         return result
+
+    def _mv_track_of(self, category: str, obs) -> Optional[Dict]:
+        """本次观测落入的 MultiViewFusion 物体桶（#136 的「物体身份」）。
+
+        `MultiViewFusion.add_observation` 把该 obs 追加进命中桶的 `views` 末尾，
+        故按对象同一性（`is`）回溯即得稳定桶引用——无需给 multiview 返回面加
+        新字段（#135 已改过 multiview，此处不碰它以免撞车）。"""
+        for tr in self._mv._objects.get(category, []):
+            views = tr.get("views")
+            if views and views[-1] is obs:
+                return tr
+        return None
 
     # ---- 3D 语义锚点图（里程碑1.2 · 事物是其关系的总和） ----
 
@@ -519,7 +688,11 @@ class World3D:
 
         核心哲学（荣）：事物是其关系的总和——物体的身份由它与世界中
         其他物体的关系定义。借鉴游戏场景图/3D 场景图设计。
-        infer=True 时自动推理空间关系（相邻/支撑）。"""
+        infer=True 时自动推理空间关系（相邻/支撑）。
+
+        #262：锚点 id 由内容确定性导出（见 SemanticAnchor.__post_init__），
+        重建时把既有验证器搬过来——否则每次重建都清空全部多感知机验证记录，
+        且随机 id 让记录无法与锚点对上。"""
         try:
             from .semantic_anchor_graph import SemanticAnchorGraph, SemanticAnchor
         except ImportError:
@@ -533,6 +706,11 @@ class World3D:
         # 关系推理（空间邻近 → 相邻/支撑）
         if infer:
             g.infer_relations()
+        # 验证记录跟锚点身份走：把上一张图的验证器搬到新图（id 已确定性稳定）
+        prev = getattr(self, "_anchor_graph", None)
+        if prev is not None and getattr(prev, "_verifier", None) is not None:
+            g._verifier = prev._verifier
+            g._verifier.graph = g
         self._anchor_graph = g
         return g.to_dict()
 

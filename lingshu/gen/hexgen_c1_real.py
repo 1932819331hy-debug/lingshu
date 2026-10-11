@@ -137,7 +137,10 @@ def load_items(corpus=CORPUS, lib_path=LIB):
             continue
         rec = lib.get(f"vs_s{iid}_{sh}_{co}")
         truth = parse_prompt(rec["tags"].get("prompt")) if rec else None
-        img = np.asarray(Image.open(os.path.join(corpus, f)))[..., :3].astype(np.float64)
+        #   `.convert("RGB")` 必须在 `np.asarray` **之前**：本语料虽为 RGBA PNG，但
+        #   `[..., :3]` 只对 4 通道图恰好等于 RGB，对 **L/P 模式图**会静默取到亮度值/调色板
+        #   索引（形状退化成 (H,3) 或数值全错），后续 `bg_color`/`rgb_to_lab` 全线失义。
+        img = np.asarray(Image.open(os.path.join(corpus, f)).convert("RGB")).astype(np.float64)
         items.append({"file": f, "id": iid, "shape": sh, "color": co, "img": img,
                       "truth": truth, "prompt": rec["tags"].get("prompt") if rec else None})
     items.sort(key=lambda it: it["id"])
@@ -281,6 +284,14 @@ def count_objects(clusters, frac=EXTRA_COMP_FRAC, share=MIN_SHARE):
         if sizes.size == 0:
             continue
         keep = np.sort(sizes[sizes >= max(MIN_PX, share * sizes.max())])[::-1]
+        #   `keep` **可为空**：簇总面积过了 `objects_of` 的 `min_px` 门、但**每个**连通分量都
+        #   小于该门时（碎片堆，如 50px 的簇由两个 25px 分量拼成）筛选后一个不剩。此时按
+        #   「每个簇计 1」的底数计 1、不再补计；原写法 `keep[1:] >= frac * keep[0]` 直接索引
+        #   空数组 ⇒ `IndexError: index 0 is out of bounds for axis 0 with size 0`，
+        #   且会使 `rule_n` 低于同处并列报出的 `clusters_n`（`:1064` 的簇计数基线）。
+        if keep.size == 0:
+            tot += 1
+            continue
         tot += 1 + int((keep[1:] >= frac * keep[0]).sum())
     return tot
 
@@ -464,12 +475,20 @@ def radial_profile(m, nbins=PROF_BINS, step=PROF_STEP, level=0.5):
     v = (mm[y0, x0] * (1 - fy) * (1 - fx) + mm[y0 + 1, x0] * fy * (1 - fx)
          + mm[y0, x0 + 1] * (1 - fy) * fx + mm[y0 + 1, x0 + 1] * fy * fx)
     inside = v >= level
-    idx = np.where(inside.any(axis=0), inside.shape[0] - 1 - np.argmax(inside[::-1], axis=0), 0)
-    prev = np.maximum(idx - 1, 0)
-    v1 = v[idx, np.arange(nbins)]
-    v0 = v[prev, np.arange(nbins)]
-    frac = np.where(np.abs(v1 - v0) > 1e-9, (level - v0) / np.maximum(v1 - v0, 1e-9), 0.0)
-    prof = rs[prev] + np.clip(frac, 0, 1) * step
+    has = inside.any(axis=0)
+    idx = np.where(has, inside.shape[0] - 1 - np.argmax(inside[::-1], axis=0), 0)
+    #   **越界点所在的区间**：`idx` 是**最后一个** ≥ level 的采样 ⇒ 越界发生在 `idx → idx+1`
+    #   之间（`idx+1` 是其后第一个 < level 的采样）。原写法取 `idx−1 → idx` 是**前一个区间**
+    #   （两点都在物体内），插值出的半径系统偏小：理想圆盘 R=30/60 实测剖面均值低报
+    #   0.59/0.68px、单箱最差 −1.2px（判据＝解析真值 R，见守卫
+    #   tests/test_hexgen_c1_real_p1_radial_rgb_count.py 的二分求根对照）。
+    nxt = np.minimum(idx + 1, v.shape[0] - 1)
+    va = v[idx, np.arange(nbins)]
+    vb = v[nxt, np.arange(nbins)]
+    den = vb - va
+    ok = np.abs(den) > 1e-9
+    frac = np.where(ok, (level - va) / np.where(ok, den, 1.0), 0.0)
+    prof = np.where(has, rs[idx] + np.clip(frac, 0, 1) * step, 0.0)
     return prof, (cy, cx)
 
 
@@ -779,15 +798,23 @@ def fit(measured, ids):
     #   **切点口径**：极值中点与中位数中点**都算**。R278 实测（量化剖面）：圆类极值（0.289）**高于**非圆类最小值
     #   （0.115）⇒ 极值中点（0.202）落在六边形（0.115~0.136）**上方**、门不生效（3 个六边形仍读成圆）。
     #   中位数中点不受个别噪声件拉动 ⇒ 取它作实际门，并把极值间隔与两个切点都报出（纪律 ④：口径并列）。
-    #   加计数规则的面积门：**只在标定集上**按计数精确匹配率选（选型键说得出它量的是什么）
+    #   加计数规则的面积门：**只在标定集上**按计数精确匹配率选（选型键说得出它量的是什么）。
+    #   `objects_of(...)` 的实参只含 `(img, tol, d)`、**不含 `fr`** ⇒ 它是这个选格循环的
+    #   **循环不变量**：原写法把它放在 `for fr in EXTRA_COMP_GRID` 内层，同一张图被
+    #   重复测量 `len(EXTRA_COMP_GRID)` 次（标定集 37 件 ⇒ 148 次前景/聚类/补洞，而非 37 次），
+    #   代价 ×4 而读数一字不变。提到 `fr` 循环外：逐图测一次，四个候选只复用同一份簇列表。
+    _cl_by_id = {}
+    for it in measured["items"]:
+        if it["id"] not in ids or not it["truth"]:
+            continue
+        _cl_by_id[it["id"]] = objects_of(it["img"], tol=TOL, d=measured.get("d", 4))[0]
     cgrid = {}
     for fr in EXTRA_COMP_GRID:
         ok = 0
         for it in measured["items"]:
-            if it["id"] not in ids or not it["truth"]:
+            if it["id"] not in _cl_by_id:
                 continue
-            cl = [t for t in objects_of(it["img"], tol=TOL, d=measured.get("d", 4))[0]]
-            ok += int(count_objects(cl, frac=fr) == it["truth"]["n"])
+            ok += int(count_objects(_cl_by_id[it["id"]], frac=fr) == it["truth"]["n"])
         cgrid[str(fr)] = ok
     frac_pick = max(EXTRA_COMP_GRID, key=lambda f: cgrid[str(f)])
     cut_prom_ext = round((max(prom_c) + min(prom_n)) / 2, 6) if (prom_c and prom_n) else None
@@ -821,9 +848,9 @@ def fit(measured, ids):
                       and it["shape"] == b for o in measured["by_id"][it["id"]]]
                 if not va or not vb:
                     continue
-                gap = min(vb) - max(va)                     # b 在上 (lo=a, hi=b)
+                pair_sep = min(vb) - max(va)                # b 在上 (lo=a, hi=b)
                 rev = min(va) - max(vb)                     # a 在上
-                g, lo_is_a = (gap, True) if gap >= rev else (rev, False)
+                g, lo_is_a = (pair_sep, True) if pair_sep >= rev else (rev, False)
                 #   **选择键＝成对 d′**（|均值差| ÷ 合并标准差），而不是「间隔 ÷ 类内极差」——
                 #   后者会被「类内极差小的维」骗：R283 实测 (triangle,diamond) 上 `harm5` 的相对
                 #   间隔 1.845 盖过 `peak_prom` 的 1.722，可 harm5 的绝对间隔只有 0.133（噪声级），
@@ -1102,13 +1129,26 @@ def evaluate(measured, fit_, ids, tag="", loo=False):
                             f"/{'+'.join(sorted(t['cells'])) if t['cells'] else '?'}"
                             f" 读 {p['shape']}/{p['color']}/{p['pattern']}/{p['cell']}"
                             f"{' 触边' if p['clipped'] else ''}")
-    maj_s = Counter(it["shape"] for it in items).most_common(1)[0][0]
-    maj_c = Counter(it["color"] for it in items).most_common(1)[0][0]
+    #   空集保护：`ids` 与 `measured["items"]` 无交集时 `items` 为空 ⇒ `Counter(...).most_common(1)`
+    #   返回 `[]`，裸 `[0][0]` 抛 `IndexError: list index out of range`（空标定/空留出集可达：
+    #   `main` 对每个 tag 都调本函数，`split_ids` 在件数极少时可给出空的一半）。
+    #   基线在无样本时**无定义** ⇒ 如实报 `None`，与同函数既有口径一致
+    #   （`:1135-1136 maj_p = ...most_common(1); maj_ = maj_p[0][0] if maj_p else None`、
+    #    `:1140/:1154 maj_n` 同款写法——纪律 ④ 口径并列）。
+    maj_s = Counter(it["shape"] for it in items).most_common(1)
+    maj_c = Counter(it["color"] for it in items).most_common(1)
+    maj_s = maj_s[0][0] if maj_s else None
+    maj_c = maj_c[0][0] if maj_c else None
     #   **基线口径**：花纹/数量的真值按**物体**加权（准确率是逐物体算的，按「件」算基线不可比）：
     #   某件的物体数 = 真值数量 n（有 prompt 时），故 pattern 基线 = Σ(n·1[该件花纹=多数类]) / Σn
     tp_w = [("plain" if it["truth"]["pattern"] == "plain" else "patterned", it["truth"]["n"])
             for it in items if it["truth"]]
-    maj_p = Counter(p for p, _n in tp_w).most_common(1)
+    #   多数类按**样本数（真值物体数 n）**加权选，与上面「基线口径」注释里的比率口径同源
+    #   （按「件」选会在「多物体 plain 件少 / 单物体 patterned 件多」的语料上把类选反 ⇒ 基线低报）。
+    maj_p = Counter()
+    for p, _n in tp_w:
+        maj_p[p] += int(_n)
+    maj_p = maj_p.most_common(1)
     maj_ = maj_p[0][0] if maj_p else None
     tot_w = sum(n for _p, n in tp_w)
     pat_base = ([maj_, round(sum(n for p, n in tp_w if p == maj_) / max(1, tot_w), 4)]

@@ -1,10 +1,15 @@
 # Copyright 2026 灵枢 (Lingshu) · MIT
-"""Silhouette3D — 线条轮廓 + 深度着色（漫画风 3D 呈现）。
+"""Silhouette3D — 线条轮廓 + 深度着色（漫画风 **2.5D** 呈现）。
 
-理念（呼应「线条 + 漫画填色」游戏风格与 WORLD3D 零 LLM 确定性渲染）：
-- 角色 = 一组**轮廓部件**（2D 轮廓点 + 深度 z + 基础色），无需网格/贴图。
-- 投影后按**深度着色**：近的部件亮/暖，远的暗/冷 —— 颜色即距离。
-- 旋转视角时部件产生视差位移 + 画家算法遮挡 —— 真 3D。
+表示层口径（如实声明，#8）：
+- 角色 = 一组**轮廓部件**（2D 轮廓点 + 深度 z 偏移 + 基础色），无需网格/贴图。
+- **每个部件是零厚度平面多边形**（`SilhouettePart.points` 只有 (x, y)；z 是部件
+  级的常数偏移，不是逐顶点深度）。遮挡由**画家算法排序**实现，非深度缓冲。
+- 投影后按**相机坐标系深度着色**（见 `render`/`_depth_factor`）：近的部件亮/暖，
+  远的暗/冷 —— 颜色即距离。
+- 旋转视角时部件产生**视差位移 + 画家算法遮挡**。这是**分层视差（2.5D）**：
+  纸片/皮影式表现，**不是**有体积的三维体——侧视 90° 时各平面坍塌成细线。
+  据此外推「多视角几何一致性/重建精度」会量到视差而非几何（#8）。
 
 肥鱼（猫娘少女）轮廓模板：猫耳/头/身体(裙)/手臂/腿/尾巴，各部件深度不同。
 
@@ -32,14 +37,20 @@ class SilhouettePart:
 
     关节支持：pivot（2D 旋转中心）+ angle（弧度）——渲染时先绕 pivot 旋转
     顶点再投影，实现四肢/尾巴摆动（动画与姿态）。
+
+    父子链：`parent` 指向父部件的 name（同一 Silhouette3D 内）。子部件的
+    `angle` 是**相对父部件**的角度，父关节旋转会带动整条子链（见
+    `Silhouette3D.transformed_points`）——没有 parent 的部件是链根，
+    `angle` 即绝对角。
     """
     name: str
     points: List[Tuple[float, float]]    # 轮廓（多边形顶点）
-    depth: float = 0.0                   # 深度 z（米，正=朝向相机）
+    depth: float = 0.0                   # 部件相对中心的 z 偏移（米，越大越靠角色背面）
     color: Tuple[int, int, int] = (200, 200, 200)
     outline: Tuple[int, int, int] = (40, 30, 35)   # 线条色（漫画描边）
     pivot: Optional[Tuple[float, float]] = None    # 旋转中心（2D，相对角色中心）
-    angle: float = 0.0                             # 绕 pivot 的旋转角（弧度）
+    angle: float = 0.0                             # 相对 pivot 的旋转角（弧度，有 parent 时相对父）
+    parent: Optional[str] = None                   # 父部件 name（关节链，None=链根）
 
     def rotated_points(self) -> List[Tuple[float, float]]:
         """返回旋转后的轮廓点（无 pivot 时原样）。"""
@@ -62,18 +73,52 @@ class Silhouette3D:
         self.center = center
         self.parts: List[SilhouettePart] = []
         self.depth_span = depth_span       # 深度着色范围（米）：span 内 1.0→0.55 亮度
+        # 表情几何基准（#376）：`set_expression` 首次调用时快照眼/嘴/高光的原始
+        # 几何，其后每次调用都从这份基准重算 —— 使 set_expression 幂等。
+        self._expr_base: Optional[dict] = None
 
     def add_part(self, part: SilhouettePart) -> "Silhouette3D":
         self.parts.append(part)
         return self
 
     def joint(self, name: str, angle: float) -> "Silhouette3D":
-        """设置关节角度（姿态控制）。"""
+        """设置关节角度（姿态控制）。有 parent 的部件该角度相对父部件。"""
         for p in self.parts:
             if p.name == name:
                 p.angle = angle
                 break
         return self
+
+    # ---- 关节父子链 ----
+
+    def _chain(self, part: SilhouettePart) -> List[SilhouettePart]:
+        """沿 parent 链返回 [本部件, 父, 祖父, …]（环形/悬空 parent 处截断）。"""
+        by_name = {p.name: p for p in self.parts}
+        chain: List[SilhouettePart] = []
+        seen = set()
+        cur: Optional[SilhouettePart] = part
+        while cur is not None and cur.name not in seen:
+            seen.add(cur.name)
+            chain.append(cur)
+            cur = by_name.get(cur.parent) if cur.parent else None
+        return chain
+
+    def transformed_points(self, part: SilhouettePart) -> List[Tuple[float, float]]:
+        """部件顶点经「自身旋转 → 父链各关节旋转」后的坐标。
+
+        父关节旋转会带动整条子链（先绕本部件 pivot 施加自身 angle，再依次绕
+        父、祖父…的 pivot 施加其 angle）——关节链语义，替代此前各部件各转各的
+        断链行为（#404）。
+        """
+        pts = part.rotated_points()
+        for anc in self._chain(part)[1:]:
+            if anc.pivot is None or anc.angle == 0.0:
+                continue
+            cx, cy = anc.pivot
+            c, s = math.cos(anc.angle), math.sin(anc.angle)
+            pts = [(cx + (x - cx) * c - (y - cy) * s,
+                    cy + (x - cx) * s + (y - cy) * c) for x, y in pts]
+        return pts
 
     # ---- 投影 ----
 
@@ -82,9 +127,13 @@ class Silhouette3D:
         return (self.center[0] + p2[0], self.center[1] + p2[1],
                 self.center[2] + depth)
 
-    def _depth_factor(self, z: float) -> float:
-        """深度 → 亮度因子：近(小 z 偏移)亮，远(大 z 偏移)暗。"""
-        dz = z - self.center[2]
+    def _depth_factor(self, dz: float) -> float:
+        """部件相对角色中心的相机前向深度差 → 亮度因子：近（dz 小）亮，远（dz 大）暗。
+
+        `dz` = 部件相机前向深度 − 角色中心相机前向深度（均为
+        `Camera3D.depth_of` 读数，与排序同一口径，见 #175）；默认相机下
+        `dz` 恰为部件自身的 `depth` 偏移，故默认视角着色与旧口径逐位一致。
+        """
         t = max(0.0, min(1.0, dz / max(self.depth_span, 1e-6)))
         return 1.0 - 0.45 * t        # 近 1.0 → 远 0.55
 
@@ -119,7 +168,7 @@ class Silhouette3D:
         for part in self.parts:
             poly = []
             ok = True
-            for p2 in part.rotated_points():
+            for p2 in self.transformed_points(part):
                 p3 = self._to_3d(p2, part.depth)
                 sp = cam.project(p3, screen_w, screen_h)
                 if sp is None:
@@ -129,9 +178,20 @@ class Silhouette3D:
             if ok and len(poly) >= 3:
                 projected.append((part, poly))
 
-        # 画家算法：深度降序（远先画，近覆盖）
-        for part, poly in sorted(projected, key=lambda x: -x[0].depth):
-            f = self._depth_factor(self.center[2] + part.depth)
+        # 画家算法：按**相机坐标系前向深度**降序（远先画，近覆盖）。
+        # 缺陷态（#175）：排序与着色都用固定 `part.depth`——只在默认相机
+        # （eye = center − 3·z）下「正 = 远离相机」成立；相机绕到背后时
+        # 尾巴/四肢（depth 大）实际离相机更近却先画、被身体盖住，着色也反了。
+        # 判据来源：docs/theory/世界模型与语义时空图_完整理论整理与实现路线.md
+        # §3.2 投影-关联（遮挡/尺度须按相机坐标 z，与 `Camera3D.project` 同一变换），
+        # 与 world3d.Object3D.depth 同口径。
+        z_ref = cam.depth_of(self.center)
+        view = []
+        for part, poly in projected:
+            dz = cam.depth_of(self._to_3d((0.0, 0.0), part.depth)) - z_ref
+            view.append((part, poly, dz))
+        for part, poly, dz in sorted(view, key=lambda x: -x[2]):
+            f = self._depth_factor(dz)
             fill = self._shade(part.color, f)
             if alpha:
                 draw.polygon(poly, fill=(*fill, 255), outline=(*part.outline, 255))
@@ -415,7 +475,7 @@ def fatfish_skinned(center: Tuple[float, float, float] = (0, 0.85, 5.0),
                  (wr[0] + arm_w * 0.35, wr[1]),
                  (wr[0] - arm_w * 0.35, wr[1])]
         s.add_part(SilhouettePart(f"lower_{side}", lower, depth=0.10, color=skin, outline=line,
-                                  pivot=el, angle=0.0))
+                                  pivot=el, angle=0.0, parent=f"upper_{side}"))
 
     # ---- 腿（髋→膝→踝 皮肤色，含大腿上段连接躯干）----
     hip_j = J("hip")                     # 骨盆（躯干底）
@@ -446,7 +506,7 @@ def fatfish_skinned(center: Tuple[float, float, float] = (0, 0.85, 5.0),
                 (an[0] + calf_w * 0.7, an[1]),
                 (an[0] - calf_w * 0.7, an[1])]
         s.add_part(SilhouettePart(f"calf_{side}", calf, depth=0.14, color=skin, outline=line,
-                                  pivot=kn, angle=0.0))
+                                  pivot=kn, angle=0.0, parent=f"thigh_{side}"))
 
     # ---- 猫耳（head_top 关节，加大 + 内耳粉色——猫娘标志特征）----
     # 视觉验收修复（2026-08-29）：底边 0.045h 过宽呈喇叭状——收窄为立耳三角
@@ -483,7 +543,8 @@ def fatfish_skinned(center: Tuple[float, float, float] = (0, 0.85, 5.0),
         seg = [(p0[0] - w0, p0[1]), (p0[0] + w0, p0[1]),
                (p1[0] + w1, p1[1]), (p1[0] - w1, p1[1])]
         s.add_part(SilhouettePart(f"tail{i + 1}", seg, depth=0.22 + i * 0.01,
-                                  color=fur, outline=line, pivot=p0, angle=0.0))
+                                  color=fur, outline=line, pivot=p0, angle=0.0,
+                                  parent=(f"tail{i}" if i >= 1 else None)))
     # ---- LOD 细节层次（注意力深度 → 部件过滤）----
     # L3（高注意力/特写）：全部部件
     # L2（中）：保留关键特征（眼/嘴/胸廓髋部/躯干四肢），省略细部（眉/唇高光/骨盆线）
@@ -632,9 +693,12 @@ def fatfish_skeleton(center: Tuple[float, float, float] = (0, 0.85, 5.0),
     hip_shade = (105, 130, 195)            # 深一档（比裙身 150,180,235 暗很多）
     hip_l = _ellipse((head_c[0] - h * 0.215, 0.47 * h), h * 0.05, h * 0.075)
     hip_r = _ellipse((head_c[0] + h * 0.215, 0.47 * h), h * 0.05, h * 0.075)
-    s.add_part(SilhouettePart("hip_l", hip_l, depth=0.058,
+    # 命名 hip_shade_*（非 hip_*）：下方「腿」段已用 hip_l/hip_r 命名大腿部件，
+    # 重名会让 `joint("hip_l", …)` 命中先添加的阴影（pivot=None ⇒ 旋转空操作），
+    # 大腿永远摆不动（#310）。此处只改名字，不动 joint()/add_part() 的行为。
+    s.add_part(SilhouettePart("hip_shade_l", hip_l, depth=0.058,
                               color=hip_shade, outline=(80, 105, 165)))
-    s.add_part(SilhouettePart("hip_r", hip_r, depth=0.058,
+    s.add_part(SilhouettePart("hip_shade_r", hip_r, depth=0.058,
                               color=hip_shade, outline=(80, 105, 165)))
     # 裙摆中心弧线（两腿之间的裙摆曲线，收束到腿部）
     skirt_mid = [(head_c[0] - h * 0.04, 0.44 * h),
@@ -655,7 +719,7 @@ def fatfish_skeleton(center: Tuple[float, float, float] = (0, 0.85, 5.0),
     s.add_part(SilhouettePart("shoulder_l", arm_l_up, depth=0.10, color=skin, outline=line,
                               pivot=shoulder_l))
     s.add_part(SilhouettePart("elbow_l", arm_l_lo, depth=0.10, color=skin, outline=line,
-                              pivot=elbow_l))
+                              pivot=elbow_l, parent="shoulder_l"))
     # 右臂
     shoulder_r = (0.18 * h, 0.68 * h)
     elbow_r = (0.22 * h, 0.55 * h)
@@ -667,7 +731,7 @@ def fatfish_skeleton(center: Tuple[float, float, float] = (0, 0.85, 5.0),
     s.add_part(SilhouettePart("shoulder_r", arm_r_up, depth=0.10, color=skin, outline=line,
                               pivot=shoulder_r))
     s.add_part(SilhouettePart("elbow_r", arm_r_lo, depth=0.10, color=skin, outline=line,
-                              pivot=elbow_r))
+                              pivot=elbow_r, parent="shoulder_r"))
 
     # ---- 腿（分节：大腿 + 小腿，pivot 髋/膝）----
     # 左腿（z=0.14）
@@ -709,15 +773,45 @@ def fatfish_skeleton(center: Tuple[float, float, float] = (0, 0.85, 5.0),
     s.add_part(SilhouettePart("tail1", tail_sec1, depth=0.22, color=fur, outline=line,
                               pivot=tail_base))
     s.add_part(SilhouettePart("tail2", tail_sec2, depth=0.23, color=fur, outline=line,
-                              pivot=t1))
+                              pivot=t1, parent="tail1"))
     s.add_part(SilhouettePart("tail3", tail_sec3, depth=0.24, color=fur, outline=line,
-                              pivot=t2))
+                              pivot=t2, parent="tail2"))
     return s
 
 
 # ---------------------------------------------------------------------------
 # 姿态（状态 → 四肢/尾巴角度）
 # ---------------------------------------------------------------------------
+
+# 关节命名：`apply_pose` 的「声明」与「实现」共用同一份数据（#380）。
+#
+# 缺陷态：旧 docstring 声明「兼容 shoulder_l/elbow_l/hip_l/knee_l 与
+# upper_l/lower_l/thigh_l/calf_l」，但五个姿态分支只给臂设值 —— 腿的 8 个名字
+# 只出现在归零段，声明与实现不一致（腿只能被归零）。修复取向＝**收窄声明**：
+# 把「仅归零」与「会被姿态驱动」拆成两张显式表，docstring 只声明后者。
+#
+# 判据来源：本件报告 #380（经验标定，追不到理论章节——仓内无「姿态应驱动哪些
+# 关节」的理论规定）。**削掉的判别力**：不再宣称 `apply_pose` 会摆腿；若将来要
+# 摆腿，须同时改本表与 docstring（守卫
+# `tests/test_issue8_175_310_376_380_silhouette3d_guard.py::test_380_*`
+# 会因「声明≠实现」变红）。
+
+# 归零表：每次 `apply_pose` 先把这些关节角复位（覆盖两套模板命名）。
+# 含腿——若调用方用 `joint()` 摆过腿，`apply_pose` 负责复位；但姿态本身不改写它们。
+_ZERO_JOINTS = (
+    "shoulder_l", "upper_l", "shoulder_r", "upper_r",
+    "elbow_l", "lower_l", "elbow_r", "lower_r",
+    "hip_l", "thigh_l", "hip_r", "thigh_r",
+    "knee_l", "calf_l", "knee_r", "calf_r",
+)
+
+# 驱动表：姿态分支实际会**设值**的关节名（两模板命名并列；`_set_tail_wave` 驱动 tail1..3）。
+# 腿不在其中——`hip_*`/`thigh_*`/`knee_*`/`calf_*` 仅归零。
+_POSE_DRIVEN_JOINTS = {
+    "shoulder": ("shoulder_l", "shoulder_r", "upper_l", "upper_r"),
+    "elbow": ("elbow_l", "elbow_r", "lower_l", "lower_r"),
+    "tail": ("tail1", "tail2", "tail3"),
+}
 
 # 尾巴摆动：绕自身 pivot 的旋转（级联：每节 = 上一节角度 + 自身增量）
 def _set_tail_wave(s: Silhouette3D, wave: float) -> None:
@@ -787,55 +881,61 @@ def set_expression(s: Silhouette3D, expression: str) -> Silhouette3D:
     - surprised→ 惊眼 + 张嘴(大)
     - shy      → 笑眼(小) + 抿嘴 + 腮红加深
     - neutral  → 正常眼 + 微笑
+
+    **幂等**（#376）：眼/嘴/高光的几何基准在首次调用时快照进 `s._expr_base`，
+    每次调用都**从该基准重算**（而非从上一次调用后的几何迭代）。故同一对象上
+    连调 N 次几何不变，且任意表情序列可复原。判据来源：本件报告 #376
+    （经验标定，追不到理论章节；旧行为是以上次结果为输入的几何级数）。
     """
     eye_shape = {"happy": "happy", "sad": "sad", "angry": "squint",
                  "surprised": "surprise", "shy": "happy", "neutral": "normal"}.get(expression, "normal")
     mouth_shape = {"happy": "open", "sad": "sad", "angry": "pout",
                    "surprised": "open", "shy": "smile", "neutral": "smile"}.get(expression, "smile")
 
-    # 找眼睛/嘴的当前坐标（从部件点取中心）
-    eye_ref = next((p for p in s.parts if p.name == "eye_l"), None)
-    if eye_ref is not None:
-        pts = eye_ref.points
-        cx = sum(pt[0] for pt in pts) / len(pts)
-        cy = sum(pt[1] for pt in pts) / len(pts)
-        rx = (max(pt[0] for pt in pts) - min(pt[0] for pt in pts)) / 2
-        ry = (max(pt[1] for pt in pts) - min(pt[1] for pt in pts)) / 2
-        # 两只眼睛各自的原中心（先记录，再改眼型）：高光按「相对眼心的偏移」整体平移
-        old_eye_center = {}
+    # ---- 几何基准：首次调用时快照，之后一律从这里重算（#376 幂等）----
+    if s._expr_base is None:
+        s._expr_base = {
+            p.name: [tuple(pt) for pt in p.points]
+            for p in s.parts
+            if p.name in ("eye_l", "eye_r", "mouth") or p.name.startswith("highlight_")
+        }
+    base = s._expr_base
+
+    def _center(pts):
+        return (sum(pt[0] for pt in pts) / len(pts), sum(pt[1] for pt in pts) / len(pts))
+
+    def _half(pts):
+        return ((max(pt[0] for pt in pts) - min(pt[0] for pt in pts)) / 2,
+                (max(pt[1] for pt in pts) - min(pt[1] for pt in pts)) / 2)
+
+    # 眼（从基准眼型取眼心/半轴，不再量上一次调用后的几何）
+    if base.get("eye_l"):
+        cy = _center(base["eye_l"])[1]
+        rx, ry = _half(base["eye_l"])
         for side in ("l", "r"):
-            pe = next((q for q in s.parts if q.name == f"eye_{side}"), None)
-            if pe is not None and pe.points:
-                old_eye_center[side] = (sum(q[0] for q in pe.points) / len(pe.points),
-                                        sum(q[1] for q in pe.points) / len(pe.points))
-        for side in ("l", "r"):
-            ecx = cx if side == "l" else -cx
-            ocx = old_eye_center.get(side, (ecx, cy))[0]
-            # 更新眼睛部件
+            bpts = base.get(f"eye_{side}")
+            if not bpts:
+                continue
+            ecx = _center(bpts)[0]          # 该眼自身中心（不假设左右镜像）
             for p in s.parts:
                 if p.name == f"eye_{side}":
                     p.points = _eye_poly(ecx, cy, rx, ry, eye_shape)
-            # 高光跟随眼型（像素画高光是灵魂，始终保留，位置随眼动）
+            # 高光跟随眼型（像素画高光是灵魂，始终保留，位置随眼动）：
+            # 从**基准**高光点重算（眼心不变 ⇒ 只叠加上抬 dy）。
+            dy = -ry * 0.3 if eye_shape in ("happy", "squint") else 0.0
             for p in s.parts:
                 if p.name.startswith(f"highlight_{side}"):
-                    # 笑眼/眯眼：高光随眼型上移；其余保持
-                    dy = -ry * 0.3 if eye_shape in ("happy", "squint") else 0.0
-                    pts = p.points
-                    if len(pts) >= 4:
-                        # 保持高光相对眼的偏移：整体平移
-                        # （大 / 小 / 瞳孔中心三点各自保留原始相对位置，不再按名字重算绝对坐标）
-                        shift_x = ecx - ocx
-                        p.points = [(pt[0] + shift_x, pt[1] + dy) for pt in pts]
+                    bp = base.get(p.name)
+                    if bp and len(bp) >= 4:
+                        p.points = [(pt[0], pt[1] + dy) for pt in bp]
 
-    # 嘴
-    mouth_ref = next((p for p in s.parts if p.name == "mouth"), None)
-    if mouth_ref is not None:
-        pts = mouth_ref.points
-        mx = sum(pt[0] for pt in pts) / len(pts)
-        my = sum(pt[1] for pt in pts) / len(pts)
-        rx = max(0.002, (max(pt[0] for pt in pts) - min(pt[0] for pt in pts)) / 2)
-        ry = max(0.002, (max(pt[1] for pt in pts) - min(pt[1] for pt in pts)) / 2)
-        mouth_ref.points = _mouth_poly(mx, my, rx, ry, mouth_shape)
+    # 嘴（同样从基准重算）
+    if base.get("mouth"):
+        mx, my = _center(base["mouth"])
+        mrx, mry = _half(base["mouth"])
+        for p in s.parts:
+            if p.name == "mouth":
+                p.points = _mouth_poly(mx, my, max(0.002, mrx), max(0.002, mry), mouth_shape)
 
     # 腮红深浅（shy 加深：压暗 G/B 通道走向深粉，而不是整体乘系数把颜色推成饱和纯白）
     for p in s.parts:
@@ -848,11 +948,17 @@ def set_expression(s: Silhouette3D, expression: str) -> Silhouette3D:
 
 
 def apply_pose(s: Silhouette3D, pose: str) -> Silhouette3D:
-    """姿态（状态）→ 四肢/尾巴关节角度。返回同一对象（可链式）。
+    """姿态（状态）→ 手臂/尾巴关节角度。返回同一对象（可链式）。
 
-    兼容两种部件命名：
-    - 手调版 fatfish_skeleton：shoulder_l/elbow_l/hip_l/knee_l
-    - 蒙皮版 fatfish_skinned：upper_l/lower_l/thigh_l/calf_l
+    兼容两种部件命名（下表即 `_POSE_DRIVEN_JOINTS`——**声明与实现同一份数据**）：
+    - 手调版 fatfish_skeleton：shoulder_l/elbow_l（+ tail1..3）
+    - 蒙皮版 fatfish_skinned：upper_l/lower_l（+ tail1..3）
+
+    **腿不在此列**（#380）：`hip_*`/`thigh_*`/`knee_*`/`calf_*` 属 `_ZERO_JOINTS`
+    （每次调用先复位），但五个姿态分支从不给它们设值——旧 docstring 曾把它们
+    列为「兼容命名」，与实现不符。需要腿部姿态时由调用方直接
+    `Silhouette3D.joint(...)`；若要改由 `apply_pose` 驱动，须同步改
+    `_POSE_DRIVEN_JOINTS` 与本 docstring（守卫会因两者不一致变红）。
     """
     # 部件名归一化（旧名 → 可作用于的关节名）
     def j(sil: Silhouette3D, *names: str) -> None:
@@ -865,11 +971,8 @@ def apply_pose(s: Silhouette3D, pose: str) -> Silhouette3D:
             if any(p.name == n for p in sil.parts):
                 sil.joint(n, val)
                 return
-    # 默认（自然站立，尾巴微垂）
-    for n in ("shoulder_l", "upper_l", "shoulder_r", "upper_r",
-              "elbow_l", "lower_l", "elbow_r", "lower_r",
-              "hip_l", "thigh_l", "hip_r", "thigh_r",
-              "knee_l", "calf_l", "knee_r", "calf_r"):
+    # 默认（自然站立，尾巴微垂）：按归零表复位（含腿——只复位，不设姿态值）
+    for n in _ZERO_JOINTS:
         j(s, n)
     _set_tail_wave(s, 0.15)
 

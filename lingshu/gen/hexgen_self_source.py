@@ -28,8 +28,13 @@ import sys
 import math
 import numpy as np
 
-sys.path.insert(0, ".")
-sys.path.insert(0, "experiments")
+#   #108 修：原先在此处 `sys.path.insert(0, ".")` / `sys.path.insert(0, "experiments")`
+#   ——**import 期把相对路径写进 sys.path**。相对条目的解析目标由**判定时的 cwd** 决定
+#   （与 `lingshu/_pathguard.py` 的「相对条目非受控面」同一判据，见其 `_is_relative_entry`
+#   与 issue #288·D-2 快照语义），且 `lingshu/__init__.py` 在包首次 import 时已把 cwd/空串
+#   条目消除 ⇒ 这两行在包内 import 形态下等于**把刚被消除的解析面又插回来**（实测：import
+#   本模块后 sys.path 新增 `['experiments', '.', 'experiments', '.']`）。本模块的 import 全是
+#   包内相对 import（`from . import ...`），不依赖这两个条目；`experiments/` 目录在本仓不存在。
 from . import hexgen_c1_real as C
 from . import hexgen_multi_seed as M
 from .hex_composite import _COLORS_RGB, _paint        # 只读复用（既有确定性画笔）
@@ -319,7 +324,10 @@ def _heart_cov(size, cx, cy, rad, ss=SS):
 
 
 def shape_mask_v3(shape, size, cx, cy, rad):
-    """**v3 八形状**的解析覆盖率掩膜（与黑箱同名的真实词表）。"""
+    """**v3 八形状**的解析覆盖率掩膜（与黑箱同名的真实词表）。
+    自家 v1/v2 名 `stripe`（＝方块）在此归一为 `square`（`SHAPE_SELF2V3`）⇒ 两套词表同名不同义
+    不再让自家名在 v3 入口 `KeyError`/`ValueError`。"""
+    shape = _v3_shape(shape)
     if shape == "circle":
         return shape_mask("circle", size, cx, cy, rad)
     if shape == "triangle":
@@ -589,10 +597,24 @@ SEP_GAP = 12
 EXTENT_FRAC = {"circle": 1.00, "triangle": 1.00, "square": 1.00, "rectangle": 1.35,
                "diamond": 1.15, "hexagon": 1.00, "star": 1.00, "heart": 1.32}
 
+#   **两套词表同名不同义**（判据来源：`hexgen_align_probe.py:16-17` 与 `:39`
+#   `NAME_MAP_SELF2REAL`，R297 已登记该比较口径）——自家 v1/v2 词表（`hex_composite.SHAPES`／
+#   `SELF_TUPLES`／`enumerate_tuples`）把方块叫 `stripe`，而 v3/真实词表（`SHAPES8`）叫
+#   `square`。`EXTENT_FRAC`／`shape_mask_v3` 按**真实词表**建键 ⇒ 自家名 `stripe` 走 v3 侧
+#   入口即 `KeyError`（实测 `paint_extent("stripe", 51)`、`place_objects(..., shape="stripe")`、
+#   `render_prompt_v3((3,"stripe",...))` 三条路径全抛）。归一放在 v3 侧入口，**不改自家词表本身**
+#   （与 R297「命名映射仅用于跨源比对、不改自家词表」同一取向）。
+SHAPE_SELF2V3 = {"stripe": "square"}
+
+
+def _v3_shape(shape):
+    """自家 v1/v2 词表名 → v3/真实词表名（唯一命名差是 `stripe`→`square`，其余同名）。"""
+    return SHAPE_SELF2V3.get(shape, shape)
+
 
 def paint_extent(shape, rad):
     """画笔在画布上的**最大半外延**（px）：`rad × EXTENT_FRAC[shape]`，再 +1 兜住抗锯齿与取整。"""
-    return rad * EXTENT_FRAC[shape] + 1.0
+    return rad * EXTENT_FRAC[_v3_shape(shape)] + 1.0
 
 
 def paint_support(shape, rad, ux, uy, pad=1.0):
@@ -604,6 +626,7 @@ def paint_support(shape, rad, ux, uy, pad=1.0):
       square `rad(|ux|+|uy|)`；rectangle `1.35rad·|ux| + 0.62rad·|uy|`；
       diamond `1.15rad·max(|ux|,|uy|)`（L1 球的支撑）；circle `rad`；
       其余（triangle/hexagon/star/heart）取各向同性上界（安全、非紧）。"""
+    shape = _v3_shape(shape)                  # 自家名 `stripe` ≡ 真实名 `square`（见 SHAPE_SELF2V3）
     ax, ay = abs(ux), abs(uy)
     if shape == "square":
         return rad * (ax + ay) + pad
@@ -730,8 +753,12 @@ def zone_ok(cells, x, y, e, size=SIZE):
 def _solve_placement(cells, n, rad, size, shape, constraint):
     """在给定约束（`canvas` / `zone`）下求**最大可行半径**与铺位。返回 (r, pts)。"""
     def layout(r, angs):
-        #   先按允许格顺序放「第一轮」，同格的重复件再按 angs 扇形铺开
-        base_cells = [cells[i % len(cells)] for i in range(n)]
+        #   先按允许格顺序放「第一轮」，同格的重复件再按 angs 扇形铺开。
+        #   ⚠ **排序不可省**（同 `_solve_centroid.layout` 的 R311 修法，本文件 :925 一带）：
+        #   `truth["cells"]` 在 C 线里是 **set**，`cells[i % len(cells)]` 的「哪件落哪格」取决于
+        #   集合迭代序（跨进程可能不同）⇒ 同一题面在不同进程里可能拿到不同半径。修法＝排序后分配。
+        order = sorted(cells)
+        base_cells = [order[i % len(order)] for i in range(n)]
         first = {}
         out = []
         for i in range(n):
@@ -830,7 +857,16 @@ def legal_win(cell, shape, r, size=SIZE, zone_calib=None):
             lo = 0 if k == 0 else int(math.ceil(float(cuts[k - 1]) * size))
             hi = size - 1 if k == 2 else int(math.ceil(float(cuts[k]) * size)) - 1
             return lo, hi
-        return int(k * size / 3.0), int((k + 1) * size / 3.0) - 1
+        #   #354 修：无标定分支原先写 `int(k * size / 3.0)` / `int((k + 1) * size / 3.0) - 1`
+        #   ——**int 截断**（向零取整）而非 `ceil` ⇒ 与原像差 1px。判据来源：本函数 docstring
+        #   :848-849 明写「判据＝用**切点原像**（行 qy 的合法 `y ∈ [⌈cuts[qy-1]·size⌉,
+        #   ⌈cuts[qy]·size⌉ − 1]`）」＋上方有标定分支 :857-858 就是同一式的 `math.ceil`。
+        #   无标定的缺省切点即精确三等分 `[1/3, 2/3]` ⇒ 该分支必须与「cuts=[1/3,2/3]」逐位
+        #   相同（实测缺陷形态：无标定 r1 窗口 (170,340,54,169)，而有标定同切点 (171,341,54,170)；
+        #   `_cell_of_pt` 无标定分支 `int(v/size*3)` 的原像下界是 `⌈size/3⌉=171` ⇒ 缺陷窗口把
+        #   **判决落在相邻格的像素** `x/y=170` 包了进来，违反「约束面＝判决量原像」）。
+        return (int(math.ceil(k * size / 3.0)),
+                int(math.ceil((k + 1) * size / 3.0)) - 1)
 
     x0, x1 = preimg(cc, qx)
     y0, y1 = preimg(rc, qy)
@@ -862,8 +898,12 @@ def _solve_centroid(cells, n, rad, size, shape, zone_calib):
 
     def _anchor(cell, fx, fy, r):
         """格内锚点：在**合法位置窗口**（`legal_win`）内取相对位置 (fx,fy)。
-        窗口为空（实物比带还大）时退回该轴中点，由外层二分去缩半径。"""
-        ux0, uy0, ux1, uy1 = _win(cell, r)
+        窗口为空（实物比带还大）时退回该轴中点，由外层二分去缩半径。
+
+        ⚠ **#218 修**：`legal_win` 的返回序是 **(x0, x1, y0, y1)**（见其 docstring :813-816），
+        而这里原先按 (x0, y0, x1, y1) 解包 ⇒ 窗口两轴对调，`fx` 索引的是 y 区间、`fy` 索引 x 区间
+        （`cx = x0 + fx·(y0−x0)`）⇒ 单件起点落到错误轴，实测多例半径从标称 51 掉到 22~48。"""
+        ux0, ux1, uy0, uy1 = _win(cell, r)
         cx = ux0 + fx * (ux1 - ux0) if ux1 >= ux0 else (ux0 + ux1) / 2.0
         cy = uy0 + fy * (uy1 - uy0) if uy1 >= uy0 else (uy0 + uy1) / 2.0
         return (int(round(cx)), int(round(cy)))
@@ -1139,16 +1179,26 @@ def enumerate_tuples():
 
 
 def split_self(items):
-    """按**形状分层、类内交替**切分（与 C 线 `split_ids` 同族口径；同形状的件交替进标定/留出）。
-    返回 (calib_items, hold_items)。**两集不相交**（由守门测试钉住）。"""
+    """按**形状分层、配方(sid)交替**切分（与 C 线 `split_ids` 同族口径；同形状的**配方**交替进
+    标定/留出）。返回 (calib_items, hold_items)。**两集不相交**（由守门测试钉住）。
+
+    ⚠ **#391 修**：原先按「件」交替（`rows[0::2]`）⇒ `build_enum_items(repeats≥2)` 时同一配方的
+    rep0→标定、rep1→留出，而自家渲染器是**确定性**的（同配方逐字节相同）⇒ **留出集是标定集的
+    逐字节副本**，留出读数虚高（评估泄漏）。修法＝**以配方（sid）为切分单位**，同一配方的所有重复
+    件整组进同一侧 ⇒ 留出集不含任何标定集配方的副本。"""
     by_shape = {}
     for it in items:
         by_shape.setdefault(it["shape"], []).append(it)
     cal, hold = [], []
     for sh in sorted(by_shape):
-        rows = sorted(by_shape[sh], key=lambda x: x["id"])
-        cal += rows[0::2]
-        hold += rows[1::2]
+        by_sid = {}
+        for it in by_shape[sh]:
+            by_sid.setdefault(it["sid"], []).append(it)
+        #   配方序按**其最小 id** 排（`repeats=1` 时与旧口径「按 id 升序交替」逐位一致；
+        #   不按 sid 字面排序——`enum_10` < `enum_2`，会改变 `repeats=1` 的既有切分）。
+        for k, sid in enumerate(sorted(by_sid, key=lambda s: min(x["id"] for x in by_sid[s]))):
+            rows = sorted(by_sid[sid], key=lambda x: x["id"])
+            (cal if k % 2 == 0 else hold).extend(rows)
     return cal, hold
 
 

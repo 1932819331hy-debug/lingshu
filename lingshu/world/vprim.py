@@ -77,7 +77,18 @@ def _center(b: BBox) -> Tuple[float, float]:
 
 
 def _overlap(a: BBox, b: BBox) -> float:
-    """重叠面积占较小者比例 [0,1]。"""
+    """重叠面积占较小者比例 [0,1]（与坐标单位/缩放无关）。
+
+    #309（成立）：分母此前写作 `max(1.0, min(a_area, b_area))`——用 1.0 防除零，
+    等于假定面积至少 1 像素²。但在 `inter > 0` 的分支里两框面积都 ≥ inter > 0，
+    除零根本不会发生；该钳位只把**小面积/归一化坐标**下的比值压低：
+    同一对框整体缩放后关系从 `overlap` 变 `adjacent`（实测 ①像素 0.64/overlap
+    vs 归一化 0.16/adjacent；②亚像素框真实 0.766 读成 0.49）。
+    现改为 `inter / min(a_area, b_area)`；宽高都 ≥1 的像素框结果不变。
+    判据来源：经验标定（本件 #309；仓内无「vprim 重叠率」理论章节——
+    docs/theory/世界模型与语义时空图_完整理论整理与实现路线.md 未涉及）。
+    削掉的判别力：无（钳位仅造成单位依赖，不是有意的判别口径）。
+    """
     ix = max(0, min(a[2], b[2]) - max(a[0], b[0]))
     iy = max(0, min(a[3], b[3]) - max(a[1], b[1]))
     inter = ix * iy
@@ -85,11 +96,19 @@ def _overlap(a: BBox, b: BBox) -> float:
         return 0.0
     a_area = (a[2] - a[0]) * (a[3] - a[1])
     b_area = (b[2] - b[0]) * (b[3] - b[1])
-    return inter / max(1.0, min(a_area, b_area))
+    # inter > 0 ⇒ 两框面积皆 > 0，无除零风险（#309）
+    return inter / min(a_area, b_area)
 
 
 def spatial_relation(a: BBox, b: BBox) -> Dict:
-    """两个 bbox 的确定性空间关系（上方/下方/左侧/右侧/包含/重叠/距离）。"""
+    """两个 bbox 的确定性空间关系（上方/下方/左侧/右侧/包含/重叠/距离）。
+
+    方向判定取「主导轴」：比较两轴的中心-边缘间隙，分离量大的一轴决定
+    关系。旧实现固定「先判上下」且不看两轴分离量 ⇒ 斜置布局误判：a 在 b
+    左侧 100px、仅高出 1px 时仍报 "above"。判据来源＝本组缺陷报告 #405
+    （经验标定；docs/theory/世界模型与语义时空图_完整理论整理与实现路线.md
+    未规定轴序）。两轴间隙相等时沿用旧口径（纵向优先），以保持确定性。
+    """
     ax1, ay1, ax2, ay2 = a
     bx1, by1, bx2, by2 = b
     acx, acy = _center(a)
@@ -104,16 +123,16 @@ def spatial_relation(a: BBox, b: BBox) -> Dict:
         overlap = _overlap(a, b)
         if overlap > 0.5:
             relation = "overlap"
-        elif acy < by1:
-            relation = "above"         # a 在 b 上方
-        elif acy > by2:
-            relation = "below"         # a 在 b 下方
-        elif acx < bx1:
-            relation = "left_of"       # a 在 b 左侧
-        elif acx > bx2:
-            relation = "right_of"      # a 在 b 右侧
         else:
-            relation = "adjacent"
+            # 轴间隙：中心点到对方 bbox 的距离（该轴重叠时为 0）
+            gap_x = (bx1 - acx) if acx < bx1 else ((acx - bx2) if acx > bx2 else 0.0)
+            gap_y = (by1 - acy) if acy < by1 else ((acy - by2) if acy > by2 else 0.0)
+            if gap_y > 0 and gap_y >= gap_x:
+                relation = "above" if acy < bcy else "below"
+            elif gap_x > 0:
+                relation = "left_of" if acx < bcx else "right_of"
+            else:
+                relation = "adjacent"
 
     # 距离与方向（中心点）
     import math
@@ -146,14 +165,38 @@ def count_vprims(vprims: List[VPrim], category: str = None) -> Dict:
 
 
 def parse_anchor(text: str) -> Optional[VPrim]:
-    """从视觉锚点文本解析 VPrim：`cat@(x1,y1,x2,y2)`（推理链引用用）。"""
+    """从视觉锚点文本解析 VPrim：`cat@(x1,y1,x2,y2)`（推理链引用用）。
+
+    本函数是 anchor_text()/describe() 的逆：
+      - 类别 = `@(` 前紧邻的非空白串。旧实现用 `[\\w\\-]+` 只收词字符与连字符，
+        `person-1` 之外的 `obj.2` / `a/b` / 含非 \\w 的类别会被截断成末段
+        （`obj.2@(...)` 读回 `2`）——现放宽到非空白/非 `@`/非括号。
+      - describe() 尾部的 `conf=` 一并读回；旧实现丢弃该字段 ⇒ 一律回默认 0.5。
+      - 正则不再带可变长前缀（旧式 `([\\w\\-]+)@\\(` 的无边界前缀在长词串上
+        平方回溯：`'a'*16000` 实测 0.69s，调用方 core.world3d build / vprim_query
+        对库内 content 不截断 → 可被内容拖垮）。现改为先定位字面量 `@(`
+        （正则以 `@` 起首，只在该字面量处展开，整体线性），再线性回扫取类别。
+    类别自身含空白时格式与 vprims_to_scene_text 的 `[视觉原语…] ` 前缀无法区分，
+    不在支持范围（保持「紧邻 `@(` 的非空白串」这一口径）。
+    """
     import re
 
-    m = re.search(r"([\w\-]+)@\((\d+),(\d+),(\d+),(\d+)\)", text)
+    m = re.search(
+        r"@\((\d+),(\d+),(\d+),(\d+)\)"
+        r"(?:\s+\d+x\d+\s+conf=([0-9]*\.?[0-9]+))?", text)
     if not m:
         return None
-    cat, x1, y1, x2, y2 = m.group(1), *[int(g) for g in m.groups()[1:]]
-    return VPrim(category=cat, bbox=(x1, y1, x2, y2), source="anchor")
+    i = m.start()
+    j = i
+    while j > 0 and not text[j - 1].isspace() and text[j - 1] not in "@()":
+        j -= 1
+    if j == i:
+        return None
+    cat = text[j:i]
+    x1, y1, x2, y2 = (int(g) for g in m.groups()[:4])
+    conf = float(m.group(5)) if m.group(5) else 0.5
+    return VPrim(category=cat, bbox=(x1, y1, x2, y2),
+                 confidence=conf, source="anchor")
 
 
 def bbox_from_xywh(x: float, y: float, w: float, h: float) -> BBox:

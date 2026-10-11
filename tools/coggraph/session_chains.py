@@ -64,9 +64,17 @@ def main(argv=None):
             if d.get("op") != "add":
                 continue
             nid = d.get("id")
-            if nid and nid not in node_ts:
+            sid = d.get("session")
+            if nid and nid not in node_sess and sid:
+                # #300：缺会话 id 的节点**不并入**伪会话 "unknown"。
+                #   旧实现 `d.get("session") or "unknown"` 把一切无归属节点塞进同一
+                #   伪会话，再按时间戳两两串成 sequential 边 —— 不同进程/不同来源的
+                #   无归属节点被伪造成「同一会话的先后活动」，是凭空造出的关系。
+                #   判据来源：经验标定，追不到（缺陷 #300；本文件无对应理论章节）。
+                #   判别力取舍：不再产出 session:unknown 枢纽与其 sequential 边；
+                #   代价是无归属节点在本产物里彻底不出现（它们本就没有会话归属可言）。
                 node_ts[nid] = d.get("t") or 0
-                node_sess[nid] = d.get("session") or "unknown"
+                node_sess[nid] = sid
 
     with io.open(args.graph, encoding="utf-8") as f:
         g = json.load(f)

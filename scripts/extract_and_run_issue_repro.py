@@ -11,19 +11,54 @@
 为什么它能跑不可信代码（安全前提，改动前先读）：
   · 本脚本对被测子进程的**环境做清洗**：剔除 `GITHUB_*` / `GH_*` / `ACTIONS_*` /
     `RUNNER_*` / `INPUT_*` 前缀的键，以及名字含 TOKEN|SECRET|PASSWORD|CREDENTIAL
-    的键——被测脚本拿不到 job 令牌，也拿不到 `$GITHUB_ENV`/`$GITHUB_OUTPUT` 等
-    CI 注入面的路径（workflow 侧另有配合：取正文与回评步骤才带 GH_TOKEN，
-    执行步骤不带；checkout 用 persist-credentials: false 不落 git 凭据）。
+    的键——被测脚本的**进程 env 里**拿不到 job 令牌，也拿不到 `$GITHUB_ENV`/
+    `$GITHUB_OUTPUT` 等 CI 注入面的路径（workflow 侧另有配合：取正文与回评步骤
+    才带 GH_TOKEN，执行步骤不带；checkout 用 persist-credentials: false 不落
+    git 凭据）。
+    ⚠️ **本清洗只清「被测子进程自己的 env」，不等于同 job 隔离**（#241）：同 uid
+    的被测代码仍可读父进程 environ（如 Linux `/proc/<ppid>/environ`）把被清洗的
+    键取回，也可写 `$GITHUB_ENV`/`$GITHUB_PATH` 影响**后续步骤**。真正的边界是
+    workflow 侧那条**「执行步骤不带令牌、回评步骤才带令牌」的分步隔离**，不是本
+    清洗；同 job 内不可信代码与持令牌步骤共存即无隔离。要真隔离须让执行与回评
+    分属不同 job（仅**回评**那一步的正文来自被测输出，故可让回评 job 只做
+    `gh issue comment --body-file`）。
   · 独立临时目录（默认 mkdtemp；不写仓内）、限时执行（默认 600 s，超时 kill）。
-  · 报告中的路径一律中性化（`<临时目录>`），因为报告要原样贴到公开 issue。
+    被测输出的回收**不走管道**（#362③）：脚本派生的孙/后台进程会一直占着管道写端，
+    用 `subprocess.run(capture_output=True)` 会等管道 EOF 而非进程退出 ⇒ 脚本已
+    exit 0 也被判「超时终止」。改为重定向到临时文件、等**进程退出**。
+  · 报告里**可枚举的**本机路径一律中性化（`_neutralize_paths`，判据＝仓工作纪律
+    第 15 条「公开面路径写相对路径／本机绝对路径以中性占位代」）：报告自己给出的
+    落盘路径写 `<临时目录>`，被测输出里出现的落盘目录、执行核所在仓根也一并替换。
+    被测输出里它自己探到的**其它**绝对路径无法枚举，如实保留——本承诺不含它们
+    （#239②）。
+  · 报告记录**被测提交**（执行核所在仓的 `git rev-parse HEAD` ＋工作树是否干净）
+    与**依赖版本**（numpy / Pillow / lingshu）——读数要可复现，必须钉住被测代码与
+    环境的版本（#239①）。
+  · 本脚本自身的 stdout/stderr 显式切 UTF-8（`_force_utf8_stdio`）：Windows 上
+    stdout 被重定向（管道/文件）时按控制台代码页（常为 cp936/gbk）编码，而本模块
+    文档含 `⇒` / `⚠` 等 GBK 编不出的字符 ⇒ `--help` 当场 UnicodeEncodeError 崩
+    （#120）。控制台乱码属显示层（纪律第 15 条不做控制台兼容），**崩溃不是**。
+  · **报告里一切来自正文的文本都经「反注入」处理**：正文围栏 info string 属攻击者
+    可控，块语言分布一律包成**行内代码**（`_inline_code`）再入报告，使其中的
+    `[x](url)` / `@提及` / `<html>` 只作字面量、不被渲染（#363）；stdout/stderr
+    走 `_md_fence` 动态围栏防撑破。报告正文只由**固定模板**拼装。
   · 解释器用 `python -X utf8`；子进程 env 强制 PYTHONUTF8=1（对齐仓工作纪律第 15 条）。
 
-抽取规则（与仓内 fenced 口径对齐：scripts/link_check.py::_FENCE_OPEN /
-md_cg/docindex.py::_FENCE，即 CommonMark 围栏语义）：
+抽取规则（CommonMark 围栏语义——本仓无该解析器，口径以本节为准；参考实现见
+脑端公开仓 `md_cg/docindex.py::_FENCE`，门禁会 clone 该仓供 test_brain_store）：
   · 开启：行首（允许前导空白）`{3,}` 或 ~{3,}；info string = 同行其后剩余文本。
   · 闭合：同行定界符字符、长度不短于开启者、且该行除定界符外无其它字符
     （围栏内写的 ` ```js ` 只算代码内容，不算闭合）。
+  · **代码行去缩进**：开启围栏前有 N 个空格缩进时，块内每行去掉行首至多 N 个空格
+    （CommonMark 围栏语义）。旧实现照抄原文行 ⇒ `  ```python` / `  print(1)` 抽出的
+    代码带 2 空格缩进、落盘即成 `IndentationError`，把**合法复现判成失败**（#362①）。
+  · **引用块（`>`）内的围栏算块**：行首 `>` 标记（每层后可跟一个空格，可嵌套）
+    剥掉后再判围栏与代码行（CommonMark 块引用语义）。旧实现不认 `>` ⇒ 报告人写在
+    引用块里的复现脚本**整块抽不到**（#362②）。
   · 未闭合（到文末）：按「到文末收尾」收编（CommonMark 语义）。
+  · **HTML 注释（`<!-- … -->`，可跨行）内的围栏不算块**——注释在网页上不可见，
+    其中的 python 块不得被抽取执行（#235）。检测按「行首是否处于注释内」判（单趟
+    扫描，围栏内代码里的 `<!--` 不认作注释），抽出的代码仍取原文行。
   · **只选第一个 info 首词为 python|py|py3（大小写不敏感）的围栏块**；
     正文含多个 python 块时也只用第一个——报告里如实给出全部块的语言分布。
   · 无 python 块 ⇒ 显式失败（退出码 2），**不执行任何东西**。
@@ -53,6 +88,7 @@ md_cg/docindex.py::_FENCE，即 CommonMark 围栏语义）：
 """
 from __future__ import annotations
 
+import importlib.metadata
 import json
 import os
 import platform
@@ -61,11 +97,34 @@ import subprocess
 import sys
 import tempfile
 
+
+# ---------------------------------------------------------------------------
+# 入口护栏
+# ---------------------------------------------------------------------------
+
+def _force_utf8_stdio():
+    """把本进程 stdout/stderr 显式切到 UTF-8（#120）。
+
+    为什么必须：Windows 上 stdout **被重定向**（管道 / 文件 / CI 捕获）时按控制台
+    代码页（本机 cp936＝gbk）编码，而本模块文档含 `⇒`(U+21D2) / `⚠`(U+26A0) 等 GBK
+    **编不出**的字符 ⇒ `--help`（`print(__doc__)`）当场 `UnicodeEncodeError` 退出码 1。
+    控制台乱码属显示层（仓工作纪律第 15 条不做控制台兼容），**崩溃不是**——故这里
+    只把编码钉成 UTF-8；`errors="replace"` 兜底：某端不支持 reconfigure（如测试里被
+    换成 StringIO）时静默跳过，绝不因编码问题崩。只动本进程自身 stdio，不碰被测
+    子进程（后者另有 `_child_env` 注 `PYTHONIOENCODING=utf-8`）。
+    """
+    for stream in (sys.stdout, sys.stderr):
+        try:
+            stream.reconfigure(encoding="utf-8", errors="replace")
+        except (AttributeError, ValueError, OSError):
+            pass
+
+
 # ---------------------------------------------------------------------------
 # 常量
 # ---------------------------------------------------------------------------
 
-#: 围栏开启行（对齐 scripts/link_check.py 的 _FENCE_OPEN）。
+#: 围栏开启行（CommonMark 语义；参考实现见脑端公开仓 md_cg/docindex.py::_FENCE）。
 _FENCE_OPEN = re.compile(r"^\s*(`{3,}|~{3,})")
 
 #: info string 首词命中这些即视为「python 块」（大小写不敏感，取小写后比对）。
@@ -86,35 +145,117 @@ REPORT_FOOTER = "本评论仅贴读数，不作结论。"
 # 抽取
 # ---------------------------------------------------------------------------
 
+def _advance_comment_state(line, in_comment):
+    """逐字符推进 HTML 注释状态，返回处理完该行后的 `in_comment`。
+
+    HTML 注释不可嵌套：`<!--` 开启、`-->` 闭合；同行可多次开关。注释跨行时
+    后续行的**行首**即处于注释内——那正是围栏检测要用的判据。
+    """
+    k = 0
+    while k < len(line):
+        if not in_comment:
+            s = line.find("<!--", k)
+            if s == -1:
+                return False
+            in_comment = True
+            k = s + 4
+        else:
+            e = line.find("-->", k)
+            if e == -1:
+                return True
+            in_comment = False
+            k = e + 3
+    return in_comment
+
+
+#: 块引用标记（CommonMark）：行首至多 3 个空格 + `>`，标记后可跟一个空格。
+_BQ_MARKER = re.compile(r"^ {0,3}> ?")
+
+
+def _bq_strip(line, max_depth=None):
+    """剥掉行首的块引用标记，返回 (余下文本, 实际剥掉的层数)。
+
+    `>` 前允许至多 3 个空格、标记后可跟一个空格（CommonMark 块引用语义）；
+    `> > x` 为两层（可嵌套）。`max_depth` 给定时至多剥这么多层——用于让块内
+    代码行/闭合行与开启行**对齐同一引用深度**，从而「不在引用块里的围栏」其
+    代码行里的 `>` 保持字面量、不被误剥（#362②）。
+    """
+    depth = 0
+    s = line
+    while max_depth is None or depth < max_depth:
+        m = _BQ_MARKER.match(s)
+        if not m:
+            break
+        s = s[m.end():]
+        depth += 1
+    return s, depth
+
+
+def _dedent(line, n):
+    """去掉行首至多 n 个空格（CommonMark：围栏缩进量从块内代码行剥掉）。"""
+    k = 0
+    while k < n and k < len(line) and line[k] == " ":
+        k += 1
+    return line[k:]
+
+
 def _extract_fenced_blocks(text):
     """按 CommonMark 围栏口径抽取全部围栏块。
 
     返回 [(lang, code_first_line, code_last_line, code)]（行号为正文内 1-based，
     code_first/last 指块内**代码行**范围；空块记 first>last）。lang 为 info 首词
     小写；无 info 记 ""。
+
+    HTML 注释（`<!-- … -->`）内的围栏**不算块**（#235）——注释在网页上不可见，
+    其中的代码不得被抽取执行。按 CommonMark 块级语义单趟扫描：**行首在注释内**
+    的行不参与围栏判定；反之，围栏内（含代码里的 `<!--`）一律按原文、不认注释。
+    两条构造互不越界（`<!--` 出现在围栏内不被当注释、围栏出现在注释内不被当块）。
+
+    容器与缩进（#362①②，CommonMark 围栏/块引用语义）：
+      · **块引用**：行首 `>` 标记（可嵌套）剥掉后再判围栏与代码行；开启行的引用
+        深度即该块的深度，代码行/闭合行只剥到同深度（非引用块里代码行的 `>` 是
+        字面量，不剥）。
+      · **缩进**：开启围栏前有 N 个空格时，块内每行去掉行首至多 N 个空格——旧实现
+        照抄原文行，`  ```python` / `  print(1)` 抽出的代码带缩进、落盘即
+        `IndentationError`，把合法复现判成失败。
     """
     lines = text.replace("\r\n", "\n").replace("\r", "\n").split("\n")
     blocks = []
     i, n = 0, len(lines)
+    in_comment = False
     while i < n:
-        m = _FENCE_OPEN.match(lines[i])
+        if in_comment:
+            # 行首已在注释内 ⇒ 本行不可能开启围栏；只推进注释状态。
+            in_comment = _advance_comment_state(lines[i], True)
+            i += 1
+            continue
+        head, bq_depth = _bq_strip(lines[i])
+        m = _FENCE_OPEN.match(head)
         if not m:
+            in_comment = _advance_comment_state(lines[i], False)
             i += 1
             continue
         delim = m.group(1)
-        info = lines[i][m.end():].strip()
+        indent = len(head) - len(head.lstrip(" "))
+        info = head[m.end():].strip()
         lang = info.split()[0].lower() if info else ""
         j = i + 1
         closed = False
         while j < n:
-            s = lines[j].strip()
-            if (s and s[0] == delim[0] and len(s) >= len(delim)
+            cand, cand_depth = _bq_strip(lines[j], bq_depth)
+            s = cand.strip()
+            if (cand_depth == bq_depth and s and s[0] == delim[0]
+                    and len(s) >= len(delim)
                     and all(ch == delim[0] for ch in s)):
                 closed = True
                 break
             j += 1
         code_end = j if closed else n          # 0-based，代码行止于 code_end-1
-        code = "\n".join(lines[i + 1:code_end])
+        code_lines = []
+        for k in range(i + 1, code_end):
+            raw, _ = _bq_strip(lines[k], bq_depth)
+            code_lines.append(_dedent(raw, indent))
+        code = "\n".join(code_lines)
         blocks.append((lang, i + 2, code_end, code))
         i = (j + 1) if closed else n
     return blocks
@@ -154,7 +295,13 @@ def _fetch_issue_body(repo, issue, env=None):
 # ---------------------------------------------------------------------------
 
 def _child_env(extra):
-    """构造被测子进程 env：清掉令牌/CI 注入面，再注入显式覆盖。"""
+    """构造被测子进程 env：清掉令牌/CI 注入面，再注入显式覆盖。
+
+    ⚠️ 作用域**仅限被测子进程自己的 env**（#241）：同 uid 的被测代码仍可读父
+    进程 environ（如 Linux `/proc/<ppid>/environ`）把被清洗的键取回，也可写
+    `$GITHUB_ENV`/`$GITHUB_PATH` 影响**同一 job 的后续步骤**。本清洗不是隔离
+    边界——隔离边界在 workflow 的分步安排（执行步骤不带令牌）。见模块 docstring。
+    """
     env = {}
     for k, v in os.environ.items():
         if k.startswith(_ENV_DROP_PREFIXES):
@@ -171,22 +318,57 @@ def _child_env(extra):
 def _run_script(script_path, cwd, timeout, extra_env):
     """限时执行；返回 (status, exit_line, stdout, stderr)。
 
-    status：0 通过 / 1 非 0 或超时。超时经 subprocess.run 的 kill 语义终止
-    （直接子进程；其孙进程可能短暂残留——一次性 runner，已在文档接受）。
+    status：0 通过 / 1 非 0 或超时。
+
+    ⚠️ 输出回收**不走管道**（#362③）：`subprocess.run(capture_output=True)` 读管道
+    直到 **EOF**——被测脚本若派生后台/孙进程且它继承了 stdout/stderr 写端，管道在
+    孙进程存活期间不关闭 ⇒ 父进程**已 exit 0** 也被判 `TimeoutExpired`，合法复现
+    被当失败。改为把子进程 stdout/stderr 重定向到临时文件、用 `Popen.wait(timeout)`
+    等**进程退出**，随后读文件（同样按 UTF-8 解码）。
+
+    超时则 kill 直接子进程（其孙进程可能短暂残留——一次性 runner，已在文档接受；
+    它们此后只写文件、不再阻塞读数）。
     """
     cmd = [sys.executable, "-X", "utf8", script_path]
+    env = _child_env(extra_env)
+    out_fd, out_path = tempfile.mkstemp(prefix="repro_out_", suffix=".txt")
+    err_fd, err_path = tempfile.mkstemp(prefix="repro_err_", suffix=".txt")
+    os.close(out_fd)
+    os.close(err_fd)
+
+    def _read(path):
+        try:
+            with open(path, "rb") as f:
+                return f.read().decode("utf-8", "replace")
+        except OSError:
+            return ""
+
+    rc, timed_out, out, err = None, False, "", ""
     try:
-        r = subprocess.run(cmd, cwd=cwd, env=_child_env(extra_env),
-                           capture_output=True, text=True, encoding="utf-8",
-                           errors="replace", timeout=timeout)
-    except subprocess.TimeoutExpired as e:
-        out = e.stdout if isinstance(e.stdout, str) else (e.stdout or b"").decode("utf-8", "replace")
-        err = e.stderr if isinstance(e.stderr, str) else (e.stderr or b"").decode("utf-8", "replace")
-        return (1, "超时终止（%d s）" % timeout, out or "", err or "")
-    except OSError as e:
-        return (1, "启动失败（%s）" % e, "", "")
-    rc = r.returncode
-    return (0 if rc == 0 else 1, str(rc), r.stdout or "", r.stderr or "")
+        with open(out_path, "wb") as of, open(err_path, "wb") as ef:
+            try:
+                proc = subprocess.Popen(cmd, cwd=cwd, env=env, stdout=of, stderr=ef)
+            except OSError as e:
+                return (1, "启动失败（%s）" % e, "", "")
+            try:
+                rc = proc.wait(timeout=timeout)
+            except subprocess.TimeoutExpired:
+                timed_out = True
+                proc.kill()
+                try:
+                    proc.wait(timeout=10)
+                except subprocess.TimeoutExpired:
+                    pass
+        out, err = _read(out_path), _read(err_path)
+    finally:
+        for p in (out_path, err_path):
+            try:
+                os.unlink(p)
+            except OSError:
+                pass
+    if timed_out:
+        return (1, "超时终止（%d s）" % timeout, out, err)
+    return (0 if rc == 0 else 1, str(rc), out, err)
 
 
 # ---------------------------------------------------------------------------
@@ -209,6 +391,25 @@ def _md_fence(text):
     return "`" * max(3, longest + 1)
 
 
+def _inline_code(text):
+    """把任意**单行**文本包成 CommonMark 行内代码（定界反引号数 = 内容里最长
+    反引号串 + 1）。
+
+    为什么必须包：报告要原样贴到公开 issue，而「块语言」来自正文围栏的 info
+    string——**攻击者可控**。原样透出到围栏**之外**的 `- **抽取**：` 行，等于
+    把 `[x](url)` / `@提及` / `<html>` 直接渲染成活的 markdown（伪结论/外链/
+    提及注入，#363）。行内代码里这些字符一律为字面量，从根上不可渲染。
+
+    首/尾是反引号时按 CommonMark 规则加一个空格（渲染时被剥掉，内容不变）。
+    调用点保证 text 无空白（info 首词），故不涉及行内代码不能跨行的限制。
+    """
+    text = text or ""
+    longest = max((len(m.group(0)) for m in re.finditer(r"`+", text)), default=0)
+    ticks = "`" * (longest + 1)
+    pad = " " if (text.startswith("`") or text.endswith("`")) else ""
+    return ticks + pad + text + pad + ticks
+
+
 def _env_line():
     py = "Python %s（%s）" % (platform.python_version(), platform.python_implementation())
     osdesc = "%s %s" % (platform.system(), platform.release())
@@ -219,9 +420,76 @@ def _env_line():
     return "%s · %s · %s" % (py, osdesc, where)
 
 
+def _git_head_line():
+    """被测提交：执行核所在仓的 `git rev-parse HEAD`（#239①）。
+
+    读数要可复现，必须钉住**被测代码**的版本——旧报告只有 Python/OS，同一份
+    正文在不同 HEAD 上跑出的读数无法区分。取不到（无 git / 非仓）如实写「未知」，
+    不编造 SHA。工作树有未提交改动时追加标注——HEAD 相同但内容不同会误导。
+    """
+    repo = os.path.dirname(os.path.dirname(os.path.abspath(__file__)))
+    try:
+        r = subprocess.run(["git", "-C", repo, "rev-parse", "HEAD"],
+                           capture_output=True, text=True, encoding="utf-8",
+                           errors="replace", timeout=15)
+    except (OSError, subprocess.SubprocessError) as e:
+        return "未知（git 不可用：%s）" % e
+    if r.returncode != 0:
+        return "未知（git rev-parse 退出码 %d）" % r.returncode
+    sha = (r.stdout or "").strip() or "未知"
+    try:
+        st = subprocess.run(["git", "-C", repo, "status", "--porcelain"],
+                            capture_output=True, text=True, encoding="utf-8",
+                            errors="replace", timeout=15)
+        if st.returncode == 0 and (st.stdout or "").strip():
+            return "%s（工作树有未提交改动）" % sha
+    except (OSError, subprocess.SubprocessError):
+        pass
+    return sha
+
+
+def _deps_line():
+    """被测环境的依赖版本（#239①）：numpy / Pillow / 本包；未装如实写「未安装」。"""
+    parts = []
+    for dist in ("numpy", "Pillow", "lingshu"):
+        try:
+            parts.append("%s %s" % (dist, importlib.metadata.version(dist)))
+        except importlib.metadata.PackageNotFoundError:
+            parts.append("%s 未安装" % dist)
+        except Exception as e:                      # 元数据面异常不拖垮读数
+            parts.append("%s 版本未知（%s）" % (dist, e))
+    return " · ".join(parts)
+
+
+def _neutralize_paths(text, extra_dirs=()):
+    """把**可枚举的**本机绝对路径替换成中性占位（#239②）。
+
+    判据来源：仓工作纪律第 15 条「公开面路径写相对路径——本机绝对路径以中性占位代
+    （仓内 `<仓根>`／家目录 `~/`／临时 `%TEMP%`）」。报告要原样贴到公开 issue，故
+    执行核**自己知道**的那几条路径一律替换：落盘临时目录（`<临时目录>`）、执行核
+    所在仓根（`<仓根>`）、解释器目录（`<Python>`）。被测输出里它自己探到的**其它**
+    绝对路径无法枚举，如实保留——本承诺**不含**它们（模块 docstring 已写明）。
+
+    削掉的判别力：旧 docstring 写「报告中的路径一律中性化」，实测 stdout/stderr
+    里的路径原样透出（承诺未兑现）。本函数只兑现**可枚举**的那部分；「一律」一词
+    已按实测收窄，不宣称覆盖被测输出自探的路径。
+    """
+    for d in extra_dirs:
+        if d:
+            text = (text or "").replace(d, "<临时目录>")
+    text = text or ""
+    repo = os.path.dirname(os.path.dirname(os.path.abspath(__file__)))
+    if repo:
+        text = text.replace(repo, "<仓根>")
+    py_dir = os.path.dirname(os.path.abspath(sys.executable))
+    if py_dir:
+        text = text.replace(py_dir, "<Python>")
+    return text
+
+
 def _render_report(source, extract_info, cmd_line, exit_line, stdout_txt, stderr_txt,
-                   max_bytes, note=None):
-    """固定模板：来源/抽取/环境/执行/退出码 + 原始输出 + 末行固定声明。"""
+                   max_bytes, note=None, neutral_dirs=()):
+    """固定模板：来源/抽取/环境/被测提交/依赖/执行/退出码 + 原始输出 + 末行固定声明。"""
     parts = []
     parts.append("### 自动复现读数（repro-bot）")
     parts.append("")
@@ -230,6 +498,8 @@ def _render_report(source, extract_info, cmd_line, exit_line, stdout_txt, stderr
     parts.append("- **来源**：%s" % source)
     parts.append("- **抽取**：%s" % extract_info)
     parts.append("- **环境**：%s" % _env_line())
+    parts.append("- **被测提交**：%s" % _git_head_line())
+    parts.append("- **依赖**：%s" % _deps_line())
     parts.append("- **执行**：%s" % cmd_line)
     parts.append("- **退出码**：%s" % exit_line)
     if note:
@@ -237,7 +507,7 @@ def _render_report(source, extract_info, cmd_line, exit_line, stdout_txt, stderr
         parts.append("> %s" % note)
     parts.append("")
     for title, body in (("原始输出（stdout）", stdout_txt), ("原始错误（stderr）", stderr_txt)):
-        shown, orig_n, cut = _truncate(body, max_bytes)
+        shown, orig_n, cut = _truncate(_neutralize_paths(body, neutral_dirs), max_bytes)
         fence = _md_fence(shown)
         parts.append("#### %s —— 上限 %d B" % (title, max_bytes))
         parts.append("")
@@ -269,10 +539,17 @@ def _selftest():
         ("```text\na\n```\n```python\nx = 4\n```", "x = 4"),        # 跳过非 python 块
         ("```python\nx = 5\n```\n```python\nx = 6\n```", "x = 5"),  # 取第一个 python 块
         ("````text\n```\n````\n```Python\nx = 7\n```", "x = 7"),    # 4 反引号包裹 + 大写 info
-        ("  ```python\nx = 8\n  ```", "x = 8"),                     # 缩进围栏
+        ("  ```python\nx = 8\n  ```", "x = 8"),                     # 缩进围栏（0 缩进代码）
         ("行内 `code` 不成块\n```python\nx = 9\n```", "x = 9"),      # 行内代码不干扰
         ("```python\na = 1\n```js\nb = 2\n```", "a = 1\n```js\nb = 2"),  # 围栏内 ```js 不闭合
         ("```python\nx = 10\n（无闭合）", "x = 10\n（无闭合）"),       # 未闭合收编到文末
+        # #362① 缩进围栏：块内代码行须剥掉开启围栏的缩进量（否则 IndentationError）
+        ("  ```python\n  x = 11\n  ```", "x = 11"),
+        ("   ```python\n   if True:\n       y = 1\n   ```", "if True:\n    y = 1"),
+        # #362② 引用块围栏：剥掉 `>` 标记后按围栏判（含嵌套）
+        ("> ```python\n> x = 12\n> ```", "x = 12"),
+        ("> 说明\n> ```python\n> x = 13\n> ```\n> 尾", "x = 13"),
+        ("> > ```python\n> > x = 14\n> > ```", "x = 14"),
     ]
     fails = 0
     for text, want in good:
@@ -288,6 +565,8 @@ def _selftest():
         "```text\n只有 text 块\n```",           # 无 python 块
         "```\n无 info 的块\n```",               # info 为空
         "```diff\n-a\n+b\n```",                # 只有 diff 块
+        "> 只是引用文字，没有围栏",              # 引用块但不含围栏
+        "> ```text\n> 引用块里的非 python 块\n> ```",  # 引用块里只有 text 块
     ]
     for text in bad:
         chosen = _choose_python_block(_extract_fenced_blocks(text))
@@ -304,7 +583,25 @@ def _selftest():
     if not flag or orig != 300 or len(cut.encode("utf-8")) > 10:
         print("  SELFTEST-FAIL 截断口径：%r %d %s" % (cut, orig, flag))
         fails += 1
-    print("selftest: %s（正例 %d · 负例 %d · 附加 2）"
+    # #362② 反向：非引用块的代码里行首 `>` 是字面量，不得被剥掉
+    fb = _choose_python_block(_extract_fenced_blocks("```python\n> literal\n```"))
+    if not fb or fb[3] != "> literal":
+        print("  SELFTEST-FAIL 非引用块里代码行的 `>` 被误剥：%r" % (fb,))
+        fails += 1
+    # #239① 报告须带被测提交与依赖版本两行
+    rep = _render_report("src", "extract", "cmd", "0", "out", "err", 1024)
+    for field in ("- **被测提交**：", "- **依赖**："):
+        if field not in rep:
+            print("  SELFTEST-FAIL 报告缺 %r 行" % field)
+            fails += 1
+    if "numpy" not in rep:
+        print("  SELFTEST-FAIL 依赖行未记 numpy 版本")
+        fails += 1
+    # #239② 可枚举路径须中性化
+    if _neutralize_paths("写进 " + tempfile.gettempdir(), ("%s" % tempfile.gettempdir(),)) != "写进 <临时目录>":
+        print("  SELFTEST-FAIL 路径中性化未生效")
+        fails += 1
+    print("selftest: %s（正例 %d · 负例 %d · 附加 6）"
           % ("OK" if fails == 0 else "%d 例不符预期" % fails, len(good), len(bad)))
     return 0 if fails == 0 else 1
 
@@ -319,6 +616,7 @@ def _usage(msg):
 
 
 def main(argv):
+    _force_utf8_stdio()
     args = list(argv[1:])
     if any(a in ("-h", "--help") for a in args):
         print(__doc__)
@@ -379,6 +677,9 @@ def main(argv):
     elif not (opt["repo"] and opt["issue"]):
         return _usage("需给 --body-file，或 --repo 与 --issue 配套")
 
+    # 报告中性化面（#239②）：落盘目录在抽取成功后才定，此处先留可变列表。
+    neutral_dirs = []
+
     # ── 取正文 ──
     if opt["body_file"]:
         try:
@@ -412,13 +713,15 @@ def main(argv):
     tally = {}
     for b in blocks:
         tally[b[0] or "(无标注)"] = tally.get(b[0] or "(无标注)", 0) + 1
-    tally_line = " / ".join("%s×%d" % (k, v) for k, v in tally.items()) or "无"
+    # 块语言来自正文 info string（攻击者可控）⇒ 一律包进行内代码再入报告（#363）。
+    tally_line = " / ".join("%s×%d" % (_inline_code(k), v) for k, v in tally.items()) or "无"
 
     def _fail_report(extract_info, note, stderr_txt=""):
         report = _render_report(source=source, extract_info=extract_info,
                                 cmd_line="未执行（抽取失败）", exit_line="—",
                                 stdout_txt="", stderr_txt=stderr_txt,
-                                max_bytes=opt["max_bytes"], note=note)
+                                max_bytes=opt["max_bytes"], note=note,
+                                neutral_dirs=neutral_dirs)
         if opt["report_file"]:
             with open(opt["report_file"], "w", encoding="utf-8", newline="\n") as f:
                 f.write(report)
@@ -442,13 +745,15 @@ def main(argv):
     # ── 落盘（独立临时目录） ──
     out_dir = opt["out_dir"] or tempfile.mkdtemp(prefix="repro_issue_")
     os.makedirs(out_dir, exist_ok=True)
+    neutral_dirs.append(out_dir)          # 被测输出里的落盘目录一并中性化（#239②）
     script_name = "repro_issue_%s.py" % opt["issue"] if opt["issue"] else "repro_issue_local.py"
     script_path = os.path.join(out_dir, script_name)
     with open(script_path, "w", encoding="utf-8", newline="\n") as f:
         f.write(code + "\n")
 
     cmd_line = ("`python -X utf8 %s`（cwd=`<临时目录>`；独立临时目录，不写仓内；"
-                "超时 %d s；脚本内容=抽出的代码块原文，未做任何改动）"
+                "超时 %d s；脚本内容=抽出的代码块，围栏缩进量与引用块标记已按 "
+                "CommonMark 剥除、其余逐字未改）"
                 % (script_name, opt["timeout"]))
 
     if opt["dry_run"]:
@@ -474,7 +779,8 @@ def main(argv):
                 "脚本可能依赖运行方预置（如变量/环境），或与当前 HEAD 行为不符。" % exit_line)
     report = _render_report(source=source, extract_info=extract_info, cmd_line=cmd_line,
                             exit_line=exit_line, stdout_txt=out, stderr_txt=err,
-                            max_bytes=opt["max_bytes"], note=note)
+                            max_bytes=opt["max_bytes"], note=note,
+                            neutral_dirs=neutral_dirs)
     if opt["report_file"]:
         with open(opt["report_file"], "w", encoding="utf-8", newline="\n") as f:
             f.write(report)
