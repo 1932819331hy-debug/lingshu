@@ -314,7 +314,7 @@
     {
      "file": "core.py",
      "src": "aeis.core",
-     "sha256": "dc1dab2d048cdf2c",
+     "sha256": "f8c30b183d430416",
      "rewrites": 34,
      "sanitized": 2,
      "patches": 2,
@@ -537,7 +537,7 @@
     {
      "file": "stcnn.py",
      "src": "wisdom.stcnn",
-     "sha256": "d7dd76dd4a8e7d81",
+     "sha256": "3ab8645003dea7ee",
      "rewrites": 0,
      "sanitized": 0,
      "patches": 0,
