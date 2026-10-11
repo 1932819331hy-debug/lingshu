@@ -54,7 +54,7 @@
     {
      "file": "curiosity_explorer.py",
      "src": "aeis.curiosity_explorer",
-     "sha256": "a254c7a7456d5752",
+     "sha256": "1b40a1b911a876fd",
      "rewrites": 4,
      "sanitized": 0,
      "patches": 0,
@@ -67,7 +67,7 @@
     {
      "file": "gap_dual.py",
      "src": "aeis.gap_dual",
-     "sha256": "a58b9f55e60913cb",
+     "sha256": "ce6091f573cb682d",
      "rewrites": 4,
      "sanitized": 0,
      "patches": 0,
@@ -89,7 +89,7 @@
     {
      "file": "prediction.py",
      "src": "aeis.prediction",
-     "sha256": "7e547760e16066fa",
+     "sha256": "658795a194f7869d",
      "rewrites": 0,
      "sanitized": 0,
      "patches": 0,
@@ -103,7 +103,7 @@
     {
      "file": "scene_model.py",
      "src": "aeis.scene_model",
-     "sha256": "00eaa71a08b0532d",
+     "sha256": "06a6086ae7e87497",
      "rewrites": 4,
      "sanitized": 0,
      "patches": 0,
@@ -114,7 +114,7 @@
     {
      "file": "scene_simulator.py",
      "src": "aeis.scene_simulator",
-     "sha256": "40cc8e2fbba0a26e",
+     "sha256": "8128017c055a8f6d",
      "rewrites": 4,
      "sanitized": 0,
      "patches": 0,
@@ -136,7 +136,7 @@
     {
      "file": "seven_layer_loop.py",
      "src": "aeis.seven_layer_loop",
-     "sha256": "065e6b30eba02d24",
+     "sha256": "5fbc5033eb3f2d42",
      "rewrites": 8,
      "sanitized": 0,
      "patches": 0,
@@ -160,7 +160,7 @@
     {
      "file": "silhouette3d.py",
      "src": "aeis.silhouette3d",
-     "sha256": "e62f92723d118763",
+     "sha256": "2aafd8b4bf723f55",
      "rewrites": 2,
      "sanitized": 0,
      "patches": 0,
@@ -182,7 +182,7 @@
     {
      "file": "spacetime_consistency.py",
      "src": "aeis.spacetime_consistency",
-     "sha256": "278200a93f9081d0",
+     "sha256": "7a2d7dc2b935c5c5",
      "rewrites": 4,
      "sanitized": 0,
      "patches": 0,
@@ -193,7 +193,7 @@
     {
      "file": "stable_lease.py",
      "src": "aeis.stable_lease",
-     "sha256": "f32067b4dede14f4",
+     "sha256": "084b71b05e3efa5a",
      "rewrites": 0,
      "sanitized": 0,
      "patches": 0,
@@ -204,7 +204,7 @@
     {
      "file": "time_core.py",
      "src": "aeis.time_core",
-     "sha256": "59a2af684ce80bad",
+     "sha256": "a665aa9e3a594c8c",
      "rewrites": 0,
      "sanitized": 0,
      "patches": 0,
@@ -215,7 +215,7 @@
     {
      "file": "voxel_world.py",
      "src": "aeis.voxel_world",
-     "sha256": "0a739dec30b145fc",
+     "sha256": "60cca3b8c4922bfa",
      "rewrites": 0,
      "sanitized": 0,
      "patches": 0,
@@ -226,7 +226,7 @@
     {
      "file": "vprim.py",
      "src": "aeis.vprim",
-     "sha256": "a49065e0cdd44632",
+     "sha256": "40c9d7f730314571",
      "rewrites": 0,
      "sanitized": 0,
      "patches": 0,
@@ -237,7 +237,7 @@
     {
      "file": "wm_simloop.py",
      "src": "aeis.wm_simloop",
-     "sha256": "d02d137f520399f8",
+     "sha256": "b40100bf23a0aaac",
      "rewrites": 8,
      "sanitized": 0,
      "patches": 0,
@@ -250,7 +250,7 @@
     {
      "file": "world3d.py",
      "src": "aeis.world3d",
-     "sha256": "e00e8755f48fdc06",
+     "sha256": "7b7527deb009dd70",
      "rewrites": 16,
      "sanitized": 0,
      "patches": 0,
@@ -292,7 +292,7 @@
     {
      "file": "activation.py",
      "src": "aeis.activation",
-     "sha256": "e892b566a3aeab37",
+     "sha256": "07f5c60c841b5092",
      "rewrites": 0,
      "sanitized": 0,
      "patches": 1,
@@ -303,7 +303,7 @@
     {
      "file": "condition_normalize.py",
      "src": "aeis.condition_normalize",
-     "sha256": "ee7bca3acbeaa6e2",
+     "sha256": "199834c837efe530",
      "rewrites": 0,
      "sanitized": 0,
      "patches": 0,
@@ -314,7 +314,7 @@
     {
      "file": "core.py",
      "src": "aeis.core",
-     "sha256": "9910608b33638d01",
+     "sha256": "2471722fb493cccd",
      "rewrites": 34,
      "sanitized": 2,
      "patches": 2,
@@ -345,7 +345,7 @@
     {
      "file": "longterm_gate.py",
      "src": "aeis.longterm_gate",
-     "sha256": "44c912b54a750764",
+     "sha256": "14b6dc6fb1f69cd2",
      "rewrites": 1,
      "sanitized": 0,
      "patches": 0,
@@ -356,7 +356,7 @@
     {
      "file": "provenance.py",
      "src": "aeis.provenance",
-     "sha256": "b8b0020f52ac34c1",
+     "sha256": "49912c9c6123fa3d",
      "rewrites": 0,
      "sanitized": 0,
      "patches": 5,
@@ -367,7 +367,7 @@
     {
      "file": "time_core.py",
      "src": "aeis.time_core",
-     "sha256": "59a2af684ce80bad",
+     "sha256": "a665aa9e3a594c8c",
      "rewrites": 0,
      "sanitized": 0,
      "patches": 0,
@@ -378,7 +378,7 @@
     {
      "file": "verdict.py",
      "src": "aeis.verdict",
-     "sha256": "f0215ebe537b0b7a",
+     "sha256": "6b1e73fa53beac56",
      "rewrites": 0,
      "sanitized": 0,
      "patches": 0,
@@ -526,7 +526,7 @@
     {
      "file": "rust_bridge.py",
      "src": "aeis.rust_bridge",
-     "sha256": "7f8475551018fa4d",
+     "sha256": "361b67c33492c374",
      "rewrites": 0,
      "sanitized": 4,
      "patches": 0,
@@ -564,7 +564,7 @@
     {
      "file": "hexgen_align_probe.py",
      "src": "experiments.hexgen_align_probe",
-     "sha256": "e699264b51c5adf8",
+     "sha256": "54b1ace96586277f",
      "rewrites": 2,
      "sanitized": 0,
      "patches": 0,
@@ -575,7 +575,7 @@
     {
      "file": "hexgen_c1_real.py",
      "src": "experiments.hexgen_c1_real",
-     "sha256": "18fb053ccaf26e31",
+     "sha256": "5026a61e33165d88",
      "rewrites": 0,
      "sanitized": 0,
      "patches": 0,
@@ -586,7 +586,7 @@
     {
      "file": "hexgen_multi_seed.py",
      "src": "experiments.hexgen_multi_seed",
-     "sha256": "3e7580208e1d2298",
+     "sha256": "f0139d11fd55ad1e",
      "rewrites": 1,
      "sanitized": 1,
      "patches": 0,
@@ -610,7 +610,7 @@
     {
      "file": "hexgen_self_source.py",
      "src": "experiments.hexgen_self_source",
-     "sha256": "67d38fb9d2dee9c0",
+     "sha256": "768b6750191c484b",
      "rewrites": 4,
      "sanitized": 0,
      "patches": 0,
@@ -621,7 +621,7 @@
     {
      "file": "hexgen_subject_split.py",
      "src": "experiments.hexgen_subject_split",
-     "sha256": "e6023d204f93cd12",
+     "sha256": "a30e8c90056cd680",
      "rewrites": 3,
      "sanitized": 0,
      "patches": 0,
