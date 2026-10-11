@@ -139,7 +139,9 @@ function build(){
   cy.edges().forEach(e=>{ const d=e.data(); const t=d.id.split('|')[2];
     e.style('line-color', ruleColor[t]||'#666'); e.style('line-style', d.id.endsWith('|1')?'dashed':'solid'); });
   const shown = cy.nodes().length, se = cy.edges().length;
-  document.getElementById('stat').innerHTML = '显示 '+shown+' 节点 / '+se+' 边<br>全库 '+G.meta.counts.nodes+' 节点 / '+(G.meta.counts.edges+G.meta.derived)+' 边'+(G.merged_aliases?('（已归并 '+G.merged_aliases+' 个重复/同义节点）'):'')+'<br>真源指纹 '+G.meta.source_sha;
+  // #413：derived 计数写在 viewer_graph 顶层（vgraph["derived"]），不在 g["meta"] 里；
+  //   旧写法从 meta 取 derived（键不存在 ⇒ undefined）⇒ 与 counts.edges 相加恒为 NaN（侧栏「全库 … 边」显示 NaN）。
+  document.getElementById('stat').innerHTML = '显示 '+shown+' 节点 / '+se+' 边<br>全库 '+G.meta.counts.nodes+' 节点 / '+(G.meta.counts.edges+G.derived)+' 边'+(G.merged_aliases?('（已归并 '+G.merged_aliases+' 个重复/同义节点）'):'')+'<br>真源指纹 '+G.meta.source_sha;
   cy.on('tap','node', async evt=>{
     const id = evt.target.id(); const box = document.getElementById('detail');
     box.style.display='block'; box.innerHTML = '<h3>'+esc(id)+'</h3><div class="m">加载中…</div>';

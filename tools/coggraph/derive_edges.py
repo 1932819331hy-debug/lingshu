@@ -240,7 +240,12 @@ def main(argv=None):
     for n in nodes:
         ts = n.get("created") or 0
         if ts:
-            day_hub[time.strftime("%Y-%m-%d", time.localtime(ts))].append(n["id"])
+            # 判据来源：issue #360（同一真源/同一 graph.json 在不同 TZ 的机器上跑出不同
+            # R4 日枢纽与边）——分日必须用**与机器时区无关**的 UTC 日历日，故 localtime
+            # → gmtime。代价：日界从「本地午夜」移到「UTC 午夜」，东八区傍晚之后的节点
+            # 可能落到次日枢纽；这是为可复现性主动削掉的判别力（牺牲本地日历语义，
+            # 换取同 graph.json 在任何机器上产出同一边集）。理论章节追不到，属经验标定。
+            day_hub[time.strftime("%Y-%m-%d", time.gmtime(ts))].append(n["id"])
     deg = collections.Counter()
     for e in explicit:
         deg[e["s"]] += 1

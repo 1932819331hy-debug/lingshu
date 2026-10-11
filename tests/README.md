@@ -34,15 +34,16 @@ python -m pytest tests/ -v -rs   # 全量（≈20min，含两个重件）
 CI（`.github/workflows/ci.yml`）按此分两档：快档随 push/PR 跑；慢档每周一定时 +
 手动触发（workflow_dispatch）。
 
-## 已知红（如实登记，非本仓引入）
+## 曾登记的「已知红」——已转绿（2026-10-11 更新）
 
-`test_hex_text` 含 **2 项已知红**：`test_spatial_detect_finds_single_object`（6/16）、
-`test_multimodal_check_clean_vs_corrupt`（7/12）。**上游 AEIS 同跑同红、失败读数逐位
-相同**（intake body-export-v0.2 §五）⇒ 系历史既有（环境/训练数值性），非导出引入。
-
-处理方式：两项已标 `@pytest.mark.xfail(strict=True)`——套件保持全绿可当门禁，
-reason 内登记出处；修好后以 XPASS→FAIL 提醒摘牌。另见 issue #24（判据本身
-"不可复算"的批评在案）。
+`test_hex_text` 曾登记 2 项已知红：`test_spatial_detect_finds_single_object`（6/16）、
+`test_multimodal_check_clean_vs_corrupt`（7/12）——**根因修复已落 main**：
+`9bc4985`（`image_to_grid` 晶格横向越出画幅 √3 倍，采纳自 PR #116）＋ `54cb5cb`
+（`hex_hier` 形状辅助损失按 OBJ 布局连续分组）。两条现随 `tests/` 自动收集真跑：
+本机 `python -X utf8 -m pytest tests/test_hex_text.py -q` = **6 passed**。
+`gate.yml` 上曾挂的 `--deselect` 已摘除；守卫 `tests/test_gate_deselect_justified.py`
+断言「凡被 deselect 的用例必须真红」——再 deselect 一条绿的用例会当场判红。
+原读数与讨论见 issue #4 / #24（判据「不可复算」的批评）。
 
 ## 改造注记（2026-10-08 · 测试基建）
 

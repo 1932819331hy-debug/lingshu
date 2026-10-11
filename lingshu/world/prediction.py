@@ -33,6 +33,11 @@ class PredictionEngine:
 
     MIN_SAMPLES = 50          # D-006：最低样本量（置信区间收敛）
     BASE_HIT_RATE = 0.40      # D-006：基线阈值（工程初值，非协议承诺）
+    # #242：D-006 动态校准的两窗口径——判定窗（近期）宽度与 σ 下界。
+    # 判据来源＝缺陷单 #242「期望行为/建议修法」（两窗 + σ=0 给下界）；
+    # **经验标定，追不到理论章节/引入 commit**（理论稿未给窗口宽度与 σ 下界）。
+    RECENT_WINDOW = 20        # 近期判定窗宽度（样本 ≥ MIN_SAMPLES 时 base 仍 ≥30）
+    MIN_STD = 0.05            # σ 下界：防全命中基线（σ=0）报出 threshold=1.0
     # #395：路线图生成的总量预算（资源上界）。
     # 判据来源＝**经验标定，追不到理论出处**（本仓理论稿
     # docs/theory/世界模型与语义时空图_完整理论整理与实现路线.md 未给路线规模口径）；
@@ -425,17 +430,48 @@ class PredictionEngine:
         return created
 
     def _dynamic_hit_threshold(self) -> Dict:
-        """D-006：动态阈值 max(BASE, mean-2σ)；样本 < MIN_SAMPLES 不触发反思"""
+        """D-006：动态阈值——**历史基线窗**的 mean−2·SE 去判定**近期窗**命中率。
+
+        issue #242（本件）：旧码 `threshold = max(BASE, mean - 2*std)` 后拿
+        `mean < threshold` 判定，而 `mean - 2*std ≤ mean` 恒成立 ⇒
+        `reflect` 与「`mean < BASE_HIT_RATE`」**逐位等价**（20000 组随机序列
+        0 次不一致），声明的「动态校准」在判定上不存在，动态项只会抬高返回的
+        `threshold` 数字（mean=1.0 时报 1.0）。
+        现拆两窗：`base = hist[:-RECENT_WINDOW]`（历史基线）、
+        `recent = hist[-RECENT_WINDOW:]`（近期）；阈值由基线均值的标准误给出
+        （`SE = σ_base/√|base|`），判定用近期窗均值——近期显著劣于历史才
+        `reflect=True`，动态项真正进入判定。
+
+        判据来源：模块自身声明 `prediction.py:14`「D-006 命中率动态校准
+        （MIN_SAMPLES=50 · 2.7.2 动态死区）」＋缺陷单 #242「期望行为/建议修法」
+        （两窗 + σ 下界）。`MIN_STD` 为**经验标定，追不到理论章节/引入 commit**
+        ——取缺陷单 #242 建议的「σ=0 时给 σ 一个下界」，避免全命中基线（σ=0）
+        报出 `threshold=1.0` 的退化读数；`RECENT_WINDOW=20` 同为经验标定
+        （未在理论稿中检索到窗口口径），取 MIN_SAMPLES 的可分辨子窗。
+
+        削掉的判别力（如实声明）：`"mean"` 字段仍是**全历史**均值（对外契约
+        不变），故 `reflect` 不再与 `mean < BASE_HIT_RATE` 等价——判定量是新增
+        的 `recent_mean`。旧的「只看全历史均值是否低于 0.40」这一粗口径不再
+        单独成立：全历史均值高、但近期窗崩塌时现在会 `reflect=True`（旧码
+        `False`）；反之全历史均值低、近期窗已恢复时不再误报。
+        """
         n = len(self._hit_history)
         if n < self.MIN_SAMPLES:
             return {"threshold": self.BASE_HIT_RATE, "samples": n,
                     "reflect": False, "note": "样本不足（<50），不触发反思"}
+        base = self._hit_history[:-self.RECENT_WINDOW]
+        recent = self._hit_history[-self.RECENT_WINDOW:]
+        nb = len(base)
         mean = sum(1 for h in self._hit_history if h) / n
-        var = sum(((1.0 if h else 0.0) - mean) ** 2 for h in self._hit_history) / n
-        std = var ** 0.5
-        threshold = max(self.BASE_HIT_RATE, mean - 2 * std)
+        mean_b = sum(1 for h in base if h) / nb
+        var_b = sum(((1.0 if h else 0.0) - mean_b) ** 2 for h in base) / nb
+        se = max(var_b ** 0.5, self.MIN_STD) / (nb ** 0.5)
+        threshold = max(self.BASE_HIT_RATE, mean_b - 2 * se)
+        mean_r = sum(1 for h in recent if h) / len(recent)
         return {"threshold": round(threshold, 4), "samples": n,
-                "reflect": mean < threshold, "mean": round(mean, 4)}
+                "reflect": mean_r < threshold, "mean": round(mean, 4),
+                "recent_mean": round(mean_r, 4),
+                "base_mean": round(mean_b, 4), "base_samples": nb}
 
     # ==================== 2D 语义地图（通道4 · 零依赖渲染） ====================
 

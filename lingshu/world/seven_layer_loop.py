@@ -63,6 +63,12 @@ class SevenLayerLoop:
         self.explorer = CuriosityExplorer(size=size, ground_level=ground_level,
                                           seed=seed, window=window, world=self.world)
         self.budget = max(1, int(budget))
+        # issue #233（B）：策略名白名单 fail-closed——未知策略在构造点即拒，
+        # 不再「拼错即静默轮询、审计照抄拼错的策略名」。
+        if policy not in CuriosityExplorer.POLICY_NAMES:
+            raise ValueError(
+                "未知 policy %r（可用：%s）——拒绝静默退化为轮询（issue #233）"
+                % (policy, "/".join(CuriosityExplorer.POLICY_NAMES)))
         self.policy = policy
         self.audit: List[Dict] = []
         self.hit_history: List[float] = []
@@ -163,13 +169,22 @@ class SevenLayerLoop:
 
         自举：若尚无观测，先做一轮初始全带宽感知（闭环启动需要认知种子——
         与单元测试/引擎调用方行为一致，保证闭环自增强度量可比）。
+
+        issue #233（A）：返回的 `"ticks"` 改为**真实推进的闭环 tick 数**
+        （`self.tick` 增量），且 `n <= 0` 不再偷跑 1 个 tick。旧码
+        `for _ in range(max(1, int(n)))` 配 `"ticks": int(n)`——`run(0)` 的
+        同一个返回 dict 里 `ticks=0` 而 `loop_tick=1`、`run(-5)` 报
+        `ticks=-5` 却已推进 1 个 tick（自相矛盾，且与 docstring「运行 n tick」
+        不符）。判据＝《PR 审核细则 v0.1》§三.4 判据外置：字段语义须由断言
+        钉住（`ticks` == 实际推进数）。
         """
         if not self.explorer.history:
             self.explorer.observe()
             self.explorer.run(n=self.explorer.window)
-        for _ in range(max(1, int(n))):
+        start = self.tick
+        for _ in range(max(0, int(n))):
             self.step()
-        return {"status": "ok", "ticks": int(n), "loop_tick": self.tick,
+        return {"status": "ok", "ticks": self.tick - start, "loop_tick": self.tick,
                 "overall_hit_rate": self._overall_hit_rate()}
 
     def _overall_hit_rate(self) -> Optional[float]:

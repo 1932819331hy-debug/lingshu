@@ -62,6 +62,7 @@ class SpacetimeConsistency:
     """
 
     def __init__(self, size: int = 24, ground_level: int = 1,
+                 seed: int = 42,
                  window: int = 20, hit_threshold: float = 0.5,
                  drift_rate: float = 0.7, drift_ticks: int = 5,
                  consistent_rate: float = 0.85,
@@ -69,7 +70,13 @@ class SpacetimeConsistency:
                  wander_bound_factor: float = 1.5,
                  wander_bound_pad: float = 0.2,
                  max_results: int = HISTORY_MAXLEN):
-        self.scene = SceneSimulator(size=size, ground_level=ground_level)
+        # #25：seed 轴透传（此前 __init__ 无 seed 参数，构造 SceneSimulator 时
+        # 丢弃种子 ⇒ 场景演化在结构上不可做 seed 维度消融）。缺省 42 = 与
+        # `scene_simulator.py` 的历史硬编码逐位一致，默认行为不变。本类自身
+        # 不产生随机数（随机性全部来自 `self.scene._rng`），故一个 seed 参数
+        # 透传即覆盖整条随机轴；影子预测（`_predict_next`）不消耗 RNG。
+        self.scene = SceneSimulator(size=size, ground_level=ground_level,
+                                    seed=seed)
         self.window = max(1, int(window))
         self.hit_threshold = float(hit_threshold)
         self.drift_rate = float(drift_rate)

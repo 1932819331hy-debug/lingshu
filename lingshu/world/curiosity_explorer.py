@@ -55,6 +55,9 @@ class CuriosityExplorer(WorldLearner):
       - exploration_log_view()：探索决策日志（可审计）
     """
 
+    # issue #233（B）：合法策略名白名单（`_select` 的唯一分派依据）
+    POLICY_NAMES = ("curiosity", "random", "round_robin")
+
     def __init__(self, size: int = 24, ground_level: int = 1, seed: int = 42,
                  window: int = 6, world=None):
         super().__init__(size=size, ground_level=ground_level, seed=seed,
@@ -79,9 +82,17 @@ class CuriosityExplorer(WorldLearner):
                 for eid, e in self.world.entities.items() if eid in eids}
 
     def observe(self, entities: Optional[List[str]] = None) -> Dict:
-        """观测实体子集（有限带宽）；entities=None 时观测全部（兼容基类/探针）。"""
+        """观测实体子集（有限带宽）；entities=None 时观测全部（兼容基类/探针）。
+
+        #148：全带宽路径同样登记 `last_observed`/`obs_counts`。旧码直接
+        `return super().observe()`，基类只更新 nodes/history，两份好奇簿记不变，
+        而下游把「无记录」当「刚看过」：`_prediction_bound` 的陈旧度放大恒为 0
+        （`k = ... if last else 0`）、`_info_gain` 的新奇度恒为 1.0
+        （`1/(1+obs_counts.get(eid,0))`）。全带宽 observe 是正常路径——
+        `probe()`、`compare_policies` 预热、`seven_layer_loop.run` 自举都走它。
+        """
         if entities is None:
-            entities = list(self.world.entities)
+            entities = list(self.world.entities.keys())
         self.tick += 1
         obs = self._sensor_read(entities)
         for eid, o in obs.items():
@@ -167,7 +178,19 @@ class CuriosityExplorer(WorldLearner):
         空世界（无实体，issue #55）：无候选可观测，直接返回空选择——
         旧码 `b = max(1, min(budget, 0)) = 1` 后 random 的 sample 与
         round_robin 的 `% n`（n=0）分别崩 ValueError / ZeroDivisionError。
+
+        issue #233（B）：策略名**白名单 fail-closed**。旧码只识别
+        `"curiosity"`/`"random"`，其余（含 `"curious"` 这类拼错）一律落进
+        轮询兜底且返回空 scores——审计面把**请求的**字符串照抄成「实际执行的
+        策略」，而 `ig_scores={}` 恰是「没走好奇分支」的痕迹却无任何字段标注
+        降级。现 `"round_robin"` 升为显式分支（此前只能靠兜底触达），未知策略
+        抛 ValueError，不再静默退化（判据＝《PR 审核细则 v0.1》§三.3 边界诚实：
+        不静默降级、不静默失败）。
         """
+        if policy not in self.POLICY_NAMES:
+            raise ValueError(
+                "未知 policy %r（可用：%s）——拒绝静默退化为轮询（issue #233）"
+                % (policy, "/".join(self.POLICY_NAMES)))
         eids = list(self.world.entities.keys())
         n = len(eids)
         if not n:
@@ -180,6 +203,7 @@ class CuriosityExplorer(WorldLearner):
         if policy == "random":
             chosen = self._rng.sample(eids, b)
             return chosen, {e: 0.0 for e in chosen}
+        # policy == "round_robin"（显式分支）
         chosen = [eids[(self._rr_index + i) % n] for i in range(b)]
         self._rr_index = (self._rr_index + b) % n
         return chosen, {}

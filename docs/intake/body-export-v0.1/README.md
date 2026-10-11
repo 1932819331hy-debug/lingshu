@@ -37,10 +37,15 @@ lingshu/
 - **core 保留 5 处「未随本导出」的扩展接口**（`vision` / `game_web.generate` / `game_web.semantics`）：
   运行期检测，缺失时返回 `BLINDSPOT` / `gen_not_ready`——这是上游**原生的公开形态设计**
   （源码注释原文：「没有则诚实声明 BLINDSPOT（公开仓库形态）」）。
-- **core 保留 10 个「未实现扩展点」名义**（`flywheel_engine` / `prediction_engine` /
+- **core 保留 12 个「未实现扩展点」名义**（`flywheel_engine` / `prediction_engine` /
   `self_cognition_engine` / `lifecycle_engine` / `attention_policy` / `entity_registry` /
-  `cognitive_orchestrator` / `blindspot_learning_loop` / `scene_reconstruction` / `semantic_space`）：
+  `cognitive_orchestrator` / `blindspot_learning_loop` / `scene_reconstruction` / `semantic_space` /
+  `body` / `pattern_separation`）：
   全部在函数内 `try/except` 降级，未装入即为空实现。
+  （#10 修：本表原列 10 项，与同目录 `_export_manifest.json` 的 core.py 条目 `externals`
+  ∪ `hidden_refs` 及 `core.py` 实有裸名导入不一致——漏列 `body` / `pattern_separation`。
+  判据来源：`lingshu/core/core.py` 的 AST 裸名导入面 ∪ 该清单条目；守卫
+  `tests/test_issue10_intake_registration_guard.py` 三方同源复算。）
 - **导出精修（一次性，逐条记录于 `_export_manifest.json`）**：
   ① `core.py` 内联 `_bigram_set` 三行工具函数（原借自私有侧 LLM 路由模块——白箱化）；
   ② `activation.py` 数据路径由本机字面量 → 环境变量 `LINGSHU_DATA_ROOT`（缺省 `data/`）；

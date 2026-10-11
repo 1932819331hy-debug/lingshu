@@ -528,8 +528,20 @@ class SimulationLoop:
         """认知图 contextual 层（tags 含 wm_simloop 的节点）→ 世界图实体先验。
 
         诚实边界：v1 只重建位置+类别先验（行为不重建，落 wander 缺省）。
+
+        #247（成立）：两处口径错误——
+          · 根来源：`os.environ.get("MDCG_ROOT", mdcg_root or "")` 让**环境变量
+            压过调用方显式传入的 `mdcg_root`**（显式参数被静默丢弃）；
+            改为「显式参数优先，缺省回落 MDCG_ROOT」，与 CLI `--root` 缺省读
+            `MDCG_ROOT`（tools/coggraph/export_coggraph.py:124）同口径。
+          · 上限：`limit` 只在外层文件循环检查，内层逐行 `seeded.append` 无
+            上限 ⇒ 单个文件可种入任意多条实体，`limit` 名存实亡。
+            改为内层循环同样以 `limit` 封顶。
+        判据来源：经验标定（本件 #247，仓内无「simloop 先验装载上限」的理论
+        章节；docs/theory/世界模型与语义时空图_完整理论整理与实现路线.md
+        未涉及）。削掉的判别力：无（两处均为「参数本应生效而未生效」）。
         """
-        root = os.environ.get("MDCG_ROOT", mdcg_root or "")
+        root = mdcg_root or os.environ.get("MDCG_ROOT", "")
         seeded = []
         ctx = os.path.join(root, "contextual")
         if root and os.path.isdir(ctx):
@@ -547,6 +559,8 @@ class SimulationLoop:
                 if "wm_simloop" not in fm.split("tags:")[-1][:200]:
                     continue
                 for line in text.splitlines():
+                    if len(seeded) >= limit:      # #247：内层同样封顶
+                        break
                     e = self.parse_seed_entity(line)
                     if e:
                         new_id = self.scene.add_entity(

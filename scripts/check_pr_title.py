@@ -16,6 +16,11 @@
     python -X utf8 scripts/check_pr_title.py --list-types     # 打印允许的 type
     python -X utf8 scripts/check_pr_title.py --selftest       # 自检（正负例）
 
+门禁通道（#361）：CI 标题门 `.github/workflows/pr-lint.yml` 的标题步同时设
+`PR_TITLE` 环境变量并把标题作位置参数。**标题是攻击者可控输入**，可能与
+`--help` / `-h` / `--list-types` / `--selftest` 同形——故本脚本约定：只要
+`PR_TITLE` 环境变量在场（门禁通道），位置参数一律按标题校验，绝不当开关短路。
+
 退出码：0 = 合规；1 = 不合规；2 = 用法错误（缺标题 / 参数非法）。
 """
 from __future__ import annotations
@@ -34,7 +39,7 @@ import sys
 #:     {test, perf, refactor, style, build, ci, revert}
 #:
 #: ⚠️ **设计者裁定点**：若只要「本仓实有」的窄口径，删掉来源②七个即可。
-#:    （见报告「落仓前须知」。）
+#:    （该裁定点在落仓提交 `d7c6b33` 的说明内；起草期的本地报告不随仓发布。）
 ALLOWED_TYPES = (
     # 来源① —— 本仓 git log 实有
     "init", "feat", "fix", "docs", "chore", "tools", "code", "theory",
@@ -149,6 +154,16 @@ def _selftest() -> int:
 
 def main(argv) -> int:
     args = list(argv[1:])
+    # 门禁通道优先（#361）：`.github/workflows/pr-lint.yml` 的标题步设 `PR_TITLE`
+    # 环境变量并把标题作位置参数传入。此时**位置参数就是标题**——即便它与
+    # `--help`/`-h`/`--list-types`/`--selftest` 同形，也必须按标题校验（⇒ 判负），
+    # 不得短路成 `print(__doc__); return 0`（旧行为：标题为这些字串即退出码 0，
+    # 门禁被静默绕过）。
+    # 判据来源：经验标定（本件 #361）——无理论章节规定门禁的标题通道口径。
+    # 削掉的判别力：无（`--help` 等仍可在**无** PR_TITLE 的交互场景下按开关使用，
+    # 只是门禁通道不再把开关形输入当开关）。
+    if os.environ.get("PR_TITLE") is not None:
+        return check(args[0] if args else os.environ["PR_TITLE"])
     if not args:
         return check(os.environ.get("PR_TITLE"))
     if args[0] in ("-h", "--help"):

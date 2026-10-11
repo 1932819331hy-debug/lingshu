@@ -798,15 +798,23 @@ def fit(measured, ids):
     #   **切点口径**：极值中点与中位数中点**都算**。R278 实测（量化剖面）：圆类极值（0.289）**高于**非圆类最小值
     #   （0.115）⇒ 极值中点（0.202）落在六边形（0.115~0.136）**上方**、门不生效（3 个六边形仍读成圆）。
     #   中位数中点不受个别噪声件拉动 ⇒ 取它作实际门，并把极值间隔与两个切点都报出（纪律 ④：口径并列）。
-    #   加计数规则的面积门：**只在标定集上**按计数精确匹配率选（选型键说得出它量的是什么）
+    #   加计数规则的面积门：**只在标定集上**按计数精确匹配率选（选型键说得出它量的是什么）。
+    #   `objects_of(...)` 的实参只含 `(img, tol, d)`、**不含 `fr`** ⇒ 它是这个选格循环的
+    #   **循环不变量**：原写法把它放在 `for fr in EXTRA_COMP_GRID` 内层，同一张图被
+    #   重复测量 `len(EXTRA_COMP_GRID)` 次（标定集 37 件 ⇒ 148 次前景/聚类/补洞，而非 37 次），
+    #   代价 ×4 而读数一字不变。提到 `fr` 循环外：逐图测一次，四个候选只复用同一份簇列表。
+    _cl_by_id = {}
+    for it in measured["items"]:
+        if it["id"] not in ids or not it["truth"]:
+            continue
+        _cl_by_id[it["id"]] = objects_of(it["img"], tol=TOL, d=measured.get("d", 4))[0]
     cgrid = {}
     for fr in EXTRA_COMP_GRID:
         ok = 0
         for it in measured["items"]:
-            if it["id"] not in ids or not it["truth"]:
+            if it["id"] not in _cl_by_id:
                 continue
-            cl = [t for t in objects_of(it["img"], tol=TOL, d=measured.get("d", 4))[0]]
-            ok += int(count_objects(cl, frac=fr) == it["truth"]["n"])
+            ok += int(count_objects(_cl_by_id[it["id"]], frac=fr) == it["truth"]["n"])
         cgrid[str(fr)] = ok
     frac_pick = max(EXTRA_COMP_GRID, key=lambda f: cgrid[str(f)])
     cut_prom_ext = round((max(prom_c) + min(prom_n)) / 2, 6) if (prom_c and prom_n) else None
@@ -1121,8 +1129,16 @@ def evaluate(measured, fit_, ids, tag="", loo=False):
                             f"/{'+'.join(sorted(t['cells'])) if t['cells'] else '?'}"
                             f" 读 {p['shape']}/{p['color']}/{p['pattern']}/{p['cell']}"
                             f"{' 触边' if p['clipped'] else ''}")
-    maj_s = Counter(it["shape"] for it in items).most_common(1)[0][0]
-    maj_c = Counter(it["color"] for it in items).most_common(1)[0][0]
+    #   空集保护：`ids` 与 `measured["items"]` 无交集时 `items` 为空 ⇒ `Counter(...).most_common(1)`
+    #   返回 `[]`，裸 `[0][0]` 抛 `IndexError: list index out of range`（空标定/空留出集可达：
+    #   `main` 对每个 tag 都调本函数，`split_ids` 在件数极少时可给出空的一半）。
+    #   基线在无样本时**无定义** ⇒ 如实报 `None`，与同函数既有口径一致
+    #   （`:1135-1136 maj_p = ...most_common(1); maj_ = maj_p[0][0] if maj_p else None`、
+    #    `:1140/:1154 maj_n` 同款写法——纪律 ④ 口径并列）。
+    maj_s = Counter(it["shape"] for it in items).most_common(1)
+    maj_c = Counter(it["color"] for it in items).most_common(1)
+    maj_s = maj_s[0][0] if maj_s else None
+    maj_c = maj_c[0][0] if maj_c else None
     #   **基线口径**：花纹/数量的真值按**物体**加权（准确率是逐物体算的，按「件」算基线不可比）：
     #   某件的物体数 = 真值数量 n（有 prompt 时），故 pattern 基线 = Σ(n·1[该件花纹=多数类]) / Σn
     tp_w = [("plain" if it["truth"]["pattern"] == "plain" else "patterned", it["truth"]["n"])

@@ -66,7 +66,9 @@ DAY2 = DAY1 + 86400
 
 
 def day_label(ts):
-    return time.strftime("%Y-%m-%d", time.localtime(ts))
+    # issue #360：R4 分日改用 UTC 日历日（derive_edges.py 的 gmtime）⇒ 夹具按同一口径
+    # 取标签，否则本件在非 UTC 机器上会因日界差异而误红。
+    return time.strftime("%Y-%m-%d", time.gmtime(ts))
 
 
 def a_group(tmp):

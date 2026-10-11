@@ -28,8 +28,13 @@ import sys
 import math
 import numpy as np
 
-sys.path.insert(0, ".")
-sys.path.insert(0, "experiments")
+#   #108 修：原先在此处 `sys.path.insert(0, ".")` / `sys.path.insert(0, "experiments")`
+#   ——**import 期把相对路径写进 sys.path**。相对条目的解析目标由**判定时的 cwd** 决定
+#   （与 `lingshu/_pathguard.py` 的「相对条目非受控面」同一判据，见其 `_is_relative_entry`
+#   与 issue #288·D-2 快照语义），且 `lingshu/__init__.py` 在包首次 import 时已把 cwd/空串
+#   条目消除 ⇒ 这两行在包内 import 形态下等于**把刚被消除的解析面又插回来**（实测：import
+#   本模块后 sys.path 新增 `['experiments', '.', 'experiments', '.']`）。本模块的 import 全是
+#   包内相对 import（`from . import ...`），不依赖这两个条目；`experiments/` 目录在本仓不存在。
 from . import hexgen_c1_real as C
 from . import hexgen_multi_seed as M
 from .hex_composite import _COLORS_RGB, _paint        # 只读复用（既有确定性画笔）
@@ -852,7 +857,16 @@ def legal_win(cell, shape, r, size=SIZE, zone_calib=None):
             lo = 0 if k == 0 else int(math.ceil(float(cuts[k - 1]) * size))
             hi = size - 1 if k == 2 else int(math.ceil(float(cuts[k]) * size)) - 1
             return lo, hi
-        return int(k * size / 3.0), int((k + 1) * size / 3.0) - 1
+        #   #354 修：无标定分支原先写 `int(k * size / 3.0)` / `int((k + 1) * size / 3.0) - 1`
+        #   ——**int 截断**（向零取整）而非 `ceil` ⇒ 与原像差 1px。判据来源：本函数 docstring
+        #   :848-849 明写「判据＝用**切点原像**（行 qy 的合法 `y ∈ [⌈cuts[qy-1]·size⌉,
+        #   ⌈cuts[qy]·size⌉ − 1]`）」＋上方有标定分支 :857-858 就是同一式的 `math.ceil`。
+        #   无标定的缺省切点即精确三等分 `[1/3, 2/3]` ⇒ 该分支必须与「cuts=[1/3,2/3]」逐位
+        #   相同（实测缺陷形态：无标定 r1 窗口 (170,340,54,169)，而有标定同切点 (171,341,54,170)；
+        #   `_cell_of_pt` 无标定分支 `int(v/size*3)` 的原像下界是 `⌈size/3⌉=171` ⇒ 缺陷窗口把
+        #   **判决落在相邻格的像素** `x/y=170` 包了进来，违反「约束面＝判决量原像」）。
+        return (int(math.ceil(k * size / 3.0)),
+                int(math.ceil((k + 1) * size / 3.0)) - 1)
 
     x0, x1 = preimg(cc, qx)
     y0, y1 = preimg(rc, qy)

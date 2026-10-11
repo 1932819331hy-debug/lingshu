@@ -200,11 +200,28 @@ class VoxelWorld:
         return self._trails.get(entity_id, [])
 
     def occupancy_at(self, t: int) -> List[Dict]:
-        """t 时刻的 4D 时空占用（该时刻所有实体的空间位置）。"""
+        """t 时刻的 4D 时空占用（该时刻所有实体的空间位置）。
+
+        #134：按轨迹点内的 `t` 字段查找，而非**列表下标**。旧实现
+        `trail[t]` 把「第 t 个记录点」当成「t 时刻」——于是晚生成的实体
+        出现在它尚不存在的时刻（`spawn_entity` 在 `_step=3` 时首个点 t=3，
+        旧码却让它出现在 t=0），而在场时刻反而缺席；`move_entity` 追加点
+        却不推进 `_step`（同一 t 多个点），下标口径进一步错位。
+        同一 t 有多个点时取**最后一个**（该时刻的最终状态）。
+        判据来源：triage #134（判定成立）——判据即「返回的每一项
+        `o["t"] == t`，且 t 时刻在场的实体都出现」。
+        削掉的判别力（如实声明）：`MAX_TRAIL` 裁剪后更早时刻的点已丢弃，
+        此时按 t 查不到即返回缺席（旧下标口径会返回一个张冠李戴的错位点，
+        属更坏的行为）。
+        """
         occ = []
         for eid, trail in self._trails.items():
-            if t < len(trail):
-                occ.append({"entity": eid, **trail[t]})
+            point = None
+            for p in trail:              # 同 t 多点 ⇒ 后者覆盖（最终状态）
+                if p.get("t") == t:
+                    point = p
+            if point is not None:
+                occ.append({"entity": eid, **point})
         return occ
 
     def world_state(self) -> Dict:
