@@ -46,6 +46,8 @@ except ImportError:  # 直跑 fallback（裸名互导）
 # ② 白名单组件另由本守卫收口（含排除脚本目录）；③ 仍不覆盖：进程已被预置投毒
 # （sys.modules 预置 / 进程内 sys.path.insert）、逃生口 LINGSHU_ALLOW_CWD_IMPORTS 被
 # 显式打开的情形。
+from . import contradiction as _contradiction
+
 from .component_resolver import (
     COMPONENT_NAMES as _COMPONENT_NAMES,
     discovery_report as _component_discovery_report,
@@ -81,6 +83,10 @@ def verify_designer(designer_key) -> bool:
     if not expected or not designer_key:
         return False
     return _hmac.compare_digest(str(designer_key), str(expected))
+
+
+# main 侧 #29② 判据的原因名 → 矛盾感知（contradiction.py）的原因名，供 conflict:{reason} 标签统一口径
+_MAIN_DIVERGENCE_REASON = {"negation": "polarity", "numeric": "number"}
 
 
 # =============================================================================
@@ -675,6 +681,17 @@ class LayeredStore:
         #: #267 逐行容错计数（每次装载面调用刷新；见 `_tolerant_nodes`）。
         self.last_skipped_rows: List[str] = []
 
+        # 检索候选生成：FTS5 二元组倒排 + BM25（LINGSHU_FTS=1 启用，默认关闭；Refs #35）
+        self._fts = None
+        try:
+            from lingshu.core import retrieval as _retrieval
+            if _retrieval.enabled():
+                self._fts = _retrieval.FTSIndex.attach(self)
+            else:
+                _retrieval.FTSIndex.detach(self)
+        except Exception:
+            self._fts = None
+
     def _connect(self, dsn: str):
         """建立本线程的连接并登记，返回登记用的连接槽（`_ThreadConn`）。
 
@@ -1013,14 +1030,33 @@ class LayeredStore:
             ''', (delta, time.time(), node_id))
             self.conn.commit()
 
-    def increment_access(self, node_id: str):
-        """访问计数+1（尽力而为：外部写锁持有时立即放弃，不阻塞检索主流程）"""
+    @staticmethod
+    def _retrieval_touches_recency() -> bool:
+        """检索命中是否刷新 last_access。
+
+        默认 True（与改前一致）。`LINGSHU_RETRIEVAL_NO_TOUCH=1` 时为 False：检索只计
+        access_count，不再把 last_access 改成「现在」。原因：recall 的近因分量
+        （0.2·1/(1+天数)）读的正是 last_access，而 search_content 每返回一个节点就
+        刷新它 ⇒「被搜到一次 → 下次更容易被搜到」的自增强回路，与该记忆是否被
+        真正使用、是否正确无关。关闭后 last_access 只由写入、M5 重复观测、置信度
+        复核、巩固复述等**真实强化**事件刷新。"""
+        return os.environ.get("LINGSHU_RETRIEVAL_NO_TOUCH", "").strip() != "1"
+
+    def increment_access(self, node_id: str, touch: bool = True):
+        """访问计数+1（尽力而为：外部写锁持有时立即放弃，不阻塞检索主流程）。
+
+        touch=False：只计数、不刷新 last_access（检索路径在开关打开时使用）。"""
         try:
             obs = sqlite3.connect(self.db_path, timeout=0)
             try:
-                obs.execute(
-                    'UPDATE nodes SET access_count = access_count + 1,'
-                    ' last_access = ? WHERE id=?', (time.time(), node_id))
+                if touch:
+                    obs.execute(
+                        'UPDATE nodes SET access_count = access_count + 1,'
+                        ' last_access = ? WHERE id=?', (time.time(), node_id))
+                else:
+                    obs.execute(
+                        'UPDATE nodes SET access_count = access_count + 1 WHERE id=?',
+                        (node_id,))
                 obs.commit()
             finally:
                 obs.close()
@@ -1578,6 +1614,12 @@ class LayeredStore:
         if not q:
             return []
         terms = self.expand_query_terms(q)
+        if getattr(self, "_fts", None) is not None:
+            # #201：与 LIKE 路径同口径——未指定层时默认排除自我层
+            fts_layers = layers or [l for l in MemoryLayer if l != MemoryLayer.SELF]
+            fts_hits = self._search_content_fts(q, terms, fts_layers, limit)
+            if fts_hits is not None:
+                return fts_hits
         conds, params = [], []
         if layers:
             ph = ",".join("?" for _ in layers)
@@ -1626,9 +1668,100 @@ class LayeredStore:
         # 判据来源：经验标定（#29 修复轮；理论章节追不到）。
         scored.sort(key=lambda x: (-x[1], -x[0].importance, -x[0].confidence))
         results = scored[:limit]
+        touch = self._retrieval_touches_recency()
         for node, _ in results:
-            self.increment_access(node.id)
+            self.increment_access(node.id, touch=touch)
         return results
+
+    def _search_content_fts(self, q: str, terms, layers, limit: int):
+        """FTS5+BM25 候选生成（retrieval.py）。返回 None 表示交回原 LIKE 路径。
+
+        候选按 BM25 从全库取（不再受插入顺序与 LIMIT 300/500 截断影响）；
+        分数 = max(原 Jaccard+tag 加成, 0.9·s/(s+K))，≥0.95 判重语义只来自 Jaccard。"""
+        from lingshu.core import retrieval as _rt
+        FTSIndex = _rt.FTSIndex
+        ctx = _rt.context_enabled()
+        qterms = [q] + [t for t in terms if t != q]
+        try:
+            if ctx:  # 语境扩展：查询侧去掉问句功能二元组
+                qterms = _rt.content_grams(qterms)
+            cands = self._fts.candidates(qterms, layers, k=max(int(limit) * 5, 100))
+        except sqlite3.Error:
+            return None
+        if cands is None:
+            return None
+        scored = []
+        skipped = []
+        for row, bm in cands:
+            # #267：与 LIKE 路径同口径逐行容错——坏行只跳过该行并记账，不毒化整条检索链
+            got, bad = self._tolerant_nodes([row])
+            if bad:
+                skipped.extend(bad)
+                continue
+            node = got[0]
+            sim = self.char_bigram_jaccard(q, node.content)
+            tag_bonus = 0.05 if any(t in q or q in t for t in node.tags) else 0.0
+            scored.append((node, FTSIndex.blend(min(1.0, sim + tag_bonus), bm), bm))
+        # 逐字命中闸门（与原 LIKE 路径语义对齐）：
+        #   · 查询原文逐字出现在某节点的 content / tags 中时，只返回原路径 LIKE 预筛会命中的
+        #     节点——即查询原文或其同义词展开项（terms）任一逐字出现者——逐字含原文者排最前。
+        #     同义展开不可省：上游 #44 的 similar 建边要在逐字命中的新节点之外找到经同义词
+        #     （如「记忆」→「记录」）命中的旧节点（tests/test_longterm_gate_p1_defects.py）。
+        #   · 查询原文无逐字命中（自然语言问句、带空格的关键词串）时不设闸门，交 BM25 部分
+        #     匹配——这正是原路径退化为「扫前 500 行」的情形。
+        ql = q.lower()
+        lterms = [t.lower() for t in terms if t]
+
+        def _has(node, ts):
+            c = (node.content or "").lower()
+            tg = [str(t).lower() for t in (node.tags or [])]
+            return any(t in c or any(t in x for x in tg) for t in ts)
+        has_verbatim = any(_has(x[0], [ql]) for x in scored)
+        if ctx and scored and not has_verbatim:
+            scored = self._fts_context_smooth(q, scored, layers)
+        if has_verbatim:
+            scored = [x for x in scored if _has(x[0], lterms)]
+        # 同分依次按 BM25、重要性、置信度（#29④：与 LIKE 路径同口径，低置信不排在高置信前）
+        scored.sort(key=lambda x: (not _has(x[0], [ql]), -x[1], -x[2], -x[0].importance,
+                                   -x[0].confidence))
+        self.last_skipped_rows = skipped
+        results = [(n, s) for n, s, _ in scored[:limit]]
+        touch = self._retrieval_touches_recency()
+        for node, _ in results:
+            self.increment_access(node.id, touch=touch)
+        return results
+
+    def _fts_context_smooth(self, q: str, scored, layers):
+        """时序邻接平滑：节点的 BM25 加上其前/后一条（同会话窗口内）BM25 的 γ 倍取大者。
+
+        证据常落在命中段落的前后条（对话的上一句、叙述的下一段），它们与问句本身没有共享
+        字面。只在自然语言问句路径（无逐字命中）启用，逐字命中语义不变。"""
+        from lingshu.core import retrieval as _rt
+        bm = {n.id: b for n, _, b in scored}
+        node_of = {n.id: n for n, _, _ in scored}
+        seeds = [n.id for n, _, b in sorted(scored, key=lambda x: -x[2])[:_rt.NEIGHBOR_SEEDS]]
+        bonus: Dict[str, float] = {}
+        try:
+            pairs = self._fts.temporal_neighbors(seeds, layers)
+        except sqlite3.Error:
+            return scored
+        for seed, row in pairs:
+            add = _rt.NEIGHBOR_GAMMA * bm[seed]
+            if add <= 0:
+                continue
+            got, bad = self._tolerant_nodes([row])  # #267 逐行容错
+            if bad:
+                continue
+            nb = got[0]
+            node_of.setdefault(nb.id, nb)
+            bonus[nb.id] = max(bonus.get(nb.id, 0.0), add)
+        out = []
+        for nid, node in node_of.items():
+            b = bm.get(nid, 0.0) + bonus.get(nid, 0.0)
+            sim = self.char_bigram_jaccard(q, node.content)
+            tag_bonus = 0.05 if any(t in q or q in t for t in node.tags) else 0.0
+            out.append((node, _rt.FTSIndex.blend(min(1.0, sim + tag_bonus), b), b))
+        return out
 
     @staticmethod
     def _bigrams(s: str) -> set:
@@ -1646,7 +1779,7 @@ class LayeredStore:
             node = self.get_node(nid)
             if node:
                 nodes.append(node)
-                self.increment_access(nid)
+                self.increment_access(nid, touch=self._retrieval_touches_recency())
         return nodes
 
     @_transactional
@@ -2531,6 +2664,12 @@ class SpacetimeMemoryEngine:
         self._context_max = self._load_context_max()  # M4 情境层 FIFO 上限（参照 AEIS）
                                                       # #246：跨进程持久化（见 _load_context_max）
         self._embedding_provider = None    # M1 语义检索提供者（duck-typed 注入，D-005）
+        self._evidence = None              # 证据账本（默认关闭；见 enable_evidence_ledger）
+        if os.environ.get("LINGSHU_EVIDENCE_LEDGER") == "1":
+            self.enable_evidence_ledger()
+        self._tms = None                   # 真值维护（默认关闭；见 enable_tms）
+        if os.environ.get("LINGSHU_TMS") == "1":
+            self.enable_tms()
         self._setup_v13()
         # ---- v1.5 状态（A-1~A-5） ----
         self._verifier_config = {"dedup_static": 0.85, "deviation_threshold": 0.3}
@@ -2785,9 +2924,15 @@ class SpacetimeMemoryEngine:
                        importance: float = 0.5,
                        tags: List[str] = None,
                        entities: List[str] = None,
-                       skip_dedup: bool = False) -> STNode:
+                       skip_dedup: bool = False,
+                       source: str = None,
+                       self_generated: bool = False) -> STNode:
         """
         添加一条感知（自动进入知识层）
+
+        source / self_generated（证据账本，默认关闭时忽略）：本次写入的来源与
+        是否为系统自产。启用 `enable_evidence_ledger()` 后，写入与去重命中都记一条
+        证据，置信度由账本推导——同源重复不增信，自产内容不计分（见 core/evidence.py）。
 
         skip_dedup（v1.26c）：跳过 M5 去重——主动沉淀类写入（剧情/快照/
         里程碑）需要独立节点身份，不能被合并进相似的感知节点（否则
@@ -2827,6 +2972,10 @@ class SpacetimeMemoryEngine:
         # #29②/#142：先判实质分歧——否定/数值变更的**更正**不是重复，必须另立节点
         # 并落账冲突（旧实现把它吞进原节点还给原命题增信）。
         divergent_with = ""
+        # 矛盾感知（LINGSHU_CONTRADICTION=1，默认关闭；Refs #142）在上面 #29② 判据之上**追加**：
+        # 旗标关闭时只跑 `_assertion_divergence`，与 main 逐位一致；开启时 main 判据没判出分歧
+        # 才再跑更宽的 `contradiction.conflict`（差异片段上的极性 / 含中文数字的数值 / 反义）。
+        conflict_reason = ""
         if not skip_dedup and isinstance(content, str) and content.strip():
             threshold = self._effective_dedup_threshold()
             candidates = self.store.query_nodes(layer=MemoryLayer.KNOWLEDGE, limit=200)
@@ -2840,8 +2989,16 @@ class SpacetimeMemoryEngine:
                     best_sim, best = sim, n
             if best and best_sim >= threshold:
                 divergence = self._assertion_divergence(content, best.content)
+                if _contradiction.enabled():
+                    conflict_reason = (_contradiction.conflict(content, best.content)
+                                       or _MAIN_DIVERGENCE_REASON.get(divergence, ""))
+                    divergence = divergence or conflict_reason
                 if not divergence:
                     self.store.increment_access(best.id)
+                    if getattr(self, "_evidence", None) is not None:
+                        # 证据账本开启时记一条证据（同源重复不增信由账本保证，见 core/evidence.py）
+                        self._evidence.record(best.id, source, self_generated=self_generated,
+                                              note="M5 去重命中")
                     self.store.tag_node(best.id, "duplicate")
                     return best
                 divergent_with = best.id
@@ -2876,7 +3033,74 @@ class SpacetimeMemoryEngine:
         if entities:
             for eid in entities:
                 self.store.tag_node(node.id, f"ent:{eid}")
+        if getattr(self, "_evidence", None) is not None:
+            self._evidence.record(node.id, source, self_generated=self_generated,
+                                  note="首次写入")
+            node.confidence = self.store.get_node(node.id).confidence
+        if divergent_with and conflict_reason:
+            # 矛盾感知开启时，在同一 register_conflict 通道之上追加原因标签
+            for nid in (node.id, divergent_with):
+                self.store.tag_node(nid, f"conflict:{conflict_reason}")
         return node
+
+    # ==================== 证据账本（置信度由证据推导 · 默认关闭） ====================
+
+    def enable_evidence_ledger(self):
+        """启用证据账本：此后 add_perception 的增信改为记证据、置信度由账本推导。"""
+        if getattr(self, "_evidence", None) is None:
+            from .evidence import EvidenceLedger
+            self._evidence = EvidenceLedger(self.store)
+        return self._evidence
+
+    def add_evidence(self, node_id: str, source: str, supports: bool = True,
+                     weight: float = 1.0, note: str = "",
+                     self_generated: bool = False) -> Dict:
+        """为节点记一条外部证据（supports=False 即反证），返回更新后的评估。"""
+        from .evidence import SUPPORT, CONTRADICT
+        ledger = self.enable_evidence_ledger()
+        ledger.record(node_id, source, SUPPORT if supports else CONTRADICT,
+                      weight=weight, self_generated=self_generated, note=note)
+        return ledger.assess(node_id)
+
+    def evidence_report(self, node_id: str) -> Dict:
+        """只读：节点的证据评估（置信度、状态、支持/反驳来源）；启用 TMS 时附依据与撤回信息。"""
+        if getattr(self, "_tms", None) is not None:
+            return self._tms.assess(node_id)
+        return self.enable_evidence_ledger().assess(node_id)
+
+    # ==================== 真值维护（依赖撤回 · 默认关闭） ====================
+
+    def enable_tms(self):
+        """启用真值维护（隐含启用证据账本）：结论的置信度不高于其最强依据中最弱的前提；
+        前提被反证推翻后，下游结论自动撤回为「前提已被推翻」（见 core/tms.py）。"""
+        if getattr(self, "_tms", None) is None:
+            from .tms import TruthMaintenance
+            ledger = self.enable_evidence_ledger()
+            self._tms = TruthMaintenance(self.store, ledger)
+            ledger.on_change = lambda nid: self._tms.propagate([nid])
+        return self._tms
+
+    def add_justification(self, conclusion_id: str, premise_ids: List[str],
+                          source: str = None) -> str:
+        """登记一条依据：conclusion ← premises（合取）。同一结论可登记多条（析取）。"""
+        return self.enable_tms().add_justification(conclusion_id, premise_ids, source)
+
+    def recall_with_evidence(self, context_content: str, limit: int = 10,
+                             include_refuted: bool = False) -> List[Dict]:
+        """召回并附上证据评估，供宿主决定「当事实说 / 带保留说 / 不说」。
+
+        与 recall() 同序；已被反驳的条目默认剔除（include_refuted=True 保留）。
+        """
+        ledger = self.enable_evidence_ledger()
+        tms = getattr(self, "_tms", None)
+        out = []
+        for node, score in self.recall(context_content, limit=limit):
+            ev = tms.assess(node.id) if tms is not None else ledger.assess(node.id)
+            # 启用 TMS 时，「前提已被推翻」与「已被反驳」同等对待（默认不进结果）
+            if ev["status"] in ("refuted", "undermined") and not include_refuted:
+                continue
+            out.append({"node": node, "score": score, "evidence": ev})
+        return out
 
     # ==================== 锚点层操作 ====================
 
@@ -3173,6 +3397,38 @@ class SpacetimeMemoryEngine:
         """依赖注入（D-005）：provider.encode(text)->List[float]；provider.search(query,limit)->List[str]"""
         self._embedding_provider = provider
 
+    def _with_opposites(self, scored, limit: int):
+        """矛盾两侧同时呈现（LINGSHU_CONTRADICTION=1）：top-limit 中任一节点若有 OPPOSITE 边，
+        把对侧插到它紧后面（分数 = 宿主分数 - 1e-6）；对侧已在榜内则不动，超出 limit
+        的从队尾挤出。只读边，不改其余节点的分数与相对次序。"""
+        top = list(scored[:limit])
+        ids = {n.id for n, _ in top}
+        out, paired = [], set()
+        for node, sc in top:
+            out.append((node, sc))
+            for e in (self.store.get_outgoing_edges(node.id) +
+                      self.store.get_incoming_edges(node.id)):
+                if e.relation_type != EdgeType.OPPOSITE:
+                    continue
+                oid = e.target_id if e.source_id == node.id else e.source_id
+                if oid in ids:
+                    continue
+                other = self.store.get_node(oid)
+                if other is None:
+                    continue
+                ids.add(oid)
+                paired.update((node.id, oid))
+                out.append((other, sc - 1e-6))
+        # 回到 limit 条：先从队尾挤掉不成对的节点；矛盾对不拆开（极端情况下可略超 limit）
+        while len(out) > limit:
+            for k in range(len(out) - 1, -1, -1):
+                if out[k][0].id not in paired:
+                    del out[k]
+                    break
+            else:
+                break
+        return out
+
     def recall(self, context_content: str, limit: int = 10) -> List[Tuple[STNode, float]]:
         """组合联想（内容相似 0.5 + 重要性 0.3 + 近因 0.2）——记忆参与推理（1.1.1）
 
@@ -3190,6 +3446,9 @@ class SpacetimeMemoryEngine:
             score = 0.5 * sim + 0.3 * (node.importance or 0.0) + 0.2 * recency
             scored.append((node, score))
         scored.sort(key=lambda x: (-x[1], -x[0].confidence))
+        if _contradiction.enabled():
+            scored = self._with_opposites(scored, limit)
+            limit = max(limit, len(scored))  # 矛盾对不拆开（见 _with_opposites）
         self._note_reuse([n.id for n, _ in scored[:limit]])
         # v1.12 P0-5a：模式成员召回加权
         if self._self_cognition is not None:
@@ -4889,7 +5148,8 @@ class SpacetimeMemoryEngine:
                     f"偏差={report.get('verification', {}).get('deviation')} | "
                     f"可逆性={verdict.get('reversibility')} | "
                     f"深度={report.get('depth')}")
-            self.add_perception(text, importance=0.6, tags=["reflection_chain"])
+            self.add_perception(text, importance=0.6, tags=["reflection_chain"],
+                                source="self:reflection", self_generated=True)
             self._last_reflection_chain = text
         except Exception:
             pass
