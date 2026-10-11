@@ -278,6 +278,91 @@ def _flat_semantic_to_nested(flat) -> Dict:
     return out
 
 
+#: `check_escalation` 数值界解析支持的关系算符（先长后短，避免 `>` 吃掉 `>=`）。
+_ESC_VALUE_OPS = (">=", "<=", "==", "!=", ">", "<")
+
+
+def _find_standalone_word(text: str, word: str) -> int:
+    """返回 `word` 在 `text` 中作为**独立词**（前后非标识符字符）出现的下标，无则 -1。
+
+    「独立」判据：前一位与后一位都不是 `[A-Za-z0-9_]`——故 `value` 不会命中
+    `values` / `my_value`（#57 的 condition 解析须只认参数名本体）。
+    """
+    start = 0
+    while True:
+        i = text.find(word, start)
+        if i < 0:
+            return -1
+        before = text[i - 1] if i > 0 else ""
+        after = text[i + len(word)] if i + len(word) < len(text) else ""
+        if not (before.isalnum() or before == "_") and \
+                not (after.isalnum() or after == "_"):
+            return i
+        start = i + 1
+
+
+def _parse_escalation_value_bound(condition: str):
+    """从升级点 `condition` 文本解析 `value <op> <number>` 数值界（#57）。
+
+    返回 `(op, threshold)`（op ∈ `_ESC_VALUE_OPS`，threshold 为 float）；解析不出
+    返回 `None`（调用方回落旧行为）。
+
+    ★**手写解析器**，不使用 `eval()`/`exec()`（任务书铁律 9）。只认**左操作数显式
+    为参数名 `value`** 的比较——`ESC-004` 的 `"...deviation>0.3"` 左操作数是
+    `deviation` 而非 `value`，**不**被判为数值界（否则会给既有 token 用法
+    `check_escalation("deviation")` 引入「无值即不匹配」的回归）。
+    允许前后有其它文字（如 `"value > 0.9 时上报"`）。
+    """
+    if not condition:
+        return None
+    idx = _find_standalone_word(condition, "value")
+    if idx < 0:
+        return None
+    i = idx + len("value")
+    while i < len(condition) and condition[i] in " \t":
+        i += 1
+    op = None
+    for cand in _ESC_VALUE_OPS:
+        if condition.startswith(cand, i):
+            op = cand
+            break
+    if op is None:
+        return None
+    i += len(op)
+    while i < len(condition) and condition[i] in " \t":
+        i += 1
+    j = i
+    if j < len(condition) and condition[j] in "+-":
+        j += 1
+    digits_start = j
+    while j < len(condition) and (condition[j].isdigit() or condition[j] == "."):
+        j += 1
+    if j == digits_start:
+        return None
+    try:
+        threshold = float(condition[i:j])
+    except ValueError:
+        return None
+    return (op, threshold)
+
+
+def _eval_escalation_value_bound(op: str, threshold: float, value) -> bool:
+    """按解析出的算符比较 `value` 与 `threshold`（#57 求值侧，纯函数）。"""
+    if op == ">":
+        return value > threshold
+    if op == ">=":
+        return value >= threshold
+    if op == "<":
+        return value < threshold
+    if op == "<=":
+        return value <= threshold
+    if op == "==":
+        return value == threshold
+    if op == "!=":
+        return value != threshold
+    return False
+
+
 # =============================================================================
 # 节点与边类型
 # =============================================================================
@@ -7157,18 +7242,131 @@ class SpacetimeMemoryEngine:
         self._note_reuse([n.id for n, _ in scored[:limit]])
         return scored[:limit]
 
+    #: `prepare_shared_sync` / `apply_shared_sync` 载荷的字段清单（单一真源）——
+    #: 覆盖 `STNode` 重建所需全部字段（含 `condition_space`/`tags`/`confidence`/
+    #: `state_attributes`），故载荷**可无损回放**（不截断 content、不丢层标识）。
+    SHARED_SYNC_FIELDS = ("id", "content", "modality", "spatial_coordinates",
+                          "temporal_coordinate", "condition_space", "importance",
+                          "confidence", "layer", "tags", "semantic_coordinates",
+                          "state_attributes", "entity_id")
+
     def prepare_shared_sync(self) -> Dict:
-        """D-005 蜂群分层同步：仅语义化结构数据入共享层；原始帧引用滞留本地缓冲"""
+        """D-005 蜂群分层同步：导出**共享层**（锚点层 + 结构层）载荷供跨实例同步。
+
+        ★#165（本件）修正两处：
+        ① **方向改正**——旧实现 `SELECT ... WHERE layer='knowledge'` 导出的是
+           **本地知识层**，而分层章程（`LayeredStore` 类头 docstring：
+           「共享层（锚点层、结构层）：跨实例同步，不可遗忘；本地层（知识层、
+           情境层、自我层）：实例独立」）要求同步的是**共享层**。实测旧读数
+           `payload layers: {'knowledge': 1}`，而共享层里确有 structure=1/anchor=1
+           **一条都没进载荷**。现改为导出 `layer IN ('anchor','structure')`
+           （即 `LayeredStore.SHARED_LAYERS`）。
+        ② **可无损回放**——旧载荷只有 7 个字段且 `content` 被截到 100 字符、
+           无 `layer`/`confidence`/`condition_space`/`tags`/`state_attributes` ⇒
+           接收端无法原样重建节点。现按 `SHARED_SYNC_FIELDS` 导出**全字段**
+           （含完整 content），接收端 `apply_shared_sync` 可无损重建。
+        判据来源：`LayeredStore` 类头 docstring（共享层/本地层划分）＋
+        `LayeredStore.SHARED_LAYERS`（core.py 内同款语义集）＋ 公开 issue #165。
+        边界（削掉的判别力/未做项）：①只导出共享层——知识/情境/自我层**不进**
+           载荷（章程称其「实例独立」，导出属越界）；既有测试无一依赖旧载荷里的
+           knowledge 条目（grep `prepare_shared_sync|sync_payload` 在 `tests/` 0 命中）。
+        ②接收端 `apply_shared_sync` 为**尽力而为**实现，未接入任何自动同步编排
+           （无后台调度/网络传输）——「通道尚未建成」的其余部分**未做**，如实声明。
+        ③本件**不动** `add_perception` 的 M5 去重吞第二次终裁记录（属另一件）。
+        """
         c = self.store.conn.cursor()
-        c.execute("SELECT id, content, modality, temporal_coordinate, importance, semantic_coordinates, entity_id FROM nodes WHERE layer='knowledge'")
+        shared = sorted(layer.value for layer in self.store.SHARED_LAYERS)
+        placeholders = ",".join("?" for _ in shared)
+        cols = ", ".join(self.SHARED_SYNC_FIELDS)
+        c.execute(f"SELECT {cols} FROM nodes WHERE layer IN ({placeholders})",
+                  shared)
         payload = []
         for r in c.fetchall():
-            payload.append({"id": r[0], "content": r[1][:100], "modality": r[2],
-                            "temporal_coordinate": r[3], "importance": r[4],
-                            "semantic_coordinates": json.loads(r[5] or "{}"),
-                            "entity_id": r[6]})
-        return {"sync_payload": payload, "local_buffer_count": len(self._local_visual_buffer),
-                "note": "原始视觉数据不进共享层（盲区60/61）"}
+            item = dict(zip(self.SHARED_SYNC_FIELDS, r))
+            item["spatial_coordinates"] = json.loads(
+                item["spatial_coordinates"] or "{}")
+            item["semantic_coordinates"] = json.loads(
+                item["semantic_coordinates"] or "{}")
+            item["state_attributes"] = json.loads(
+                item["state_attributes"] or "{}")
+            item["condition_space"] = json.loads(item["condition_space"] or "{}")
+            item["tags"] = json.loads(item["tags"] or "[]")
+            payload.append(item)
+        return {"sync_payload": payload,
+                "local_buffer_count": len(self._local_visual_buffer),
+                "layers": shared,
+                "note": "原始视觉数据不进共享层（盲区60/61）；仅共享层（锚点/结构）跨实例同步"}
+
+    def apply_shared_sync(self, payload, overwrite: bool = False) -> Dict:
+        """接收端（#165 · 尽力而为）：把 `prepare_shared_sync` 的载荷按 layer 无损重建。
+
+        - 逐条按 `SHARED_SYNC_FIELDS` 重建 `STNode` 并写库（含 tags/
+          condition_space/confidence/state_attributes）。
+        - **仅接受共享层**（`LayeredStore.SHARED_LAYERS`）条目；载荷里出现本地层
+          ⇒ 记入 `rejected`，**不落库**（章程：本地层实例独立，越界）。
+        - **冲突显式报告**：接收侧已有同 id 节点时——内容/层完全一致 ⇒ 记入
+          `identical`（幂等重放，不重写）；不一致 ⇒ 记入 `conflicts` 并**默认不覆盖**
+          （`overwrite=False`）；仅当显式 `overwrite=True` 才落库，且仍留在
+          `conflicts` 里（**绝不静默覆盖**——章程：共享层跨实例一致，冲突须可解释）。
+        - 解析失败（缺字段/坏 JSON）的条目记入 `failed`，不毒化整批。
+
+        边界（未做，如实声明）：①**未接入**任何自动同步编排（无网络传输、无后台
+        调度、无冲突裁决流程）——本方法是「载荷可回放」的接收原语，完整同步通道
+        **尚未建成**；②`payload` 既可传 `prepare_shared_sync()` 的返回 dict，也可
+        直接传其 `sync_payload` 列表。判据来源：`LayeredStore` 类头 docstring
+        （共享层跨实例一致/本地层实例独立）＋ 公开 issue #165。
+        """
+        items = payload.get("sync_payload") if isinstance(payload, dict) else payload
+        items = items or []
+        shared = self.store.SHARED_LAYERS
+        applied, identical, conflicts, rejected, failed = [], [], [], [], []
+        for item in items:
+            nid = (item or {}).get("id")
+            try:
+                layer = MemoryLayer(item["layer"])
+                cs = ConditionSpace.from_json(json.dumps(item["condition_space"]))
+                node = STNode(
+                    id=nid, content=item["content"], modality=item["modality"],
+                    spatial_coordinates=item.get("spatial_coordinates") or {},
+                    temporal_coordinate=item["temporal_coordinate"],
+                    condition_space=cs,
+                    importance=item.get("importance", 0.5),
+                    confidence=item.get("confidence", 0.5),
+                    layer=layer,
+                    tags=list(item.get("tags") or []),
+                    semantic_coordinates=item.get("semantic_coordinates") or {},
+                    state_attributes=item.get("state_attributes") or {},
+                    entity_id=item.get("entity_id"))
+            except (KeyError, TypeError, ValueError) as exc:
+                failed.append({"id": nid, "reason": "%s: %s"
+                               % (type(exc).__name__, exc)})
+                continue
+            if layer not in shared:
+                rejected.append({"id": nid, "layer": layer.value,
+                                 "reason": "本地层不入共享层（章程：实例独立）"})
+                continue
+            existing = self.store.get_node(nid)
+            if existing is not None:
+                same = (existing.layer == node.layer
+                        and existing.content == node.content)
+                if same:
+                    identical.append(nid)
+                    continue
+                conflicts.append({"id": nid, "incoming_layer": layer.value,
+                                  "existing_layer": existing.layer.value})
+                if not overwrite:
+                    continue
+            try:
+                self.store.add_node(node)
+            except PermissionError as exc:
+                # 共享层仅 PRIMARY 可写（章程）⇒ SUB 接收端写共享层被拒，
+                # 如实记入 failed，不让整批中断。
+                failed.append({"id": nid, "reason": "PermissionError: %s" % exc})
+                continue
+            applied.append(nid)
+        return {"applied": applied, "identical": identical,
+                "conflicts": conflicts, "rejected": rejected, "failed": failed,
+                "overwritten": overwrite}
 
     # ==================== v1.6 语义空间与备份（M11/M13 · REV1） ====================
 
@@ -7784,16 +7982,44 @@ class SpacetimeMemoryEngine:
         - **双向包含**：触发词/条件词出现在信号里（本意，修前含词长句
           如「关于自维持迹象的报告」命中 0），同时保留「信号 token 出现在
           触发词/条件里」（既有调用方以 token 如 `deviation` 作信号，纯单向
-          翻转会让其从命中变不命中）。"""
+          翻转会让其从命中变不命中）。
+
+        #57（本件）：`value` 参数此前在函数体内**零引用**（声明的契约不兑现）
+        ——`condition` 若写数值界（如 `"value > 0.9"`），0.05 与 0.99 会给出
+        **完全相同**的匹配。现让 `value` 真正参与判定：
+        - 仅当 `condition` 能解析出 **`value <op> <number>`** 形式的数值界
+          （`_parse_escalation_value_bound`，**手写解析器、不用 `eval()`**）时，
+          在「信号↔触发/条件文本包含」命中之后**追加**该数值界判定；
+        - 数值界存在而 `value is None` ⇒ 该点**不匹配**（无值不可判）；
+        - 解析不出数值界（如内置 `ESC-004` 的 `"...deviation>0.3"` 左操作数是
+          `deviation` 而非 `value`）⇒ **回落旧行为**（仅按字符串包含匹配，
+          `value` 不参与）——保住既有 token 用法不回归。
+        判据来源：公开 issue #57（公开 API 声明参数零引用）＋本文件既有
+        `test_issue130_escalation_gate` 的匹配口径（不放松）。
+        边界（削掉的判别力）：①只认左操作数**显式为参数名 `value`** 的比较，
+          其它标识符（如 `deviation`）不参与数值求值；②算符只支持
+          `>`/`>=`/`<`/`<=`/`==`/`!=`，复合布尔表达式不解析（回落包含匹配）。
+        同型面（如实标注）：全仓「签名声明参数、函数体零引用」同型共 **29 处**
+        （AST 扫描 `lingshu/**/*.py`），本件只修有实害的 3 处（本函数、
+        `export_structured_trajectories`、`nn/stcnn.py:detect_period`），
+        其余 26 处**不在本件范围**、未动。
+        """
         signal = (signal_type or "").strip()
         if not signal:
             return []
         matches = []
         for point in self.store.list_escalation_points(enabled_only=True):
             trigger, condition = point["trigger"], point["condition"]
-            if (signal in trigger or trigger in signal
+            if not (signal in trigger or trigger in signal
                     or signal in condition or condition in signal):
-                matches.append(point)
+                continue
+            bound = _parse_escalation_value_bound(condition)
+            if bound is not None:
+                if value is None:
+                    continue          # 无值不可判：声明了数值界却未给值 ⇒ 不匹配
+                if not _eval_escalation_value_bound(bound[0], bound[1], value):
+                    continue
+            matches.append(point)
         return matches
 
     # ---- A-4 信息差收敛速率指标（独立观测层 · DEVIATION-004） ----
@@ -7875,8 +8101,17 @@ class SpacetimeMemoryEngine:
 
     # ---- A-5 结构化轨迹输出 ----
 
-    def export_trajectory(self, cycle_id: str = None, output_path: str = None) -> Dict:
-        """A-5：导出认知闭环的结构化轨迹（附录13 扩展 · 训练资产格式 · 有损投影）"""
+    def export_trajectory(self, cycle_id: str = None, output_path: str = None,
+                          _limit: int = None) -> Dict:
+        """A-5：导出认知闭环的结构化轨迹（附录13 扩展 · 训练资产格式 · 有损投影）。
+
+        `_limit`（#57，内部参数，供 `export_structured_trajectories` 用）：`cycle_id`
+        为空（批量模式）时，按节点 `temporal_coordinate` **降序**（最近在前）取前
+        `_limit` 条；`_limit is None` 时保持旧行为（`get_nodes_by_tag` 的
+        importance/last_access 排序、硬上限 10）。返回体形状不变（`{"cycles": [...]}`
+        ＋ `meta`）。判据来源：公开 issue #57（`export_structured_trajectories` 的
+        `limit` 声明了却不生效）＋ 本方法 docstring「最近 N 条」。
+        """
         if cycle_id:
             nodes = self.store.get_nodes_by_tag(f"cycle:{cycle_id}", limit=20)
             full = [n for n in nodes if "cycle_record_full" in n.tags]
@@ -7890,7 +8125,16 @@ class SpacetimeMemoryEngine:
                 trajectory = {"cycle_id": cycle_id,
                               "nodes": [n.content[:100] for n in nodes]}
         else:
-            records = self.store.get_nodes_by_tag("cycle_record_full", limit=10)
+            if _limit is None:
+                records = self.store.get_nodes_by_tag("cycle_record_full", limit=10)
+            else:
+                # 取全部再按时间降序截断，保证「最近 N 条」是**全库最近**而非
+                # 「importance 前 N 里最近的」。
+                records = self.store.get_nodes_by_tag("cycle_record_full", limit=-1)
+                records.sort(key=lambda n: n.temporal_coordinate or 0.0,
+                             reverse=True)
+                if _limit >= 0:
+                    records = records[:_limit]
             trajectory = {"cycles": []}
             for n in records:
                 try:
@@ -7908,8 +8152,18 @@ class SpacetimeMemoryEngine:
         return trajectory
 
     def export_structured_trajectories(self, limit: int = 10, output_path: str = None) -> Dict:
-        """A-5：批量导出（最近 N 条轨迹）"""
-        return self.export_trajectory(None, output_path)
+        """A-5：批量导出（最近 N 条轨迹）。
+
+        #57（本件）：`limit` 此前**零引用**——旧实现直接
+        `return self.export_trajectory(None, output_path)`，docstring 承诺的
+        「最近 N 条」不成立（`limit=1` 与 `limit=100` 返回完全相同的 10 条）。
+        现把 `limit` 透传给 `export_trajectory` 的 `_limit`，按
+        `temporal_coordinate` 降序取**全库最近 N 条**（`limit<0` ⇒ 不截断；
+        `limit=0` ⇒ 空列表）。返回体形状不变。
+        判据来源：公开 issue #57（声明参数零引用）＋本方法 docstring「最近 N 条」。
+        同型面（如实标注）：全仓同型共 29 处，本件只修有实害的 3 处。
+        """
+        return self.export_trajectory(None, output_path, _limit=limit)
 
     # ==================== v1.3 认知接口（P0-1/P0-2/P0-3） ====================
 
