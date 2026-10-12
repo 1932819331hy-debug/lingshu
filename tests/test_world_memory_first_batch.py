@@ -150,7 +150,7 @@ def test_explicit_multiview_identity_survives_crossing_and_occlusion():
                 camera = Camera3D.look_at(eye, (0, .5, 5))
                 x, y = camera.project(point, 640, 480)
                 visual.add_view('chair', (x-5, y-5, x+5, y+5), 640, 480,
-                                camera=camera, eid=eid, tick=tick)
+                                camera=camera, eid='' if tick == 1 and eye[0] == 2 else eid, tick=tick)
         observed = visual.observations(tick=tick)
         assert {o['eid'] for o in observed} == set(points)
         assert len(visual.objects) == 2
