@@ -1667,11 +1667,67 @@ class LayeredStore:
         # 低置信节点与高置信节点同分时按插入序（importance 同值时）排前。
         # 判据来源：经验标定（#29 修复轮；理论章节追不到）。
         scored.sort(key=lambda x: (-x[1], -x[0].importance, -x[0].confidence))
-        results = scored[:limit]
+        results = self._anchor_rerank(q, scored[:limit], layers, limit)
         touch = self._retrieval_touches_recency()
         for node, _ in results:
             self.increment_access(node.id, touch=touch)
         return results
+
+    def _anchor_rerank(self, q: str, results, layers, limit: int):
+        """结构锚定（LINGSHU_ANCHOR=1）：问句显式点名容器（第N章 / 第N次会话）时，带该容器
+        标签的节点按容器内相关度排在最前，余位按原排序补齐。无锚点 / 开关关 / 容器为空 → 原样返回。
+
+        容器内相关度：有 FTS 索引时为容器内 BM25 与 Jaccard 的同式混合（与 FTS 路径同一
+        blend），否则为 Jaccard+tag 加成（与 LIKE 路径同口径）。同分按 temporal_coordinate、
+        id 定序，跨平台确定。判据来源：经验标定（hive-memory-bench 切A 选定、切B 留出）。"""
+        from lingshu.core import retrieval as _rt
+        if not _rt.anchor_enabled():
+            return results
+        tags = _rt.parse_anchors(q)
+        if not tags:
+            return results
+        lays = layers or [l for l in MemoryLayer if l != MemoryLayer.SELF]
+        ph = ",".join("?" for _ in lays)
+        rows = []
+        c = self.conn.cursor()
+        for tag in tags:
+            # tags 列是 JSON 数组；带引号匹配保证 chapter:1 不误中 chapter:12
+            c.execute(f"SELECT * FROM nodes WHERE layer IN ({ph}) AND tags LIKE ?",
+                      [l.value for l in lays] + ['%' + json.dumps(tag) + '%'])
+            rows.extend(c.fetchall())
+        nodes, _ = self._tolerant_nodes(rows)  # #267 逐行容错
+        uniq = {}
+        for n in nodes:
+            uniq.setdefault(n.id, n)
+        if not uniq:
+            return results
+        bm = {}
+        fts = getattr(self, "_fts", None)
+        if fts is not None:
+            terms = [q]
+            if _rt.context_enabled():
+                terms = _rt.content_grams(terms)
+            try:
+                bm = fts.scores_within(terms, list(uniq))
+            except sqlite3.Error:
+                bm = {}
+        ranked = []
+        for n in uniq.values():
+            sim = self.char_bigram_jaccard(q, n.content)
+            tag_bonus = 0.05 if any(t in q or q in t for t in n.tags) else 0.0
+            j = min(1.0, sim + tag_bonus)
+            s = _rt.FTSIndex.blend(j, bm.get(n.id, 0.0)) if fts is not None else j
+            ranked.append((n, s))
+        ranked.sort(key=lambda x: (-x[1], x[0].temporal_coordinate, x[0].id))
+        out = ranked[:limit]
+        seen = {n.id for n, _ in out}
+        for n, s in results:
+            if len(out) >= limit:
+                break
+            if n.id not in seen:
+                out.append((n, s))
+                seen.add(n.id)
+        return out
 
     def _search_content_fts(self, q: str, terms, layers, limit: int):
         """FTS5+BM25 候选生成（retrieval.py）。返回 None 表示交回原 LIKE 路径。
@@ -1725,7 +1781,7 @@ class LayeredStore:
         scored.sort(key=lambda x: (not _has(x[0], [ql]), -x[1], -x[2], -x[0].importance,
                                    -x[0].confidence))
         self.last_skipped_rows = skipped
-        results = [(n, s) for n, s, _ in scored[:limit]]
+        results = self._anchor_rerank(q, [(n, s) for n, s, _ in scored[:limit]], layers, limit)
         touch = self._retrieval_touches_recency()
         for node, _ in results:
             self.increment_access(node.id, touch=touch)
