@@ -166,7 +166,8 @@ class UnifiedWorldModel:
         return n is not None and bool(n.attrs.get("hypothesis"))
 
     def perceive(self, observations: Optional[List[Dict]] = None,
-                 tool: str = "observer") -> Dict:
+                 tool: str = "observer", tick: Optional[int] = None,
+                 timestamp: Optional[float] = None) -> Dict:
         """观测 → 更新世界图（理解端口）。
 
         生成先验注入理解：对每个观测实体，若上一 tick 有预测，对比预期位置：
@@ -174,21 +175,26 @@ class UnifiedWorldModel:
           - 异常（距离 ≥ bound）→ 置信 -0.1，记录 anomaly（模型缺口/外部事件）
         """
         obs = observations if observations is not None else self._observe_world()
-        self.tick += 1
+        if tick is not None and self.history and tick <= self.tick:
+            raise ValueError("观测 tick 必须晚于当前世界图时刻")
+        self.tick = self.tick + 1 if tick is None else tick
         stats = {"observed": 0, "matched": 0, "new": 0, "consistent": 0, "anomalies": 0}
         snap: Dict[str, List[float]] = {}      # 本轮真实观测快照（verify 的 actual 来源）
         # 身份关联的一一匹配上下文（issue #226）：
         #   frame_pos = 帧起点节点位置（匹配不受本帧就地改写影响）
         #   taken     = 本帧已被占用的 eid（显式 eid 优先占用；匿名观测匹配后亦占用）
-        frame_pos = {eid: tuple(n.pos) for eid, n in self.nodes.items()}
-        taken = {str(o.get("eid", "")) for o in obs if str(o.get("eid", ""))}
+        frame_pos = {eid: tuple(expected["predicted"]) if (expected := self._expected(eid))
+                     is not None else tuple(n.pos) for eid, n in self.nodes.items()}
+        taken = {str(o["eid"]) for o in obs if o.get("eid") is not None and str(o["eid"])}
+        resolved = []
         for o in obs:
-            eid = str(o.get("eid", ""))
+            eid = str(o["eid"]) if o.get("eid") is not None else ""
             if not eid:
                 eid = self._track_identity(o, taken=taken, positions=frame_pos)
                 taken.add(eid)                 # 一个节点本帧至多被一个观测占用
             pos = tuple(float(v) for v in o["pos"])
             snap[eid] = list(pos)
+            resolved.append({**o, "eid": eid, "pos": list(pos)})
             stats["observed"] += 1
             if eid in self.nodes:
                 stats["matched"] += 1
@@ -217,12 +223,15 @@ class UnifiedWorldModel:
                                          pos=pos, first_seen=self.tick,
                                          last_seen=self.tick)
             self._conditions[eid] = {
+                **o.get("conditions", {}),
                 "first_seen": self.nodes[eid].first_seen,
                 "last_seen": self.tick,
                 "observation_tool": tool,
                 "time_window": [self.tick - 5, self.tick],
                 "existence_constraint": "观测存在中",
             }
+            if timestamp is not None:
+                self._conditions[eid]["timestamp"] = timestamp
         # 留存本轮真实观测快照与时刻（verify 只以它为 actual 来源）
         self._obs_snapshot = snap
         self._obs_tick = self.tick
@@ -233,9 +242,11 @@ class UnifiedWorldModel:
         # 「静止未动」的假轨迹。
         self.history.append({"tick": self.tick,
                              "entities": {eid: list(p) for eid, p in snap.items()}})
+        if timestamp is not None:
+            self.history[-1]["timestamp"] = timestamp
         self._patterns = {}   # 模式缓存失效（新观测后重新推断）
         return {"status": "ok", "tick": self.tick, **stats,
-                "anomaly_events": stats["anomalies"]}
+                "anomaly_events": stats["anomalies"], "observations": resolved}
 
     # ================= 模式推断（观测-only 启发式） =================
 

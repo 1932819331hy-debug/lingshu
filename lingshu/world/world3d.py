@@ -264,6 +264,8 @@ class Object3D:
     confidence: float = 0.5
     ts: float = field(default_factory=time.time)
     source: str = "world3d"
+    eid: str = ""
+    observed_tick: Optional[int] = None
 
     def to_dict(self) -> Dict:
         return asdict(self)
@@ -305,7 +307,8 @@ class World3D:
     # ---- 2D → 3D 反投影（时空重建的感知侧） ----
 
     def add_vprim(self, vprim, screen_w: int, screen_h: int,
-                  horizon_ratio: float = 0.45) -> Optional[Object3D]:
+                  horizon_ratio: float = 0.45,
+                  tick: Optional[int] = None) -> Optional[Object3D]:
         """VPrim(2D bbox) → 3D 物体。
 
         反投影：Z = f * 真实宽 / 像素宽；X/Y/Z 由相机位姿反投影（project 的逆）。
@@ -343,15 +346,23 @@ class World3D:
             category=vprim.category,
             center=(round(X, 2), round(Y, 2), round(Zw, 2)),
             size=spec.size, color=spec.color, shape=spec.shape,
-            confidence=vprim.confidence, source=vprim.source)
+            confidence=vprim.confidence, source=vprim.source,
+            eid=vprim.eid, observed_tick=tick, ts=vprim.ts)
         # 时间序列收敛：同类 + 距离近 → 更新位置
         merged = False
         for i, old in enumerate(self.objects):
+            if obj.eid:
+                if old.eid == obj.eid:
+                    self.objects[i] = obj
+                    merged = True
+                    break
+                continue
             if old.category != obj.category:
                 continue
             dx = old.center[0] - obj.center[0]
             dz = old.center[2] - obj.center[2]
             if math.hypot(dx, dz) < max(old.size[0], old.size[2]):
+                obj.eid = old.eid
                 self.objects[i] = obj
                 merged = True
                 break
@@ -617,7 +628,8 @@ class World3D:
     # ---- 多视角融合（阶段1 · 里程碑1.1 · 借鉴 DUSt3R 多视图对齐） ----
 
     def add_view(self, category: str, bbox2d, screen_w: int, screen_h: int,
-                 camera: "Camera3D" = None, confidence: float = 0.5) -> Dict:
+                 camera: "Camera3D" = None, confidence: float = 0.5,
+                 eid: str = "", tick: Optional[int] = None) -> Dict:
         """多视角观测 → 三角化融合（同一物体从多个视角观测 → 3D 位置收敛）。
 
         bbox2d: (x1, y1, x2, y2) 屏幕 2D 框；camera: 该视角相机（缺省当前相机）。
@@ -638,7 +650,7 @@ class World3D:
         spec = self.visual.get(category, default_spec(category))
         result = self._mv.add_observation(
             category, obs, size=spec.size, color=spec.color,
-            shape=spec.shape, confidence=confidence)
+            shape=spec.shape, confidence=confidence, eid=eid, tick=tick)
         # 融合成功 → 更新世界物体
         # #136：多视角融合的**同一个物体桶**只对应 objects 里的一个世界物体。
         # 旧实现每个视角三角化成功即 append——同一把椅子看 N 次得到 N-1 个重复
@@ -652,7 +664,8 @@ class World3D:
                 obj = Object3D(
                     category=category, center=tuple(result["center_3d"]),
                     size=spec.size, color=spec.color, shape=spec.shape,
-                    confidence=confidence, source="multiview")
+                    confidence=confidence, source="multiview", eid=eid,
+                    observed_tick=tick)
                 self.objects.append(obj)
                 if key is not None:
                     self._mv_objects[key] = obj
@@ -662,12 +675,21 @@ class World3D:
                 obj.center = tuple(result["center_3d"])
                 obj.confidence = confidence
                 obj.ts = time.time()
+                obj.observed_tick = tick
                 result["object_added"] = False
                 result["object_updated"] = True
         else:
             result["object_added"] = False
             result["object_updated"] = False
         return result
+
+    def observations(self, tick: Optional[int] = None) -> List[Dict]:
+        """视觉重建 → 动态模型观测；指定 tick 时只交付该帧实测对象。"""
+        return [{"eid": obj.eid, "category": obj.category, "pos": obj.center,
+                 "conditions": {"source": obj.source, "timestamp": obj.ts,
+                                "frame_tick": obj.observed_tick}}
+                for obj in self.objects
+                if tick is None or obj.observed_tick == tick]
 
     def _mv_track_of(self, category: str, obs) -> Optional[Dict]:
         """本次观测落入的 MultiViewFusion 物体桶（#136 的「物体身份」）。

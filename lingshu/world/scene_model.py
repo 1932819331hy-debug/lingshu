@@ -52,6 +52,8 @@ class SceneEntity:
     present: str = "auto"              # 呈现：silhouette/skeleton/box（auto=按类别）
     rot: Tuple[float, float, float] = (0.0, 0.0, 0.0)
     relations: List[Tuple[str, str]] = field(default_factory=list)  # (target, kind)
+    eid: str = ""
+    conditions: Dict = field(default_factory=dict)
 
 
 # 类别 → 呈现类型
@@ -85,12 +87,14 @@ class WorldModel:
     def add_entity(self, name: str, category: str,
                    pos: Tuple[float, float, float],
                    state: str = "neutral",
-                   present: str = "auto") -> "WorldModel":
+                   present: str = "auto", eid: str = "",
+                   conditions: Optional[Dict] = None) -> "WorldModel":
         """添加语义实体（3D 锚点 + 类别 + 状态）。"""
         if present == "auto":
             present = PRESENT_BY_CATEGORY.get(category, "box")
         self.entities[name] = SceneEntity(
-            name=name, category=category, pos=pos, state=state, present=present)
+            name=name, category=category, pos=pos, state=state, present=present,
+            eid=eid or name, conditions=dict(conditions or {}))
         return self
 
     def relation(self, a: str, kind: str, b: str) -> "WorldModel":
@@ -197,7 +201,7 @@ class WorldModel:
                          "dragon": (90, 160, 60)}.get(e.category, (160, 160, 160))
                 self.scene.objects.append(Object3D(
                     category=e.category, center=e.pos, size=size,
-                    color=color, shape="box"))
+                    color=color, shape="box", eid=e.eid))
         return self
 
     def _skeleton_to_object(self, sk: Skeleton3D, name: str, e: SceneEntity) -> Object3D:
@@ -325,7 +329,8 @@ class WorldModel:
 # ---------------------------------------------------------------------------
 
 
-def ingest_scene(agent, scene_desc: str, store=None, tag: str = "spatial"):
+def ingest_scene(agent, scene_desc, store=None, tag: str = "spatial",
+                 relations: Optional[List[Tuple[str, str, str]]] = None):
     """把语义场景描述摄入记忆库（带空间锚点 → 可被世界模型重建）。
 
     约定（记忆即缓存）：
@@ -344,20 +349,41 @@ def ingest_scene(agent, scene_desc: str, store=None, tag: str = "spatial"):
         raise ValueError("need store to ingest scene")
     engine = getattr(agent, "engine", None)
 
-    lines = [ln.strip() for ln in scene_desc.splitlines() if ln.strip()]
+    structured = isinstance(scene_desc, WorldModel)
+    if structured:
+        entities = list(scene_desc.entities.values())
+    else:
+        entities = []
+        for ln in scene_desc.splitlines():
+            parts = [p.strip() for p in ln.split("|")]
+            if len(parts) < 3:
+                continue
+            try:
+                pos = tuple(float(v) for v in parts[2].split(","))
+                x, y, z = pos
+            except ValueError:
+                continue
+            entities.append(SceneEntity(parts[0], parts[1], pos,
+                            state=parts[3] if len(parts) > 3 else "neutral",
+                            eid=parts[0]))
+        names = {e.name for e in entities}
+        for a, kind, b in relations or []:
+            if a not in names or b not in names:
+                raise ValueError(f"relation requires both entities: {a}, {b}")
+            for entity in entities:
+                if entity.name == a:
+                    entity.relations.append((b, kind))
     written = []
-    for ln in lines:
-        # 格式: 名称|类别|x,y,z|状态
-        parts = [p.strip() for p in ln.split("|")]
-        if len(parts) < 3:
-            continue
-        name, cat = parts[0], parts[1]
-        try:
-            x, y, z = (float(v) for v in parts[2].split(","))
-        except ValueError:
-            continue
-        state = parts[3] if len(parts) > 3 else "neutral"
+    for entity in entities:
+        name, cat, state = entity.name, entity.category, entity.state
+        x, y, z = entity.pos
         content = f"场景实体 {name}（{cat}）位于 ({x},{y},{z})，状态 {state}"
+        tags = [tag, f"cat:{cat}", f"ent:{name}", "world_model"]
+        if structured or relations:
+            metadata = {"eid": entity.eid, "present": entity.present,
+                        "conditions": entity.conditions, "relations": entity.relations}
+            content += "\n```lingshu-scene\n" + json.dumps(metadata, ensure_ascii=False) + "\n```"
+            tags.append(f"eid:{entity.eid}")
         # 优先走 engine.add_perception（支持 spatial_coordinates）；退化用 agent.remember
         # skip_dedup=True：场景导入是「主动沉淀类写入」，每行是带独立空间锚点/实体
         # 身份的观测，必须保留自己的节点身份。否则同一实体的连续观测（如移动跟踪
@@ -371,14 +397,14 @@ def ingest_scene(agent, scene_desc: str, store=None, tag: str = "spatial"):
                 content,
                 importance=0.6,
                 spatial_coordinates={"x": x, "y": y, "z": z},
-                tags=[tag, f"cat:{cat}", f"ent:{name}", "world_model"],
+                tags=tags,
                 entities=[name],
                 skip_dedup=True,
             )
         else:
             node = agent.remember(
                 content=content, importance=0.6,
-                tags=[tag, f"cat:{cat}", f"ent:{name}", "world_model"],
+                tags=tags,
                 entities=[name],
             )
         # 状态写入 state_attributes（store 直接更新）。
@@ -402,8 +428,8 @@ def ingest_scene(agent, scene_desc: str, store=None, tag: str = "spatial"):
 def _node_recency(n) -> Optional[float]:
     """节点观测时新度：temporal_coordinate → last_access → created_at，无则 None。
 
-    身体侧 STNode 三者皆有（core.py:159 STNode）；脑侧 BrainNode 无任何时间字段
-    （brain_store.py:359）→ None，调用方据此回落 store 返回序（不臆造新序）。
+    BrainNode 的 temporal_coordinate 取自脑侧 created_at；旧返回单元缺时间字段
+    时仍回落 store 返回序，不臆造新序。
     """
     for attr in ("temporal_coordinate", "last_access", "created_at"):
         v = getattr(n, attr, None)
@@ -423,7 +449,7 @@ def load_world_from_memory(agent_or_store, tag: str = "spatial") -> WorldModel:
     是 `importance DESC, last_access DESC`（core.py:1557，最新在前），于是最后写入
     的是**最旧**观测，新观测反被丢弃、重建世界回落到陈旧坐标，「新增记忆节点即
     改场景」不成立。故按实体名归并：有时间字段者取时新度最大者；全无时间字段者
-    （脑侧 BrainNode）保持旧行为（store 返回序末条胜出），不臆造新序。
+    的旧返回单元保持旧行为（store 返回序末条胜出），不臆造新序。
     """
     store = getattr(agent_or_store, "store", agent_or_store)
     if not hasattr(store, "get_nodes_by_tag"):
@@ -450,13 +476,23 @@ def load_world_from_memory(agent_or_store, tag: str = "spatial") -> WorldModel:
         sa = n.state_attributes or {}
         if isinstance(sa, dict) and sa.get("state"):
             state = sa["state"]
+        metadata_text = n.content.partition("\n```lingshu-scene\n")[2]
+        metadata = json.loads(metadata_text.partition("\n```")[0]) if metadata_text else {}
         grouped.setdefault(name, []).append(
-            (_node_recency(n), (cat, pos, state)))
+            (_node_recency(n), (cat, pos, state, metadata)))
+    restored_relations = {}
     for name, cands in grouped.items():
         timed = [c for c in cands if c[0] is not None]
-        _, (cat, pos, state) = (max(timed, key=lambda c: c[0])
+        _, (cat, pos, state, metadata) = (max(timed, key=lambda c: c[0])
                                 if timed else cands[-1])
-        wm.add_entity(name, category=cat, pos=pos, state=state)
+        wm.add_entity(name, category=cat, pos=pos, state=state,
+                      eid=metadata.get("eid", name), present=metadata.get("present", "auto"),
+                      conditions=metadata.get("conditions"))
+        restored_relations[name] = metadata.get("relations", [])
+    for name, edges in restored_relations.items():
+        for target, kind in edges:
+            if target in wm.entities:
+                wm.relation(name, kind, target)
     wm.build()
     return wm
 

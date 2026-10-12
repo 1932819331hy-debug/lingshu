@@ -32,6 +32,7 @@ class VPrim:
     confidence: float = 0.5
     ts: float = field(default_factory=time.time)
     source: str = "detect"              # yoloworld/locate/diff/control
+    eid: str = ""                      # 可选：检测/跟踪器给出的稳定实例身份
 
     # ---- 派生 ----
 

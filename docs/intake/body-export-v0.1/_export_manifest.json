@@ -78,7 +78,7 @@
     {
      "file": "multiview.py",
      "src": "aeis.multiview",
-     "sha256": "9ff083b49d899a0e",
+     "sha256": "b32ed5d636f3b6d3",
      "rewrites": 0,
      "sanitized": 0,
      "patches": 0,
@@ -103,7 +103,7 @@
     {
      "file": "scene_model.py",
      "src": "aeis.scene_model",
-     "sha256": "06a6086ae7e87497",
+     "sha256": "853527e2e9dfa194",
      "rewrites": 4,
      "sanitized": 0,
      "patches": 0,
@@ -226,7 +226,7 @@
     {
      "file": "vprim.py",
      "src": "aeis.vprim",
-     "sha256": "40c9d7f730314571",
+     "sha256": "c76947ab75733cc7",
      "rewrites": 0,
      "sanitized": 0,
      "patches": 0,
@@ -237,7 +237,7 @@
     {
      "file": "wm_simloop.py",
      "src": "aeis.wm_simloop",
-     "sha256": "aa84dde49ad8c837",
+     "sha256": "49fceacc635444c1",
      "rewrites": 8,
      "sanitized": 0,
      "patches": 0,
@@ -250,7 +250,7 @@
     {
      "file": "world3d.py",
      "src": "aeis.world3d",
-     "sha256": "7b7527deb009dd70",
+     "sha256": "35b359c9b0c28ee8",
      "rewrites": 16,
      "sanitized": 0,
      "patches": 0,
@@ -274,7 +274,7 @@
     {
      "file": "world_model.py",
      "src": "aeis.world_model",
-     "sha256": "97a0f817684fa51e",
+     "sha256": "e759544531dea986",
      "rewrites": 4,
      "sanitized": 0,
      "patches": 0,
@@ -314,7 +314,7 @@
     {
      "file": "core.py",
      "src": "aeis.core",
-     "sha256": "f8c30b183d430416",
+     "sha256": "bec07819468eab69",
      "rewrites": 34,
      "sanitized": 2,
      "patches": 2,
@@ -652,5 +652,25 @@
   "integration_base": "777e18f62dfe6918ad271437b887c78d020f0ea4",
   "benchmark_base": "c22385cb2d75f36bc12fd1de4449edbf92be8698",
   "metrics_migration": "docs/world_model_metrics_migration.md"
+ },
+ "world_memory_first_batch": {
+  "date": "2026-10-12",
+  "base_commit": "cb3a6ea2dbd9771d685b2bf5c1fe398abe69e419",
+  "scope": [
+   "F01",
+   "F02",
+   "F03",
+   "F05"
+  ],
+  "report": "docs/world_memory_first_batch.md",
+  "previous_sha256": {
+   "lingshu/world/multiview.py": "9ff083b49d899a0e",
+   "lingshu/world/scene_model.py": "06a6086ae7e87497",
+   "lingshu/world/vprim.py": "40c9d7f730314571",
+   "lingshu/world/wm_simloop.py": "aa84dde49ad8c837",
+   "lingshu/world/world3d.py": "7b7527deb009dd70",
+   "lingshu/world/world_model.py": "97a0f817684fa51e",
+   "lingshu/core/core.py": "f8c30b183d430416"
+  }
  }
 }

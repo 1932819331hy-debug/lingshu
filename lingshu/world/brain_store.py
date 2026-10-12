@@ -363,6 +363,7 @@ class BrainNode:
     tags: List[str] = field(default_factory=list)
     spatial_coordinates: Optional[Dict[str, float]] = None   # {"x","y","z"}（米）
     state_attributes: Optional[Dict[str, str]] = None        # {"state": ...}
+    temporal_coordinate: Optional[float] = None
 
 
 @dataclass
@@ -417,6 +418,19 @@ class BrainStore:
         self.conn = _ConnShim(self)          # legacy ingest_scene 的直写出口
 
     # ---- M1 读向 ----
+    def read_content(self, node_id: str) -> str:
+        """按已知记忆 ID 经 MCP 完整读取正文，包含脑端的续读页。"""
+        return self._content(self.client.call("cg", {"op": "read", "node_id": node_id}))
+
+    def _content(self, node: Dict) -> str:
+        parts = [str(node.get("content") or "")]
+        page = node
+        while page.get("truncated"):
+            page = self.client.call("cg", {"op": "read", "node_id": str(node["id"]),
+                                            "offset": page["next_offset"]})
+            parts.append(page["content"])
+        return "\n".join(part.rstrip("\n") for part in parts)
+
     def _state_map(self, subjects: Optional[List[str]] = None) -> Dict[str, str]:
         """活动状态槽位投影：subject → value（slot=「状态」）。
 
@@ -470,7 +484,9 @@ class BrainStore:
     DEFAULT_ACCEPT_STATES = frozenset({"ACCEPT", "BLINDSPOT", "DEFER"})
 
     def get_nodes_by_tag(self, tag: str, limit: int = 200,
-                         accept_states: Optional[set] = None) -> List[BrainNode]:
+                         accept_states: Optional[set] = None,
+                         seed_query: Optional[str] = None,
+                         view: Optional[str] = None) -> List[BrainNode]:
         """cg(op=read) 取候选 → **适配器侧按 tag 过滤**（裁定三：零脑改）→ BrainNode。
 
         坐标取 `frontmatter.spatial.coords3d`（裁定二）；状态取槽位投影。
@@ -499,8 +515,10 @@ class BrainStore:
         want = max(1, int(limit))
         k = want
         while True:
-            resp = self.client.call("cg", {"op": "read", "query": self.seed_query,
-                                           "k": k})
+            args = {"op": "read", "query": self.seed_query if seed_query is None else seed_query, "k": k}
+            if view is not None:
+                args["view"] = view
+            resp = self.client.call("cg", args)
             out: List[BrainNode] = []
             for item in (resp.get("results") or resp.get("items") or []):
                 node = item.get("node") or item
@@ -520,10 +538,11 @@ class BrainStore:
                               "z": float(sp.get("z", 0.0))}
                 out.append(BrainNode(
                     id=str(node.get("id") or fm.get("id") or ""),
-                    content=str(node.get("content") or ""),
+                    content=self._content(node),
                     tags=tags,
                     spatial_coordinates=coords,
-                    state_attributes=None))
+                    state_attributes=None,
+                    temporal_coordinate=fm.get("created_at")))
             if len(out) >= want:
                 break                             # 本场景候选已够 limit
             meta = resp.get("meta") or {}
@@ -656,7 +675,8 @@ def load_world_from_brain(agent_or_store, tag: str = "spatial"):
     return load_world_from_memory(agent_or_store, tag=tag)
 
 
-def ingest_scene_to_brain(agent: BrainAgent, scene_desc: str, tag: str = "spatial"):
+def ingest_scene_to_brain(agent: BrainAgent, scene_desc, tag: str = "spatial",
+                          relations=None):
     """M2 便捷：场景描述入脑（scene_model.ingest_scene 零改动；状态经 conn 垫片入账）。"""
     from .scene_model import ingest_scene
-    return ingest_scene(agent, scene_desc, tag=tag)
+    return ingest_scene(agent, scene_desc, tag=tag, relations=relations)
