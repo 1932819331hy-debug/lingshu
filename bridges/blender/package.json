@@ -1,0 +1,102 @@
+{
+  "name": "@dsh-external/dsh-blender-wm-bridge",
+  "version": "1.0.5",
+  "description": "【fork 版 · 供提交，不回流原版】RongJun-1999 × Blender 直连实时插件 + **世界模型桥 wm_bridge**：在 v1.0.5 的 15 个模型侧工具之上，新增 wm_bridge 面（真值导出 / SHA-256 清单 / fail-closed 通道探针），把 Blender 当灵枢（lingshu）世界模型的**外部观察者与资产供货商**——进程外，零 bpy 依赖进 lingshu。端口/工作目录/bundle id 与原版完全隔离（addon 9886 · 后端 9887 · 代理 9888），可与原版共存安装。",
+  "private": false,
+  "keywords": [
+    "dsh",
+    "blender",
+    "ai-agent",
+    "tooling",
+    "bpy",
+    "cycles"
+  ],
+  "engines": {
+    "node": ">=20"
+  },
+  "type": "module",
+  "main": "./lib/index.js",
+  "types": "./lib/types/index.d.ts",
+  "files": [
+    "lib",
+    "runtime",
+    "!runtime/ext/venv",
+    "!runtime/ext/node_modules",
+    "!runtime/ext/pkg.tgz",
+    "!runtime/__pycache__",
+    "!runtime/*.bak-*",
+    "!runtime/*.v1-*",
+    "docs",
+    "tests",
+    "wm_bridge",
+    "!wm_bridge/__pycache__",
+    "FORK-NOTES.md",
+    "cordis.patch.yml",
+    "dsh-blender-wm.config.example.json",
+    "README.md",
+    "CHANGELOG.md",
+    "MIGRATIONS.md"
+  ],
+  "license": "BSD-3-Clause",
+  "dsh": {
+    "bundle": {
+      "patch": "./cordis.patch.yml"
+    }
+  },
+  "peerDependencies": {
+    "@deepseek-ai/dsh-llm": ">=0.0.1-rc <2",
+    "@deepseek-ai/dsh-tools": ">=0.0.1-rc <2",
+    "cordis": ">=4.0.0-rc <5",
+    "schemastery": "^3.18.0",
+    "@deepseek-ai/cordis": ">=4.0.0-rc <5",
+    "@deepseek-ai/schemastery": "^3.18.0"
+  },
+  "//peerDependenciesMeta": "schemastery / cordis 在不同 DSH 版本间是有 scope / 无 scope 两种形态。两个名字都声明且都标 optional —— 任一满足即可，宿主给了哪个就用哪个（见 src/index.ts 的运行时解析）。",
+  "peerDependenciesMeta": {
+    "cordis": {
+      "optional": true
+    },
+    "schemastery": {
+      "optional": true
+    },
+    "@deepseek-ai/cordis": {
+      "optional": true
+    },
+    "@deepseek-ai/schemastery": {
+      "optional": true
+    }
+  },
+  "devDependencies": {
+    "@types/node": "^24.13.3",
+    "typescript": "^5.9.0"
+  },
+  "scripts": {
+    "build": "bash scripts/build.sh",
+    "typecheck": "node scripts/typecheck.mjs",
+    "test": "node tests/capability_lock.mjs && node tests/single_source_selftest.mjs && node tests/protocol_selftest.mjs && node tests/lossless_guard.mjs && node tests/lease_stale_selftest.mjs && node tests/mac_selftest.mjs && node tests/linux_selftest.mjs && node tests/frame_dedupe_selftest.mjs && node tests/discoverability_selftest.mjs && node tests/shape_search_selftest.mjs && node tests/workdir_shared_selftest.mjs && node tests/provenance_stale_selftest.mjs && node scripts/pyrun.mjs tests/generator_dispatch_selftest.py && node tests/guidance_selftest.mjs && node tests/backend_probe_selftest.mjs && node tests/schema_resolve_selftest.mjs && node scripts/pyrun.mjs tests/gate_eval_selftest.py",
+    "test:discover": "node tests/discoverability_selftest.mjs",
+    "test:lease": "node tests/lease_stale_selftest.mjs",
+    "test:workdir": "node tests/workdir_shared_selftest.mjs",
+    "test:provenance": "node tests/provenance_stale_selftest.mjs",
+    "test:generator": "node scripts/pyrun.mjs tests/generator_dispatch_selftest.py",
+    "test:dedupe": "node tests/frame_dedupe_selftest.mjs",
+    "test:diag": "node tests/view_diag_selftest_runner.mjs",
+    "test:lossless": "node tests/lossless_guard.mjs",
+    "test:mac": "node tests/mac_selftest.mjs",
+    "test:linux": "node tests/linux_selftest.mjs",
+    "test:gui": "node tests/gui_channel_probe.mjs",
+    "test:lossless:live": "node tests/lossless_guard.mjs --live",
+    "test:acceptance": "node tests/acceptance_v093.mjs",
+    "test:dsh-api": "node tests/dsh_api_compat_probe.mjs",
+    "test:routes": "node tests/route_contract_selftest.mjs",
+    "test:schema": "node tests/schema_resolve_selftest.mjs",
+    "test:search": "node tests/shape_search_selftest.mjs"
+  },
+  "exports": {
+    ".": {
+      "types": "./lib/types/index.d.ts",
+      "default": "./lib/index.js"
+    },
+    "./package.json": "./package.json"
+  }
+}
