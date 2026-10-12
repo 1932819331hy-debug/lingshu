@@ -6,13 +6,19 @@ rows = [json.loads(l) for l in open(sys.argv[1], encoding="utf-8")]
 out = []
 P = out.append
 CFG = {"base": "改前", "fts": "FTS5", "fts_ctx": "FTS5+语境扩展", "no_touch": "不刷新近因", "fts_no_touch": "FTS5+不刷新近因",
-       "contra": "矛盾感知", "fts_contra": "FTS5+矛盾感知", "all": "全开"}
+       "anchor": "结构锚定", "fts_ctx_anchor": "FTS5+语境+结构锚定", "contra": "矛盾感知", "fts_contra": "FTS5+矛盾感知", "all": "全开"}
 P("## 1. 检索层 search_content top-10\n")
 P("| 套件 | 配置 | 证据保留 | 另一侧覆盖 | 块级命中 | hit@10 | MRR@10 | p50 ms |\n|---|---|---|---|---|---|---|---|")
 for r in rows:
     if "suite" in r and r["suite"].startswith(("hmb", "locomo")) and "rounds" not in r:
-        P(f"| {r['suite']}{'（打乱写入）' if r.get('order')=='shuffle' and r['suite'].startswith('hmb') else ''} | {CFG[r['cfg']]} | {r.get('证据保留','')} | {r.get('另一侧覆盖','')} | {r.get('块级命中','')} | "
+        tg = "（容器标签）" if r.get("tags") == "1" else ""
+        P(f"| {r['suite']}{tg}{'（打乱写入）' if r.get('order')=='shuffle' and r['suite'].startswith('hmb') else ''} | {CFG[r['cfg']]} | {r.get('证据保留','')} | {r.get('另一侧覆盖','')} | {r.get('块级命中','')} | "
           f"{r.get('hit10','')} | {r.get('mrr10','')} | {r['p50_ms']} |")
+P("\n### 1b. 结构锚定按题型拆分（写入均带 chapter:N 标签）\n")
+P("| 切 | 配置 | 点名章节题/证据 | 点名章节保留 | 其余题 | 其余保留 | 漏检 | 漏检且所在章已命中 |\n|---|---|---|---|---|---|---|---|")
+for r in rows:
+    if r.get("suite", "").startswith("anchor_"):
+        P(f"| {r['suite'][-1]} | {CFG[r['cfg']]} | {r['点名章节题']}/{r['点名章节证据']} | {r['点名章节保留']} | {r['其余题']} | {r['其余保留']} | {r['漏检']} | {r['漏检且所在章已命中']} |")
 P("\n## 2. recall 端到端（每轮全部题目各查一次）\n")
 P("| 切 | 配置 | 轮 | 证据保留 | 另一侧覆盖 | 块级命中 | p50 ms |\n|---|---|---|---|---|---|---|")
 for r in rows:
