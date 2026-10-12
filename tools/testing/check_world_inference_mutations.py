@@ -40,7 +40,17 @@ MUTATIONS = [
      'self.masks.get(a, 0) | self.masks.get(b, 0)',
      TEST + 'test_window_with_no_joint_observation_does_not_read_old_frames'),
     ('M10_coincident', 'world_learner.py', ' and motion[3] is None', '',
-     TEST + 'test_coincident_moving_entities_are_not_misclassified_as_a_measured_stop'),
+     TEST + 'test_coincident_moving_entities_are_not_misclassified_as_a_measured_stop[CuriosityExplorer]'),
+    ('M11_unified_mixed_evidence', 'world_model.py',
+     'sufficient = (sufficient or directional >= 3\n'
+     '                              or (samples >= 3 and directional == 0\n'
+     '                                  and observations.motion(a)[3] is None))',
+     'sufficient = sufficient or samples >= 3',
+     'tests/test_pr460_review_relation_retention.py::'
+     'test_unified_retains_candidate_until_supported_or_contradicted[one-direction]'),
+    ('M12_unified_coincident', 'world_model.py',
+     ' and observations.motion(a)[3] is None', '',
+     TEST + 'test_coincident_moving_entities_are_not_misclassified_as_a_measured_stop[UnifiedWorldModel]'),
 ]
 
 
@@ -52,7 +62,8 @@ def main():
         shutil.copytree(ROOT / 'lingshu', snapshot / 'lingshu', dirs_exist_ok=True,
                         ignore=shutil.ignore_patterns('__pycache__'))
         (snapshot / 'tests').mkdir(exist_ok=True)
-        shutil.copyfile(ROOT / 'tests/test_world_inference_window.py', snapshot / 'tests/test_world_inference_window.py')
+        for test_filename in ('test_world_inference_window.py', 'test_pr460_review_relation_retention.py'):
+            shutil.copyfile(ROOT / 'tests' / test_filename, snapshot / 'tests' / test_filename)
         source = snapshot / 'lingshu/world' / filename
         text = source.read_text(encoding='utf-8')
         assert text.count(old) == 1, (name, 'mutation target must be unique')
@@ -66,10 +77,17 @@ def main():
         log = result.stdout + result.stderr
         (OUT / (name + '.log')).write_text(log, encoding='utf-8')
         suite = ET.parse(xml).getroot().find('testsuite')
-        killed = (result.returncode == 1 and suite.get('tests') == '1' and suite.get('failures') == '1'
+        failure = suite.find('testcase/failure')
+        failure_message = failure.get('message', '') if failure is not None else ''
+        # These lifecycle guards must fail at the business assertion, not [0].
+        semantic_failure = (name not in {'M8_mixed_evidence', 'M10_coincident',
+                                         'M11_unified_mixed_evidence', 'M12_unified_coincident'}
+                            or ('AssertionError' in failure_message and 'IndexError' not in failure_message))
+        killed = (semantic_failure and result.returncode == 1 and suite.get('tests') == '1' and suite.get('failures') == '1'
                   and suite.get('errors') == '0' and suite.get('skipped') == '0'
                   and 'FAILED ' + nodeid in log)
-        records.append({'mutation': name, 'nodeid': nodeid, 'killed': killed, 'exit_code': result.returncode})
+        records.append({'mutation': name, 'nodeid': nodeid, 'killed': killed, 'exit_code': result.returncode,
+                        'failure_message': failure_message})
         print(name, 'KILLED' if killed else 'NOT_KILLED', nodeid, flush=True)
     (OUT / 'results.json').write_text(json.dumps(records, indent=2) + '\n', encoding='utf-8')
     print(f"SUMMARY {sum(r['killed'] for r in records)}/{len(records)}")

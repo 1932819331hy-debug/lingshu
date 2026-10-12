@@ -71,11 +71,15 @@ def test_absent_joint_observations_retain_relation_and_measured_parameters(model
     for x in range(10, 18):
         observe(x)
     infer(model)
-    before = [edge for edge in relations(model) if edge['source'] == ids[0]][0]
+    before = [edge for edge in relations(model) if edge['source'] == ids[0]]
+    assert len(before) == 1, 'Initial observations must establish one relation'
+    before = before[0]
     for _ in range(12):
         observe(None, include_b=False)
     result = infer(model)
-    after = [edge for edge in relations(model) if edge['source'] == ids[0]][0]
+    after = [edge for edge in relations(model) if edge['source'] == ids[0]]
+    assert len(after) == 1, 'Insufficient evidence must retain the existing relation'
+    after = after[0]
     assert (after['relation'], after['target'], after['confidence']) == (before['relation'], before['target'], before['confidence'])
     speed = (result['per_entity'][ids[0]]['speed_est'] if isinstance(model, CuriosityExplorer)
              else result['speed_estimates'][ids[0]])
@@ -88,30 +92,47 @@ def test_mixed_sparse_evidence_does_not_erase_a_supported_learner_relation():
     for x in range(10, 18):
         observe(x)
     infer(model)
-    before = [edge for edge in relations(model) if edge['source'] == ids[0]][0]
+    before = [edge for edge in relations(model) if edge['source'] == ids[0]]
+    assert len(before) == 1, 'Initial observations must establish one relation'
+    before = before[0]
     for x in (18, 18, 18, None, None, None):
         observe(x)
     infer(model)
-    after = [edge for edge in relations(model) if edge['source'] == ids[0]][0]
+    after = [edge for edge in relations(model) if edge['source'] == ids[0]]
+    assert len(after) == 1, 'Insufficient evidence must retain the existing relation'
+    after = after[0]
     assert (after['relation'], after['target']) == (before['relation'], before['target'])
-    assert after['stale'] is True
+    if isinstance(model, CuriosityExplorer):
+        assert after['stale'] is True
 
 
-def test_coincident_moving_entities_are_not_misclassified_as_a_measured_stop():
-    model, ids, observe = make_model(CuriosityExplorer)
+@pytest.mark.parametrize('model_class', [CuriosityExplorer, UnifiedWorldModel])
+def test_coincident_moving_entities_are_not_misclassified_as_a_measured_stop(model_class):
+    model, ids, observe = make_model(model_class)
     for x in range(10, 18):
         observe(x)
     infer(model)
-    before = [edge for edge in relations(model) if edge['source'] == ids[0]][0]
+    before = [edge for edge in relations(model) if edge['source'] == ids[0]]
+    assert len(before) == 1, 'Initial observations must establish one relation'
+    before = before[0]
     for x in range(20, 28):
-        for eid in ids:
-            model.world.entities[eid].pos = (x, 1.5, 2)
-        model.observe(entities=ids)
+        if isinstance(model, CuriosityExplorer):
+            for eid in ids:
+                model.world.entities[eid].pos = (x, 1.5, 2)
+            model.observe(entities=ids)
+        else:
+            model.perceive([{'eid': eid, 'category': eid, 'pos': (x, 1.5, 2)}
+                            for eid in ids])
     result = infer(model)
-    assert result['per_entity'][ids[0]]['speed_est'] == 1
-    after = [edge for edge in relations(model) if edge['source'] == ids[0]][0]
+    speed = (result['per_entity'][ids[0]]['speed_est'] if isinstance(model, CuriosityExplorer)
+             else result['speed_estimates'][ids[0]])
+    assert speed == 1
+    after = [edge for edge in relations(model) if edge['source'] == ids[0]]
+    assert len(after) == 1, 'Insufficient evidence must retain the existing relation'
+    after = after[0]
     assert (after['relation'], after['target']) == (before['relation'], before['target'])
-    assert after['stale'] is True
+    if isinstance(model, CuriosityExplorer):
+        assert after['stale'] is True
 
 
 @pytest.mark.parametrize('nested', [False, True])

@@ -291,7 +291,11 @@ class UnifiedWorldModel:
                 if a == b or self.nodes[b].attrs.get("hypothesis"):
                     continue
                 c, directional, samples = observations.pair(a, b)
-                sufficient = sufficient or samples >= 3
+                # Insufficient direction samples cannot retract an old relation.
+                # Only measured zero motion (not coincident movement) is stop evidence.
+                sufficient = (sufficient or directional >= 3
+                              or (samples >= 3 and directional == 0
+                                  and observations.motion(a)[3] is None))
                 if directional >= 3 and abs(c) > abs(best_c):
                     best_c, best_t, best_sign = c, b, c
             rel = None
