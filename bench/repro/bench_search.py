@@ -6,25 +6,30 @@
   hmb B_full             切B 题目，全书 23 章入库（同领域干扰）
   hmbscale N             切B + N 条 KdConv 跨领域干扰
   locomo N               locomo-zh-500（关键词串查询）+ N 条 KdConv 干扰
+CONTAINER_TAGS=1：按章写入容器标签 chapter:N（结构锚定 LINGSHU_ANCHOR 的写入契约；不影响无锚点检索）。
 ORDER=seq（默认）按语料顺序写入，等价于对话/叙述按时间到达；shuffle 打乱写入顺序。
 """
 import sys
 from common import build_set, evaluate, kdconv, locomo, engine, emit, pct, time, random, os
 
 
-def ingest(e, texts, seed):
+def ingest(e, texts, seed, tags=None):
     idx = list(range(len(texts)))
     if os.environ.get("ORDER", "seq") == "shuffle":
         random.Random(seed).shuffle(idx)
     m = {}
     for i in idx:
-        m[e.add_perception(texts[i], importance=0.5, skip_dedup=True).id] = i
+        m[e.add_perception(texts[i], importance=0.5, skip_dedup=True,
+                                 tags=tags[i] if tags else None).id] = i
     return m
 
 
-def hmb(chunks, qs, extra, name):
+def hmb(chunks, qs, extra, name, extra_tags=None):
     e = engine()
-    m = ingest(e, [t for _, _, t in chunks] + extra, 11)
+    tags = None
+    if os.environ.get("CONTAINER_TAGS") == "1":
+        tags = [[f"chapter:{no}"] for _, no, _ in chunks] + (extra_tags or [[] for _ in extra])
+    m = ingest(e, [t for _, _, t in chunks] + extra, 11, tags)
     lat = []
 
     def fn(q):
@@ -45,7 +50,8 @@ def main():
         if cut == "B_full":
             chunks, qs = build_set(16)
             full, _ = build_set(99)
-            r = hmb(chunks, qs, [t for (_, no, t) in full if no > 16], "hmb_B_full")
+            rest = [(no, t) for (_, no, t) in full if no > 16]
+            r = hmb(chunks, qs, [t for _, t in rest], "hmb_B_full", [[f"chapter:{no}"] for no, _ in rest])
         else:
             chunks, qs = build_set(8 if cut == "A" else 16)
             r = hmb(chunks, qs, [], f"hmb_{cut}")
@@ -78,6 +84,7 @@ def main():
         r = dict(suite=f"locomo_{n}", pool=len(texts), hit1=round(h1 / N, 3), hit10=round(h10 / N, 3),
                  mrr10=round(mrr / N, 3), p50_ms=round(1000 * pct(lat, .5), 2))
     r["order"] = os.environ.get("ORDER", "seq")
+    r["tags"] = os.environ.get("CONTAINER_TAGS", "0")
     emit(r)
 
 
