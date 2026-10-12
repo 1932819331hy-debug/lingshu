@@ -664,7 +664,7 @@ class World3D:
                 obj = Object3D(
                     category=category, center=tuple(result["center_3d"]),
                     size=spec.size, color=spec.color, shape=spec.shape,
-                    confidence=confidence, source="multiview", eid=eid,
+                    confidence=confidence, source="multiview", eid=result["eid"],
                     observed_tick=tick)
                 self.objects.append(obj)
                 if key is not None:
