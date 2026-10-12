@@ -319,7 +319,7 @@ if __name__ == "__main__":
     grid.save(demo_path)
     print(f"skeleton demo → {demo_path}")
 
-    # 走路动画：6 帧横排（每帧独立骨架 + 关节相位旋转）
+    # 走路**胶片条**：6 帧横排（每帧独立骨架 + 关节相位旋转）——静态图，不是动画
     cam_anim = Camera3D.look_at(eye=(0, 1.2, 1.8), target=(0, 1.0, 5.0), fov_deg=50)
     frame_w, frame_h = 240, 240
     strip = Image.new("RGB", (frame_w * 6, frame_h), (24, 28, 46))
@@ -333,6 +333,31 @@ if __name__ == "__main__":
         h.joints["shoulder_r"].rot = (0, 0, 0.4 * math.sin(t + math.pi))
         f = h.render(frame_w, frame_h, camera=cam_anim)
         strip.paste(f, (i * frame_w, 0))
-    anim_path = os.path.join(out_dir, "skeleton_walk.png")
-    strip.save(anim_path)
-    print(f"walk animation 6 frames → {anim_path}")
+    strip_path = os.path.join(out_dir, "skeleton_walk.png")
+    strip.save(strip_path)
+    print(f"walk filmstrip 6 frames (static sheet, NOT an animation) → {strip_path}")
+
+    # 真动画（追加，不改上面胶片条）：逐帧渲染（摆姿态）→ GIF。
+    # 相位取整数 1/12 步进：相邻帧的 sin 值必不相同。若沿用上面胶片条的 i/6 相位，
+    # 相邻帧会**像素完全相同**，而 Pillow 的 GIF 编码器对相同帧**无条件跳过**
+    # （GifImagePlugin `_write_multiple_frames` :697-704）⇒ anim.to_gif 的回读自校验会 raise。
+    from .anim import frames as anim_frames, to_gif
+
+    gif_sk = human_skeleton(center=(0, 0.85, 5), height=1.7)
+
+    def _walk_pose(i, sk):
+        t = i / 12 * 2 * math.pi
+        swing = 0.5 * math.sin(t)
+        sk.joints["thigh_l"].rot = (swing, 0, 0)
+        sk.joints["thigh_r"].rot = (-swing, 0, 0)
+        sk.joints["shoulder_l"].rot = (0, 0, -0.4 * math.sin(t + math.pi))
+        sk.joints["shoulder_r"].rot = (0, 0, 0.4 * math.sin(t + math.pi))
+
+    gif_path = os.path.join(out_dir, "skeleton_walk.gif")
+    gif_obs = to_gif(
+        anim_frames(gif_sk, 12, mutate=_walk_pose, size=(frame_w, frame_h), camera=cam_anim),
+        gif_path,
+        duration_ms=100,
+        loop=0,
+    )
+    print(f"walk animation {gif_obs['frames']} frames → {gif_path} ({gif_obs['bytes']} bytes)")
