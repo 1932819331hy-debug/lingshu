@@ -1,4 +1,4 @@
-# 复现说明：检索与置信度六项改动（全部默认关闭）
+# 复现说明：检索与置信度七项改动（全部默认关闭）
 
 本目录让维护者能从零复现 PR 里的全部读数：语料自动下载（锁定版本 + sha256 校验），评测脚本只依赖本仓库代码和 `numpy`、`pyyaml`。
 
@@ -11,12 +11,13 @@ python bench/repro/negative_results.py   # 试过但没有并入的方案（含�
 
 本次提交时的完整输出见 `results/RESULTS.md`（`raw.jsonl` 不入库）。脚本全部固定随机种子；除延迟外，重跑读数应当逐位一致。
 
-## 六个开关
+## 七个开关
 
 | 开关 | 改动 | 设计文档 |
 |---|---|---|
 | `LINGSHU_FTS=1` | 候选生成改为 FTS5 字符二元组 + BM25，取代「无序 LIKE + LIMIT 300/500」（Refs #35） | `docs/plans/检索候选生成_FTS5_BM25_设计_v0.1.md` |
 | `LINGSHU_FTS_CONTEXT=1` | 在 FTS 之上过滤问句功能词，并做时序邻接平滑 | `docs/plans/检索语境扩展_功能词与时序邻接_设计_v0.1.md` |
+| `LINGSHU_ANCHOR=1` | 结构锚定：问句显式点名容器（第N章 / 第N次会话）时，带 `chapter:N` / `session:N` 标签的节点按容器内相关度排最前 | `docs/plans/检索结构锚定_容器点名_设计_v0.1.md` |
 | `LINGSHU_RETRIEVAL_NO_TOUCH=1` | 检索命中不再刷新 `last_access`，切断 search→近因→recall 的自增强 | `docs/plans/检索不刷新近因_设计_v0.1.md` |
 | `LINGSHU_CONTRADICTION=1` | M5 近重复先做极性、数值、反义差分，发现冲突就不合并、不增信（Refs #142） | `docs/plans/矛盾感知_近重复差分_设计_v0.1.md` |
 | `enable_evidence_ledger()` | 证据账本：置信度由证据推导（#430） | `docs/plans/证据账本_置信度推导_设计_v0.1.md` |
@@ -27,6 +28,7 @@ python bench/repro/negative_results.py   # 试过但没有并入的方案（含�
 | 脚本 | 测什么 | 数据 |
 |---|---|---|
 | `bench_search.py` | `store.search_content` top-10：证据保留、另一侧覆盖、块级命中、hit@10、MRR、p50 延迟 | hmb 切A/切B/全书；加 KdConv 干扰；locomo-zh |
+| `bench_anchor.py` | 结构锚定按题型拆分：点名章节题 vs 其余题的证据保留；漏检中「所在章已命中」的条数。只跑结构锚定：`for c in base anchor fts_ctx fts_ctx_anchor` 段（`run_all.sh` 1b） | hmb 切A/切B（写入带 chapter:N） |
 | `bench_recall_drift.py` | `engine.recall` 连续三轮，观察近因自增强 | hmb |
 | `bench_supersede.py` | 知识更新：旧值被问过之后再写入新值，新值能否排第一 | 构造 |
 | `bench_correction.py` | 更正是否被 M5 吞掉、原命题是否被增信、矛盾两侧能否同时召回、同义复述是否被误拆 | 构造 |
