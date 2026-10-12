@@ -47,10 +47,10 @@ hmb 指标口径见 `common.py` 文件头。这是我们自建的口径，与 hi
 
 - **另一侧覆盖**（同一题里与题面最像和最不像的两条证据同时进 top-10）：没有哪个改动带来稳定提升，不要据此宣称多跳或对照证据问题已解决。
 - 约三分之一漏检的证据与问句**零共享二元组**（作者动机、叙述形式这类分析题），字面检索取不到。
-- 两条已有测试与新语义冲突，只在开关打开时出现，开关关闭时全部通过：
+- 全部开关打开时有 4 条已有测试与新语义冲突，开关关闭时全部通过（默认 834 passed / 0 failed）：
   - `test_core_search_discrimination.py::test_document_without_query_scores_zero`：FTS 不再返回零匹配文档；
-  - `test_scene_ingest_dedup.py` 的 G6：矛盾感知开启后，坐标数值不同的观测不再被合并。
-  两者都需要维护者裁定测试口径。
+  - `test_issue29_memory_pollution_guard.py` 的 W1 / W5 / W7：只在 `LINGSHU_EVIDENCE_LEDGER=1` 时失败，与证据账本改变置信度的写法有关。
+  这些都需要维护者裁定测试口径。早先版本列出的 `test_scene_ingest_dedup.py` G6，在当前全开测试中已不再失败。
 
 ## 为什么不用稠密向量（embedding）
 
