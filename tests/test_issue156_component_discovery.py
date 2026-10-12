@@ -80,6 +80,10 @@ STDLIB_ALLOWED = frozenset({
     # 修复时 core.py 引入——标准库；守卫按设计判红「未知裸名」，此处补分类而非放宽判据）
     "sys", "os", "importlib", "warnings", "pathlib",
     "weakref", "functools", "contextlib",
+    # 运行时自省（inspect：2026-10-13 PR #516 收敛包装链签名契约，
+    # world/world_model.py 引入——标准库；守卫按设计判红「未知裸名」，
+    # 此处补分类而非放宽判据）
+    "inspect",
     # 并发 / 时间 / 唯一定名（queue：2026-10-09 采纳 PR #260 时 brain_store.py 引入——
     # 标准库、与 threading 同族；守卫按设计判红「未知裸名」，此处补分类而非放宽判据）
     "threading", "queue", "time", "uuid",

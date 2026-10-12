@@ -42,3 +42,12 @@ MDCG_BRAIN_PYTHONPATH=<脑包目录> python -X utf8 tests/test_brain_store.py
 - 状态事件的 `old` 恒为 None（legacy `ingest_scene` 只传新值；变迁史由事件序承担）；
 - 垫片只翻译 `UPDATE nodes SET state_attributes` 一条 legacy 语句形态（其它 SQL 抛错）；
 - 本件为身侧新件，未经独立复核前不外推「产品可用」——复跑命令与断言即判据。
+
+## 第一批功能续接（2026-10-12）
+
+场景接口新增 WorldModel / 关系输入，实体卡保留实例 ID、关系及观测条件。
+BrainNode 透出 created_at 为观测时新度，正文通过 next_offset 完整续读。
+推演经验由既有 add_perception 经 MCP 保存为 tool-output，恢复使用 receipt 视图
+或已知 memory_id 精确读取；仍不复制脑核或新增记忆数据库。
+完整用法、两轮像素观测与真实脑进程重启验证、适用边界见
+[第一批报告](../../world_memory_first_batch.md)。

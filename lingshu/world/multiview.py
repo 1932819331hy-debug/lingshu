@@ -176,13 +176,25 @@ class MultiViewFusion:
                         size: Tuple[float, float, float] = (1.0, 1.0, 1.0),
                         color: Tuple[int, int, int] = (200, 200, 200),
                         shape: str = "box",
-                        confidence: float = 0.5) -> Dict:
+                        confidence: float = 0.5, eid: str = "",
+                        tick: Optional[int] = None) -> Dict:
         """添加一个视角的观测（类别 + 视角）→ 三角化融合 → 返回 3D 位置。
 
         观测先按 merge_dist 关联到该类别下的某个物体桶，再在桶内三角化——
         同类不同物体各自成桶，互不污染。
         """
-        rec = self._associate(category, obs)
+        if eid:
+            tracks = self._objects.setdefault(category, [])
+            rec = next((tr for tr in tracks if tr.get("eid") == eid), None)
+            if rec is None:
+                rec = {"views": [], "center": None, "eid": eid}
+                tracks.append(rec)
+        else:
+            rec = self._associate(category, obs)
+        # 一个运动实例的不同帧不能充当同一时刻的多相机射线。
+        if tick is not None and tick != rec.get("tick"):
+            rec["views"], rec["center"] = [], None
+        rec["tick"] = tick
         rec["size"], rec["color"], rec["shape"] = size, color, shape
         rec["views"].append(obs)
         # 保留最近 N 视角（内存控制）
@@ -200,6 +212,7 @@ class MultiViewFusion:
             "views_used": len(rec["views"]),
             "triangulated": center is not None,
             "confidence": confidence,
+            "eid": rec.get("eid", ""), "tick": tick,
         }
 
     def fused_objects(self) -> List[Dict]:
@@ -214,5 +227,6 @@ class MultiViewFusion:
                     "center": tuple(round(c, 2) for c in rec["center"]),
                     "size": rec["size"], "color": rec["color"], "shape": rec["shape"],
                     "views": len(rec["views"]),
+                    "eid": rec.get("eid", ""), "tick": rec.get("tick"),
                 })
         return out

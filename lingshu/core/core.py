@@ -5917,9 +5917,11 @@ class SpacetimeMemoryEngine:
             if not category or not bbox or len(bbox) != 4:
                 return {"status": "error", "error": "category 与 bbox=[x1,y1,x2,y2] 必填"}
             vp = VPrim(category, tuple(float(v) for v in bbox),
-                       float(p.get("confidence", 0.5)), source="manual")
+                       float(p.get("confidence", 0.5)), source=str(p.get("source", "manual")),
+                       eid=str(p["eid"]) if p.get("eid") is not None else "",
+                       ts=float(p.get("timestamp", time.time())))
             self._world3d.add_vprim(vp, int(p.get("screen_w", 800)),
-                                    int(p.get("screen_h", 600)))
+                                    int(p.get("screen_h", 600)), tick=p.get("tick"))
             return {"status": "ok", "scene": self._world3d.scene_text()}
         if action == "add_view":
             """多视角融合（阶段1 · 里程碑1.1）：category + bbox + 视角相机 → 三角化。
@@ -5938,7 +5940,8 @@ class SpacetimeMemoryEngine:
                                cx=float(cp.get("cx", 0)), cy=float(cp.get("cy", 1.2)))
             result = self._world3d.add_view(category, [float(v) for v in bbox],
                                             sw, sh, camera=cam,
-                                            confidence=float(p.get("confidence", 0.5)))
+                                            confidence=float(p.get("confidence", 0.5)),
+                                            eid=str(p["eid"]) if p.get("eid") is not None else "", tick=p.get("tick"))
             result["scene"] = self._world3d.scene_text()
             return {"status": "ok", **result}
         return {"status": "error", "error": f"未知动作 {action}（可用: build/render/status/add/add_view/graph/verify/verify_conflict）"}
@@ -6032,6 +6035,7 @@ class SpacetimeMemoryEngine:
     def wm_simloop(self, action: str, params: dict = None) -> dict:
         """世界模型推演循环（里程碑 M5.1 · WM-SIMLOOP-REV1）：
         - setup: 构建推演循环（size/seed/entities/mask/wal_path）
+        - attach: 推演循环接到已经初始化、正在接收观测的统一模型
         - run: 推进 n tick（可选 script=drift_sinusoid 内置确定性外部演化）
         - step: 推进 n tick（无汇总）
         - load: 认知图现在时节点 → 世界图先验（mdcg_root）
@@ -6046,6 +6050,11 @@ class SpacetimeMemoryEngine:
                 from ..world.wm_simloop import SimulationLoop
             except Exception as e:
                 return {"status": "simloop_not_ready", "error": str(e)}
+        if action == "attach":
+            if not hasattr(self, '_wmodel'):
+                return {"status": "error", "error": "先初始化统一世界模型"}
+            self._simloop = SimulationLoop(world_model=self._wmodel, wal_path=p.get("wal_path"))
+            return {"status": "ok", "state": self._simloop.state()}
         if action == "setup":
             # #248：默认 WAL 路径不再写死相对 cwd 的 "data/"。旧实现
             # `os.path.join("data", "wm_simloop_wal.jsonl")` 相对**进程 cwd**，
@@ -6099,7 +6108,9 @@ class SpacetimeMemoryEngine:
             return {"status": "ok", "state": sl.step(n=int(p.get("n", 1)))}
         if action == "load":
             return {"status": "ok",
-                    "load": sl.load_priors(str(p.get("mdcg_root", "")))}
+                    "load": sl.load_priors(str(p.get("mdcg_root", "")),
+                                           limit=int(p.get("limit", 20)), brain=p.get("brain"),
+                                           memory_id=p.get("memory_id"))}
         if action == "flush":
             out = p.get("out_path")
             if out:
@@ -6108,7 +6119,7 @@ class SpacetimeMemoryEngine:
                     out = self._confine_simloop_out_path(str(out))
                 except ValueError as e:
                     return {"status": "error", "error": str(e)}
-            r = sl.flush_payloads(out_path=out)
+            r = sl.flush_payloads(out_path=out, brain=p.get("brain"))
             return {"status": "ok",
                     "flush": {k: r[k] for k in ("payload", "written", "note")}}
         if action == "wal":
@@ -6121,7 +6132,7 @@ class SpacetimeMemoryEngine:
             return {"status": "ok", "report": sl.report()}
         if action == "state":
             return {"status": "ok", "state": sl.state()}
-        return {"status": "error", "error": f"未知动作 {action}（可用: setup/run/step/load/flush/wal/growth/report/state）"}
+        return {"status": "error", "error": f"未知动作 {action}（可用: setup/attach/run/step/load/flush/wal/growth/report/state）"}
 
     def scene_simulator(self, action: str, params: dict = None) -> dict:
         """场景级世界模拟器（里程碑2.3 · 自主行为玩家）：
@@ -6254,7 +6265,8 @@ class SpacetimeMemoryEngine:
         - create: 物理世界创建场景（trees/water）
         - entity: 物理世界添加自主实体（行为已知=世界真相，模型只能观测）
         - path: 定义巡逻路径
-        - perceive: 理解端口（观测→世界图；生成先验注入理解=预测-观测一致性异常检测）
+        - perceive: 理解端口（外部 observations 或沙盒观测；可传 tick/timestamp）
+        - perceive_visual: 把该 tick 的视觉重建对象送入同一理解端口
         - generate: 生成端口（世界图→候选未来，顺序语义外推+不确定边界）
         - verify: 验证端口（外部观察者对比→命中率）
         - run: 持续运行 n tick（generate→物理演化→perceive→verify）
@@ -6297,7 +6309,20 @@ class SpacetimeMemoryEngine:
             self._wmodel.world.add_path(str(p.get("path_id", "")), p.get("points", []))
             return {"status": "ok", "path_id": str(p.get("path_id", ""))}
         if action == "perceive":
-            r = self._wmodel.perceive(tool=str(p.get("tool", "observer")))
+            r = self._wmodel.perceive(observations=p.get("observations"),
+                                     tool=str(p.get("tool", "observer")),
+                                     tick=p.get("tick"), timestamp=p.get("timestamp"))
+            return {"status": "ok", "perceive": r}
+        if action == "perceive_visual":
+            if not hasattr(self, '_world3d'):
+                return {"status": "error", "error": "尚无视觉重建（先 world3d）"}
+            obs = self._world3d.observations(tick=p.get("tick"))
+            r = self._wmodel.perceive(obs, tool=str(p.get("tool", "world3d")),
+                                     tick=p.get("tick"), timestamp=p.get("timestamp"))
+            visible = [obj for obj in self._world3d.objects
+                       if p.get("tick") is None or obj.observed_tick == p["tick"]]
+            for obj, observation in zip(visible, r["observations"]):
+                obj.eid = observation["eid"]
             return {"status": "ok", "perceive": r}
         if action == "generate":
             r = self._wmodel.generate(horizon=int(p.get("horizon", 1)))
@@ -6320,7 +6345,7 @@ class SpacetimeMemoryEngine:
                     "history": self._wmodel.history_view(limit=int(p.get("limit", 10)))}
         if action == "state":
             return {"status": "ok", "model": self._wmodel.state()}
-        return {"status": "error", "error": f"未知动作 {action}（可用: init/create/entity/path/perceive/generate/verify/run/patterns/anomalies/graph/history/state）"}
+        return {"status": "error", "error": f"未知动作 {action}（可用: init/create/entity/path/perceive/perceive_visual/generate/verify/run/patterns/anomalies/graph/history/state）"}
 
     def world_learner(self, action: str, params: dict = None) -> dict:
         """自监督世界学习（里程碑3.2 · V-JEPA 式）：从观测序列无标注学转移函数——
