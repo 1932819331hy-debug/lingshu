@@ -10,6 +10,7 @@ import numpy as np
 import pytest
 
 from lingshu.nn.hex_cnn import hex_conv
+from lingshu.nn.hex_hier import HexHierNet
 from lingshu.nn.hex_train import (HexNet, calibrate_class_cards, four_state_accuracy,
                             four_state_classify, hex_conv_batch,
                             normalize_lattices, pretrain_selfsup, train_infogap)
@@ -65,6 +66,37 @@ def test_set_vec_does_not_alias_caller_buffer():
     v2 = np.arange(net.n_params(), dtype=np.float64)
     net.set_vec(v2)
     assert np.array_equal(net.get_vec(), v2)
+
+
+def test_set_vec_does_not_alias_caller_buffer_hier():
+    """守卫(#556,同族 #340):HexHierNet.set_vec 不得把模型参数别名到调用方缓冲。
+
+    判据来源:本 PR #556/#557 取证——clean main 实测 `np.shares_memory` 对
+    `conv`/`conv2`/`head` 三段均为 True,且调用方 `vec += 1e3` 后 `get_vec()`
+    读数随之变(静默改参,绕过 set_vec 的显式载入);PR head 全为 False 且不变。
+    根因:连续 ndarray 上的切片是视图,`.reshape` 仍是视图——须 `.copy()`。
+    覆盖 `stacked=True`(conv/conv2/head)与 `stacked=False`(conv/head)两条构造路径。
+
+    断言三件事:① 各段参数均不与调用方缓冲共享内存;② 调用方原地改自己的
+    vec 后,模型参数读数逐位不变;③ 载入语义本身仍正确(copy 不改变取值)。
+    """
+    for stacked in (True, False):
+        net = HexHierNet(stacked=stacked)
+        names = ("conv", "conv2", "head") if stacked else ("conv", "head")
+        vec = net.get_vec()
+        net.set_vec(vec)
+        for name in names:
+            assert not np.shares_memory(getattr(net, name), vec), \
+                f"HexHierNet(stacked={stacked}).{name} 别名到调用方缓冲"
+        snap = net.get_vec().copy()
+        vec += 1e3                               # 调用方原地改自己的缓冲
+        assert np.array_equal(net.get_vec(), snap), \
+            f"HexHierNet(stacked={stacked}) 调用方写入穿透到模型参数"
+        # 载入语义仍正确:喂一条已知向量,读回逐位相等
+        v2 = np.arange(net.n_params(), dtype=np.float64)
+        net.set_vec(v2)
+        assert np.array_equal(net.get_vec(), v2), \
+            f"HexHierNet(stacked={stacked}) 载入语义不正确"
 
 
 def test_branch_deadzone_freezes():
