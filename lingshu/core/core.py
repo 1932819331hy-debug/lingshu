@@ -3861,16 +3861,32 @@ class LayeredStore:
     # ---------- 统计 ----------
 
     def get_stats(self) -> Dict:
-        """全库统计快照（各层节点数等聚合指标）。"""
+        """全库统计快照（各层节点数等聚合指标）。
+
+        ★优化（本笔 · 零行为变更）：旧实现按 `MemoryLayer` **逐层**发一条
+        `SELECT COUNT(*) FROM nodes WHERE layer=?`（N 次），再各发一条 COUNT 查边
+        （2 次）⇒ 共 **N+2** 次往返。改为：
+          · 节点侧一趟 `GROUP BY layer` 聚合（1 次）；
+          · 边侧一趟条件聚合（1 次，同时取 total 与 verified）。
+        ⇒ **N+2 → 2** 次查询。
+
+        **返回形状与取值必须逐位不变**：零节点的层在旧实现里由循环显式赋 0，
+        而 `GROUP BY` 不会为它出行 —— 故先按 `MemoryLayer` 预置 0、再用聚合结果覆盖。
+        历史/未知层名（不在 `MemoryLayer` 内的 `layer` 值）旧实现本就不计，新实现同样跳过。
+        """
         c = self.conn.cursor()
-        stats = {}
-        for layer in MemoryLayer:
-            c.execute("SELECT COUNT(*) FROM nodes WHERE layer=?", (layer.value,))
-            stats[f"{layer.value}_nodes"] = c.fetchone()[0]
-        c.execute("SELECT COUNT(*) FROM edges")
-        stats["total_edges"] = c.fetchone()[0]
-        c.execute("SELECT COUNT(*) FROM edges WHERE verified=1")
-        stats["verified_edges"] = c.fetchone()[0]
+        stats = {f"{layer.value}_nodes": 0 for layer in MemoryLayer}
+        c.execute("SELECT layer, COUNT(*) FROM nodes GROUP BY layer")
+        for _lv, _n in c.fetchall():
+            _k = f"{_lv}_nodes"
+            if _k in stats:                     # 只认 MemoryLayer 内的层名（旧口径）
+                stats[_k] = _n
+        # 边侧一趟取两个读数：`SUM(verified=1)` 与旧 `WHERE verified=1` 同口径
+        # （NULL 不满足 `=1` ⇒ 两边都不计）；空表时 SUM 为 NULL ⇒ COALESCE 回落 0。
+        c.execute("SELECT COUNT(*), COALESCE(SUM(verified=1), 0) FROM edges")
+        _te, _ve = c.fetchone()
+        stats["total_edges"] = _te
+        stats["verified_edges"] = int(_ve)
         return stats
 
     def close(self):
@@ -8588,22 +8604,27 @@ class SpacetimeMemoryEngine:
         kept = 0
         with self.store._lock:
             c = self.store.conn.cursor()
-            c.execute("SELECT id, content, importance, last_access, tags FROM nodes "
+            # ★优化（本笔 · 零行为变更）三处：
+            #   ① 旧首查 `SELECT id, content, importance, last_access, tags` 里的
+            #      `content` **在循环体里从未被读取** ⇒ 每个 context 节点白读一遍
+            #      大文本列。本笔去掉它。
+            #   ② `access_count` 与首查同表同过滤面，旧实现却在循环内逐节点
+            #      `SELECT access_count FROM nodes WHERE id=?`（N 次往返）⇒ 并入首查。
+            #   ③ 旧 `stale = (...) and self.store.get_node(nid) is not None` 这个局部量
+            #      **从未被读取**（#210 已删过它上方的 `access_stale` 死代码，同处漏了这条），
+            #      却对每个 context 节点各发一次 `get_node`（读**整行**节点）⇒ 一并删除。
+            #   ⇒ 每轮从「首查 + N×get_node + N×SELECT access_count + ≤N×UPDATE」
+            #     收成「首查 + ≤N×UPDATE」。判定口径（signal 的两个来源、归档只降不升、
+            #     `no_forget`/`archived` 跳过）**逐字未动**。
+            c.execute("SELECT id, importance, last_access, tags, access_count FROM nodes "
                       "WHERE layer='context'")
-            for nid, content, imp, last_acc, tags in c.fetchall():
+            for nid, imp, last_acc, tags, acc in c.fetchall():
                 tags = json.loads(tags) if isinstance(tags, str) and tags else []
                 if "no_forget" in tags or "archived" in tags:
                     continue  # 不可遗忘 / 已归档
-                stale = (last_acc is None or (now - (last_acc or 0)) > stale_days * 86400) \
-                    and self.store.get_node(nid) is not None
                 # 访问信号：从未被访问且久远
-                # #210：此处原有 `access_stale = (...) if False else None` 死代码
-                # （真值恒 None、后续只查下方 `SELECT access_count`），已删除。
-                # 直接查 access_count
-                c2 = self.store.conn.cursor()
-                c2.execute("SELECT access_count FROM nodes WHERE id=?", (nid,))
-                row = c2.fetchone()
-                acc = row[0] if row else 0
+                # #210：此处原有 `access_stale = (...) if False else None` 死代码，已删除。
+                # `acc` 已由首查带出（见上方 ②），不再逐节点回查。
                 signal = 0
                 if acc == 0 and (now - (last_acc or now)) > stale_days * 86400:
                     signal += 1  # 访问信号
