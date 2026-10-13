@@ -6554,7 +6554,7 @@ class SpacetimeMemoryEngine:
                         "max_depth": max_depth, "protocol": "3.12+1.6.7"}
 
         # ---- 0. 元反思（1.6.7）：结构性后退，审视反思标准 ----
-        report["meta_reflection"] = self._meta_reflection(claim)
+        report["meta_reflection"] = self._meta_reflection()
 
         # VPRIM-REV1：claim 含视觉锚点（cat@(x1,y1,x2,y2)）时注入视觉上下文
         vctx = self._vprim_context_for_claim(claim)
@@ -6632,8 +6632,15 @@ class SpacetimeMemoryEngine:
                 "anchor_limit": self.MAX_VPRIM_ANCHORS,
                 "note": "确定性空间原语（VPRIM-REV1）：坐标精确性替代语言近似"}
 
-    def _meta_reflection(self, claim: str) -> dict:
-        """1.6.7 元反思：结构性后退——审视反思标准本身（非更深的递归）。"""
+    def _meta_reflection(self) -> dict:
+        """1.6.7 元反思：结构性后退——审视反思标准本身（非更深的递归）。
+
+        #510：本阶段**不读 claim**——元反思审视的是反思过程的结构性前提
+        （反思者自述状态 + 递归边界声明），与具体 claim 无关（改前实测：
+        任意两条不同 claim 的输出逐位相同）。签名原声明 claim 却零引用，
+        且与 report['claim'] 同报输出、误导读者以为元反思针对该 claim——
+        按「接线或删签名」口径删签名并在此写明。
+        """
         result = {"standards": []}
         # 元认知校准状态（P0-4）：反思者自身的可靠性
         try:
@@ -6644,7 +6651,7 @@ class SpacetimeMemoryEngine:
                     if k in rel}
         except Exception:
             pass
-        # 反思标准声明：当前 claim 的观察位置/工具（条件空间锚定）
+        # 反思标准声明：反思者的观察位置/工具自述（结构性，与具体 claim 无关）
         result["standards"].append({
             "standard": "观察位置与工具",
             "condition": getattr(self.self_model, "state_description", "运行中")[:120],
