@@ -2332,9 +2332,17 @@ class LayeredStore:
             # 边界（削掉的判别力）：阈值本体**未改**（仍是 `min_confidence`）；
             # 受保护件仍经 `_is_forget_protected` 跳过（#36 不变）。判别力变化只在
             # 「≤ 阈值的低价值情境节点现在会进入遗忘面」——这正是本件要修的死区。
-            c.execute("SELECT id, importance FROM nodes WHERE layer='context'")
-            for nid, imp in c.fetchall():
-                if self._is_forget_protected(self.get_node(nid), protected_set):
+            c.execute("SELECT id, importance, tags FROM nodes WHERE layer='context'")
+            for nid, imp, _tags in c.fetchall():
+                # ★优化（本笔）：旧实现传 `self.get_node(nid)` —— 那是
+                # `SELECT * FROM nodes WHERE id=?`（读**整行** + 建 `STNode`），
+                # 每节点一次；而本谓词只用 `tags` 与 `id` 两字段。现由本查询带出
+                # `tags` 并走 `_is_forget_protected` 的直传入口（同一段判定体）。
+                # `json.loads` 与 `STNode.from_row` 同款裸调（该列由 `_dumps_tags`
+                # 写、`from_row` 亦裸解析）⇒ 坏行的失败语义与旧路径**逐位一致**。
+                if self._is_forget_protected(None, protected_set,
+                                             node_id=nid,
+                                             tags=json.loads(_tags) if _tags else []):
                     continue  # 不可遗忘（3.2 节）：受保护件不因衰减路径消失
                 # #185：存量坏行兜底——`importance` 为 NULL/非有限时
                 # `cred_step(None, factor)` 抛 TypeError 会**整轮衰减中断**
@@ -2363,11 +2371,15 @@ class LayeredStore:
             # ③ 置信度已达上限（1.0）者视为已确证，不衰减；④ 只降 confidence，
             # **不删节点**（知识层不适用情境层的自然遗忘删除）。
             c.execute('''
-                SELECT id, confidence FROM nodes
+                SELECT id, confidence, tags FROM nodes
                 WHERE layer='knowledge' AND confidence > ? AND confidence < 1.0
             ''', (min_confidence,))
-            for nid, conf in c.fetchall():
-                if self._is_forget_protected(self.get_node(nid), protected_set):
+            for nid, conf, _tags in c.fetchall():
+                # ★优化（本笔）：与上一段同款——`tags` 由本查询带出，不再逐节点
+                # `get_node`（读整行 + 建 STNode）。谓词本体与失败语义未变。
+                if self._is_forget_protected(None, protected_set,
+                                             node_id=nid,
+                                             tags=json.loads(_tags) if _tags else []):
                     continue
                 c.execute("UPDATE nodes SET confidence=? WHERE id=?",
                           (self._decay_value(conf, factor, dt), nid))
@@ -3017,7 +3029,8 @@ class LayeredStore:
         c.execute("SELECT node_id FROM protections")
         return [r[0] for r in c.fetchall()]
 
-    def _is_forget_protected(self, node, protected: Set[str] = None) -> bool:
+    def _is_forget_protected(self, node, protected: Set[str] = None,
+                             *, node_id: str = None, tags: List[str] = None) -> bool:
         """遗忘保护谓词（唯一真源，lingshu #36）：`protections` 行登记 ∪ `no_forget` 标签。
 
         供 `delete_node` / `decay_cycle`（情境层删除段）共用——修前两处判据不一致
@@ -3027,14 +3040,23 @@ class LayeredStore:
         ＋ 待裁清单 D-15/D-17（应用层单一谓词）。
         边界（削掉的判别力）：`protections.created_at` 仍不被读——保护**永久**生效，
         无 TTL（待裁清单 D-11 裁定「永久＋显式解除」，本件不引入时效语义）。
+
+        ★优化（本笔 · 零行为变更）：本谓词实际只读 `node.tags` 与 `node.id` 两个字段，
+        而批量调用方（`decay_cycle` 的两段循环）此前传的是 `self.get_node(nid)`
+        —— 那是 `SELECT * FROM nodes WHERE id=?`（读**整行** + 建 `STNode`），每节点一次。
+        现新增 `node_id` / `tags` **直传入口**：批量调用方已由主查询带出这两列，无需回查。
+        **判据本体未动**（仍 `no_forget` ∈ tags ∪ `node.id` ∈ protected），且
+        「传 node / 传 node_id+tags」两条入口走**同一段**判定 ⇒ 不可能分叉。
         """
-        if node is None:
-            return False
-        if "no_forget" in (node.tags or []):
+        if node_id is None:                      # 旧入口：由 node 取两字段
+            if node is None:
+                return False
+            node_id, tags = node.id, node.tags
+        if "no_forget" in (tags or []):
             return True
         if protected is None:
             protected = set(self.get_protected_nodes())
-        return node.id in protected
+        return node_id in protected
 
     # ==================== 冲突标记（M5） ====================
 
