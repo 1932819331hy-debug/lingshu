@@ -1,0 +1,378 @@
+{
+  "runtime": {
+    "body": "Python3.12.13",
+    "brain": "Python3.13.13",
+    "brain_isolation": "HOME/USERPROFILE临时目录+显式脑库root"
+  },
+  "feedback": {
+    "text": "左上有红色小点纹圆形",
+    "seed": 7,
+    "size": 96,
+    "before": 1,
+    "after": 0,
+    "parts_unchanged": true,
+    "images_still_match": true,
+    "refine": {
+      "rounds": [
+        {
+          "round": 0,
+          "diff_before": 1,
+          "diff_after": 1,
+          "changes": [],
+          "stop_reason": null
+        },
+        {
+          "round": 1,
+          "diff_before": 1,
+          "diff_after": 0,
+          "changes": [
+            {
+              "part": 0,
+              "kind": "pattern",
+              "render_params": {
+                "pattern_period": 2
+              },
+              "diff_before": 1,
+              "diff_after": 0
+            }
+          ],
+          "stop_reason": "已消除全部可判差异"
+        }
+      ],
+      "before": 1,
+      "after": 0,
+      "improved": true,
+      "verifiable": true,
+      "stop_reason": "已消除全部可判差异",
+      "overrides": [
+        {
+          "part": 0,
+          "render_params": {
+            "pattern_period": 2
+          }
+        }
+      ],
+      "unresolved": [],
+      "coverage": {
+        "parts": 1,
+        "covered": [
+          0
+        ],
+        "uncovered": [],
+        "judged": [
+          0
+        ],
+        "colors": [
+          "red",
+          "green",
+          "blue"
+        ],
+        "size_shape": "circle",
+        "min_size": 96,
+        "params": [
+          {
+            "pattern_period": 2
+          },
+          {
+            "pattern_period": 4
+          }
+        ],
+        "reason": null
+      },
+      "note": ""
+    }
+  },
+  "unverifiable_orange": {
+    "rounds": [
+      {
+        "round": 0,
+        "diff_before": null,
+        "diff_after": null,
+        "changes": [],
+        "stop_reason": "回读覆盖为空：0/1 个部件可判，未覆盖 part [0]（不修正、不声称成功）"
+      }
+    ],
+    "before": null,
+    "after": null,
+    "improved": false,
+    "verifiable": false,
+    "stop_reason": "回读覆盖为空：0/1 个部件可判，未覆盖 part [0]（不修正、不声称成功）",
+    "overrides": [],
+    "unresolved": [],
+    "coverage": {
+      "parts": 1,
+      "covered": [],
+      "uncovered": [
+        {
+          "part": 0,
+          "color": "orange",
+          "reason": "色 'orange' 不在回读色词表 ['red', 'green', 'blue']（超表不猜）"
+        }
+      ],
+      "judged": [],
+      "colors": [
+        "red",
+        "green",
+        "blue"
+      ],
+      "size_shape": "circle",
+      "min_size": 96,
+      "params": [
+        {
+          "pattern_period": 2
+        },
+        {
+          "pattern_period": 4
+        }
+      ],
+      "reason": "回读覆盖为空：0/1 个部件可判，未覆盖 part [0]（不修正、不声称成功）"
+    },
+    "note": "回读覆盖为空：0/1 个部件可判，未覆盖 part [0]（不修正、不声称成功）"
+  },
+  "actions": {
+    "ticks": 40,
+    "seed": 42,
+    "runs": {
+      "static/predictive": {
+        "scenario": "static",
+        "policy": "predictive",
+        "target_kind": "static_beacon",
+        "runner_final": [
+          18.0,
+          1.5,
+          18.0
+        ],
+        "target_final": [
+          18.0,
+          1.5,
+          18.0
+        ],
+        "final_distance": 0.0,
+        "actions": [
+          "east",
+          "south",
+          "east",
+          "south",
+          "east",
+          "south",
+          "east",
+          "south",
+          "east",
+          "south",
+          "east",
+          "south",
+          "east",
+          "south",
+          "east",
+          "south",
+          "east",
+          "south",
+          "east",
+          "south",
+          "east",
+          "south",
+          "east",
+          "south",
+          "east",
+          "south",
+          "east",
+          "south",
+          "east",
+          "south",
+          "east",
+          "south",
+          "stay",
+          "stay",
+          "stay",
+          "stay",
+          "stay",
+          "stay",
+          "stay",
+          "stay"
+        ],
+        "extrapolated_ticks": 0,
+        "final_traced_distance": 0.0
+      },
+      "static/fixed": {
+        "scenario": "static",
+        "policy": "fixed",
+        "target_kind": "static_beacon",
+        "runner_final": [
+          23.5,
+          1.5,
+          2.0
+        ],
+        "target_final": [
+          18.0,
+          1.5,
+          18.0
+        ],
+        "final_distance": 16.9189,
+        "actions": [
+          "east",
+          "east",
+          "east",
+          "east",
+          "east",
+          "east",
+          "east",
+          "east",
+          "east",
+          "east",
+          "east",
+          "east",
+          "east",
+          "east",
+          "east",
+          "east",
+          "east",
+          "east",
+          "east",
+          "east",
+          "east",
+          "east",
+          "east",
+          "east",
+          "east",
+          "east",
+          "east",
+          "east",
+          "east",
+          "east",
+          "east",
+          "east",
+          "east",
+          "east",
+          "east",
+          "east",
+          "east",
+          "east",
+          "east",
+          "east"
+        ],
+        "extrapolated_ticks": 0,
+        "final_traced_distance": 16.9189
+      },
+      "patrol/predictive": {
+        "scenario": "patrol",
+        "policy": "predictive",
+        "target_kind": "moving_scout",
+        "runner_final": [
+          14.0,
+          1.5,
+          14.0
+        ],
+        "target_final": [
+          14.0,
+          1.5,
+          14.0
+        ],
+        "final_distance": 0.0,
+        "actions": [
+          "east",
+          "east",
+          "east",
+          "east",
+          "east",
+          "east",
+          "south",
+          "south",
+          "south",
+          "east",
+          "south",
+          "south",
+          "east",
+          "south",
+          "south",
+          "south",
+          "east",
+          "south",
+          "south",
+          "east",
+          "south",
+          "south",
+          "south",
+          "south",
+          "east",
+          "south",
+          "south",
+          "south",
+          "east",
+          "stay",
+          "stay",
+          "north",
+          "north",
+          "stay",
+          "north",
+          "stay",
+          "north",
+          "south",
+          "north",
+          "north"
+        ],
+        "extrapolated_ticks": 37,
+        "final_traced_distance": 0.0
+      },
+      "patrol/fixed": {
+        "scenario": "patrol",
+        "policy": "fixed",
+        "target_kind": "moving_scout",
+        "runner_final": [
+          23.5,
+          1.5,
+          2.0
+        ],
+        "target_final": [
+          14.0,
+          1.5,
+          14.0
+        ],
+        "final_distance": 15.3052,
+        "actions": [
+          "east",
+          "east",
+          "east",
+          "east",
+          "east",
+          "east",
+          "east",
+          "east",
+          "east",
+          "east",
+          "east",
+          "east",
+          "east",
+          "east",
+          "east",
+          "east",
+          "east",
+          "east",
+          "east",
+          "east",
+          "east",
+          "east",
+          "east",
+          "east",
+          "east",
+          "east",
+          "east",
+          "east",
+          "east",
+          "east",
+          "east",
+          "east",
+          "east",
+          "east",
+          "east",
+          "east",
+          "east",
+          "east",
+          "east",
+          "east"
+        ],
+        "extrapolated_ticks": 39,
+        "final_traced_distance": 15.3052
+      }
+    }
+  }
+}

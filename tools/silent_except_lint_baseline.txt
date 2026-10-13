@@ -18,6 +18,7 @@
 #   基线同样只有「计数/位置登记」一种强制机制，无独立豁免机制可照搬）。要让某处
 #   真正不再被计数，只能改窄异常类型或补 warn/log/raise/audit 动作。
 # ── 登记面 · 用户登记（--update-baseline 保留本段逐字）──
+# 2026-10-13 5603e28（第二/三批工作树） lingshu/world/seven_layer_loop.py:42 F08 合并重复导入回退，静默宽捕获 2→1、总数 114→113；仅收紧登记，不增豁免、不放宽 lint 判据。
 # ── 登记面 · 结束 ──
 
 lingshu/_pathguard.py	17
@@ -30,7 +31,7 @@ lingshu/world/brain_store.py	1
 lingshu/world/channel_credibility.py	2
 lingshu/world/prediction.py	14
 lingshu/world/scene_model.py	0
-lingshu/world/seven_layer_loop.py	2
+lingshu/world/seven_layer_loop.py	1
 lingshu/world/spacetime_consistency.py	2
 lingshu/world/stable_lease.py	1
 lingshu/world/wm_simloop.py	0
@@ -38,4 +39,4 @@ lingshu/world/world3d.py	2
 lingshu/world/world_learner.py	3
 lingshu/world/world_model.py	2
 
-# TOTAL 114
+# TOTAL 113
