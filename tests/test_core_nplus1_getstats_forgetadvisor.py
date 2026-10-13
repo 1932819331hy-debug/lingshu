@@ -393,5 +393,49 @@ if _dn is not None:
     check('I 「对端仍冲突则保留标签」的 continue 仍在',
           "仍与其它节点冲突" in _ds or "continue" in _ds, '')
 
+# ------------------------------------------- J register_conflict / apply_shared_sync
+print('— J 静态面（register_conflict / apply_shared_sync 只取所需列）—')
+for _jn in ("register_conflict", "apply_shared_sync"):
+    _jf = next((n for n in ast.walk(_tree)
+                if isinstance(n, ast.FunctionDef) and n.name == _jn), None)
+    check(f'J0 已定位 {_jn}', _jf is not None, '')
+    if _jf is None:
+        continue
+    _jh = []
+    for _loop in ast.walk(_jf):
+        if not isinstance(_loop, (ast.For, ast.While)):
+            continue
+        for _x in ast.walk(_loop):
+            if isinstance(_x, ast.Call) and isinstance(_x.func, ast.Attribute) \
+                    and _x.func.attr == "get_node":
+                _jh.append(_x.lineno)
+    check(f'J {_jn} 循环体内无 get_node', not _jh,
+          f'残留于 L{_jh}' if _jh else '')
+    _js = ast.get_source_segment(SRC, _jf) or ""
+    check(f'J {_jn} 用 MemoryLayer(...) 转换（与 from_row 同款）',
+          "MemoryLayer(" in _js, '')
+
+_rc = next((n for n in ast.walk(_tree)
+            if isinstance(n, ast.FunctionDef) and n.name == "register_conflict"), None)
+if _rc is not None:
+    _rs2 = ast.get_source_segment(SRC, _rc) or ""
+    check('J register_conflict 角色闸+存在性检查合并为一次取 layer',
+          "SELECT layer FROM nodes WHERE id=?" in _rs2, '')
+    check('J register_conflict 存在性用 `_lay[...] is None`（等价旧 `is None`）',
+          "_lay[a_id] is None or _lay[b_id] is None" in _rs2, '')
+    check('J register_conflict 标签裁剪仍走 `_dumps_tags`',
+          "_dumps_tags(_tlist)" in _rs2, '')
+
+_as2 = next((n for n in ast.walk(_tree)
+             if isinstance(n, ast.FunctionDef) and n.name == "apply_shared_sync"), None)
+if _as2 is not None:
+    _asrc = ast.get_source_segment(SRC, _as2) or ""
+    check('J apply_shared_sync 冲突判定只取 layer, content 两列',
+          "SELECT layer, content FROM nodes WHERE id=?" in _asrc, '')
+    check('J apply_shared_sync 两个返回键名未变（existing_layer 仍为 str）',
+          '"existing_layer": _xl.value' in _asrc, '')
+    check('J apply_shared_sync 的 identical/conflicts/overwrite 分支仍在',
+          'identical.append(nid)' in _asrc and 'if not overwrite:' in _asrc, '')
+
 print(f'\n=== N+1 优化守卫: {pass_n}/{pass_n + fail_n} 通过 ===')
 sys.exit(0 if fail_n == 0 else 1)
