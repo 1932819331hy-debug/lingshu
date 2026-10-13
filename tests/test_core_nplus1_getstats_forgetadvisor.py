@@ -226,5 +226,63 @@ if _fa is not None:
     check('D `imp is None` 回默认 0.5（不用 or）仍在',
           "0.5 if imp is None else imp" in _fa_src, '')
 
+# ------------------------------------------------- E recalc_structural_importance
+print('— E 静态面（recalc_structural_importance 的 structural_boost 不再逐节点回查）—')
+_rs = None
+for _n in ast.walk(_tree):
+    if isinstance(_n, ast.FunctionDef) and _n.name == "recalc_structural_importance":
+        _rs = _n
+        break
+check('E0 已定位 recalc_structural_importance', _rs is not None, '')
+
+if _rs is not None:
+    _loop_reads = []
+    for _loop in ast.walk(_rs):
+        if not isinstance(_loop, (ast.For, ast.While)):
+            continue
+        for _x in ast.walk(_loop):
+            if isinstance(_x, ast.Call) and isinstance(_x.func, ast.Attribute) \
+                    and _x.func.attr == "_read_state_attr":
+                _loop_reads.append(_x.lineno)
+    check('E 循环体内无 `_read_state_attr` 逐节点回查', not _loop_reads,
+          f'残留于 L{_loop_reads}' if _loop_reads else '')
+
+    _sel = [c.value for c in ast.walk(_rs)
+            if isinstance(c, ast.Constant) and isinstance(c.value, str)
+            and "FROM nodes" in c.value]
+    check('E 主查询已带出 state_attributes',
+          any("state_attributes" in s for s in _sel),
+          f'主查询：{_sel[:2]}' if _sel else '未找到主查询')
+    check('E 主查询仍取 id/importance（读法未变）',
+          any("id, importance" in s for s in _sel), '')
+
+    # 三层解包必须同步（rows 由 2 列变 3 列）
+    _unpack2 = [t for t in ast.walk(_rs)
+                if isinstance(t, ast.Tuple) and len(t.elts) == 2
+                and all(isinstance(e, ast.Name) for e in t.elts)]
+    _names2 = {tuple(e.id for e in t.elts) for t in _unpack2}
+    check('E 无遗留的 2 元解包（rows 已是 3 列）',
+          ("nid", "imp") not in _names2, f'仍存在解包 {sorted(_names2)}')
+
+# F 对照：单点解析 helper 的存在与口径
+print('— F 解析单点 —')
+_sao = None
+for _n in ast.walk(_tree):
+    if isinstance(_n, ast.FunctionDef) and _n.name == "_state_attr_of":
+        _sao = _n
+        break
+check('F `_state_attr_of` 单点存在', _sao is not None, '')
+if _sao is not None:
+    _s = ast.get_source_segment(SRC, _sao) or ""
+    check('F 单点保留窄口径 except (ValueError, TypeError)',
+          "except (ValueError, TypeError)" in _s, '')
+    check('F 单点仍拒非 dict（isinstance(sa, dict)）',
+          "isinstance(sa, dict)" in _s, '')
+    check('F `_read_state_attr` 复用该单点（不复制解析体）',
+          "_state_attr_of(" in (ast.get_source_segment(
+              SRC, next((n for n in ast.walk(_tree)
+                         if isinstance(n, ast.FunctionDef)
+                         and n.name == "_read_state_attr"), _sao)) or ""), '')
+
 print(f'\n=== N+1 优化守卫: {pass_n}/{pass_n + fail_n} 通过 ===')
 sys.exit(0 if fail_n == 0 else 1)
