@@ -293,21 +293,41 @@ class PredictionEngine:
         """T_pred 四维度对齐（D-004 · 2.10 节）：
         trend(D₁ 边置信度) · boundary(D₂ 可信边界一致性) · verification(D₃ 命中率) · balance(D₄ 分支多样性)"""
         trend = route["conf"]
-        boundary = self._boundary_consistency(route["path"])
+        # ★优化（本笔 · 零行为变更）：`_boundary_consistency` 与 `_branch_diversity`
+        # 各自 `for nid in path: get_node(nid)` ⇒ 同一 `path` 的节点被 `get_node`
+        # 抓**两遍**（每次读整行 + 解析 JSON）。现将路径节点**取一次**后下传（2N → N）。
+        # 两方法只在本模块内被调用（全仓各 1 命中）⇒ 签名调整不外溢。
+        _nodes = self._path_nodes(route["path"])
+        boundary = self._boundary_consistency(route["path"], _nodes)
         verification = self._hit_rate()
-        balance = self._branch_diversity(route["path"])
+        balance = self._branch_diversity(route["path"], _nodes)
         composite = round(0.40 * trend + 0.20 * boundary + 0.25 * verification + 0.15 * balance, 4)
         return {"trend": round(trend, 4), "boundary": round(boundary, 4),
                 "verification": round(verification, 4), "balance": round(balance, 4),
                 "composite": composite}
 
-    def _boundary_consistency(self, path: List[str]) -> float:
+    def _path_nodes(self, path: List[str]) -> List:
+        """按 `path` **位置对齐**取节点（取不到的位保留 `None`）——`_score_route` 的单次取数点。
+
+        与旧实现逐位一致：旧实现每个 id 调一次 `get_node`，取不到即 `n` 为 `None`
+        且下游 `if n and ...` / `if n:` 不成立 ⇒ 不计数；占位 `None` 后同理。
+        **不去重**（重复 id 各取一次，与旧实现相同，以免改动分母）。
+        """
+        out = []
+        for _nid in path:
+            try:
+                out.append(self.engine.store.get_node(_nid))
+            except Exception:                      # 与旧实现同口径：取不到按 None
+                out.append(None)
+        return out
+
+    def _boundary_consistency(self, path: List[str], nodes: List = None) -> float:
         """D₂：路径节点是否均有可信边界声明（boundary 标记/不确定声明）"""
         if not path:
             return 0.0
         ok = 0
-        for nid in path:
-            n = self.engine.store.get_node(nid)
+        _ns = nodes if nodes is not None else self._path_nodes(path)
+        for n in _ns:
             if n and ("boundary" in n.tags or "不确定" in n.content or "边界" in n.content):
                 ok += 1
         return round(ok / len(path), 4)
@@ -318,11 +338,11 @@ class PredictionEngine:
             return 0.0
         return round(sum(1 for h in self._hit_history if h) / len(self._hit_history), 4)
 
-    def _branch_diversity(self, path: List[str]) -> float:
+    def _branch_diversity(self, path: List[str], nodes: List = None) -> float:
         """D₄：路径覆盖语义子空间维度数（防单一偏好主导 · 盲区47）"""
         dims = set()
-        for nid in path:
-            n = self.engine.store.get_node(nid)
+        _ns = nodes if nodes is not None else self._path_nodes(path)
+        for n in _ns:
             if n:
                 sc = n.semantic_coordinates or {}
                 for k in sc.get("protocol", {}):
