@@ -250,7 +250,7 @@
     {
      "file": "world3d.py",
      "src": "aeis.world3d",
-     "sha256": "7b7527deb009dd70",
+     "sha256": "4fb66e3c1d051773",
      "rewrites": 16,
      "sanitized": 0,
      "patches": 0,
@@ -504,7 +504,7 @@
     {
      "file": "hex_train.py",
      "src": "aeis.hex_train",
-     "sha256": "37d7e117f5d5ff4d",
+     "sha256": "296adb92d02a76e0",
      "rewrites": 2,
      "sanitized": 1,
      "patches": 0,
@@ -575,7 +575,7 @@
     {
      "file": "hexgen_c1_real.py",
      "src": "experiments.hexgen_c1_real",
-     "sha256": "5026a61e33165d88",
+     "sha256": "7e34eeab4cb5c6de",
      "rewrites": 0,
      "sanitized": 0,
      "patches": 0,
@@ -610,7 +610,7 @@
     {
      "file": "hexgen_self_source.py",
      "src": "experiments.hexgen_self_source",
-     "sha256": "768b6750191c484b",
+     "sha256": "24c4fcc158394fe7",
      "rewrites": 4,
      "sanitized": 0,
      "patches": 0,
