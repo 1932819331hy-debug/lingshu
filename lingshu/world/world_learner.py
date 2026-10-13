@@ -30,6 +30,7 @@ from dataclasses import dataclass, field, asdict
 from typing import Dict, List, Optional, Tuple
 
 from .motion import estimate_motion, observed_positions, recent_direction
+from .coord_contract import apply_move          # 第 4 轮 #4：坐标口径唯一真源
 
 # 3D 场景模拟器实现已迁移至 AEIS——大脑保留接口，缺失时 SceneSimulator=None
 try:
@@ -224,11 +225,9 @@ class WorldLearner:
 
     def _apply_move(self, pos: Tuple[float, float, float], speed: float,
                     d: Tuple[float, float, float]) -> Tuple[float, float, float]:
-        if d == (0.0, 0.0, 0.0):
-            return tuple(round(v, 2) for v in pos)
-        nx = max(0.5, min(self.size - 0.5, pos[0] + d[0] * speed))
-        nz = max(0.5, min(self.size - 0.5, pos[2] + d[2] * speed))
-        return (round(nx, 2), pos[1], round(nz, 2))
+        # ⚠ 第 4 轮 #4：**不再自带一份 clamp**，语义收归 `coord_contract.apply_move`。
+        #   默认参数 = 本体口径 ⇒ 算式与原先逐字等价（域内 trace_sha256 90/90 由它保证）。
+        return apply_move(pos, speed, d, self.size)
 
     def predict(self, horizon: int = 1) -> Dict:
         """用学得模型预测 horizon 步后的状态（观测面）。
