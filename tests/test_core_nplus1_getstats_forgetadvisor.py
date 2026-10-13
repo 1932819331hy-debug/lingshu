@@ -284,5 +284,55 @@ if _sao is not None:
                          if isinstance(n, ast.FunctionDef)
                          and n.name == "_read_state_attr"), _sao)) or ""), '')
 
+# ------------------------------------------- G decay_cycle 的遗忘保护不再逐节点 get_node
+print('— G 静态面（decay_cycle 的 `_is_forget_protected` 不再逐节点 `get_node`）—')
+_dc = None
+for _n in ast.walk(_tree):
+    if isinstance(_n, ast.FunctionDef) and _n.name == "decay_cycle":
+        _dc = _n
+        break
+check('G0 已定位 decay_cycle', _dc is not None, '')
+
+if _dc is not None:
+    _gn = []
+    for _loop in ast.walk(_dc):
+        if not isinstance(_loop, (ast.For, ast.While)):
+            continue
+        for _x in ast.walk(_loop):
+            if isinstance(_x, ast.Call) and isinstance(_x.func, ast.Attribute) \
+                    and _x.func.attr == "get_node":
+                _gn.append(_x.lineno)
+    check('G 循环体内无 `get_node`（受保护判据改走直传入口）', not _gn,
+          f'残留于 L{_gn}' if _gn else '')
+
+    _dsel = [c.value for c in ast.walk(_dc)
+             if isinstance(c, ast.Constant) and isinstance(c.value, str)
+             and "SELECT" in c.value and "tags" in c.value]
+    check('G 两段主查询均已带出 tags', len(_dsel) >= 2,
+          f'命中 {len(_dsel)} 段：{[s.strip()[:48] for s in _dsel]}')
+    check('G 不再出现 `id, importance FROM nodes` 的两列旧查询',
+          not any("id, importance FROM nodes" in s for s in
+                  [c.value for c in ast.walk(_dc)
+                   if isinstance(c, ast.Constant) and isinstance(c.value, str)]), '')
+
+_p = None
+for _n in ast.walk(_tree):
+    if isinstance(_n, ast.FunctionDef) and _n.name == "_is_forget_protected":
+        _p = _n
+        break
+check('G `_is_forget_protected` 存在', _p is not None, '')
+if _p is not None:
+    _ps = ast.get_source_segment(SRC, _p) or ""
+    _args = {a.arg for a in _p.args.args} | {a.arg for a in _p.args.kwonlyargs}
+    check('G 谓词新增 node_id / tags 直传入口', "node_id" in _args and "tags" in _args,
+          f'形参 {sorted(_args)}')
+    check('G 判定体仍是单点（no_forget ∈ tags ∪ id ∈ protected，各一次）',
+          _ps.count('"no_forget" in (tags or [])') == 1
+          and _ps.count("in protected") == 1,
+          'no_forget 判定 %d 次 / in protected %d 次'
+          % (_ps.count('"no_forget" in (tags or [])'), _ps.count("in protected")))
+    check('G 旧入口仍在（node 为 None 即 False）',
+          "if node is None:" in _ps or "node_id is None" in _ps, '')
+
 print(f'\n=== N+1 优化守卫: {pass_n}/{pass_n + fail_n} 通过 ===')
 sys.exit(0 if fail_n == 0 else 1)
