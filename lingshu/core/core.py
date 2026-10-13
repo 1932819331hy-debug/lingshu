@@ -1537,16 +1537,42 @@ class LayeredStore:
             self.conn.commit()
 
     def increment_access(self, node_id: str):
-        """访问计数+1（尽力而为：外部写锁持有时立即放弃，不阻塞检索主流程）"""
+        """访问计数+1（尽力而为：外部写锁持有时立即放弃，不阻塞检索主流程）
+
+        ★本笔：实现收进 `increment_access_many` 单点（同一连接/提交语义），
+        本函数保留为单节点入口，行为与旧实现逐位一致。
+        """
+        self.increment_access_many([node_id])
+
+    def increment_access_many(self, node_ids) -> None:
+        """**批量**访问计数+1（尽力而为；逐条语义与 `increment_access` 相同）。
+
+        ★优化（本笔 · 零行为变更）：`increment_access` 每次调用都**新开一个 sqlite
+        连接**（`sqlite3.connect(self.db_path, timeout=0)` + commit + close）。而
+        `semantic_search` 按命中数**逐节点**调它 ⇒ N 次 connect/commit/close
+        （每次连接都要重设连接级 `PRAGMA foreign_keys=ON`）。本方法把同一批收进
+        **一条连接、一次提交**。
+
+        为什么用 `executemany` 逐条语句、而**不**写 `WHERE id IN (...)`：后者会把
+        **重复 id 只计一次**，而旧路径对重复 id 各计一次（`semantic_search` 的
+        provider 返回的 id 列表可含重复）。逐条语句保住了这一口径。
+
+        失败容忍与旧实现一致：`sqlite3.OperationalError`（写锁持有 ⇒ 立即放弃）
+        整个批次一起吞掉——访问计数是统计性质，不阻断检索主流程。
+        """
+        ids = [i for i in (node_ids or []) if i]
+        if not ids:
+            return
         try:
             obs = sqlite3.connect(self.db_path, timeout=0)
             try:
                 # #93：本连接独立于 `_connect`（访问计数为尽力而为的旁路写），
                 # 连接级外键开关必须逐连接重设，否则该连接上外键不生效。
                 obs.execute("PRAGMA foreign_keys=ON")
-                obs.execute(
+                obs.executemany(
                     'UPDATE nodes SET access_count = access_count + 1,'
-                    ' last_access = ? WHERE id=?', (time.time(), node_id))
+                    ' last_access = ? WHERE id=?',
+                    [(time.time(), nid) for nid in ids])
                 obs.commit()
             finally:
                 obs.close()
@@ -2615,8 +2641,11 @@ class LayeredStore:
         # 判据来源：经验标定（#29 修复轮；理论章节追不到）。
         scored.sort(key=lambda x: (-x[1], -x[0].importance, -x[0].confidence))
         results = scored[:limit]
-        for node, _ in results:
-            self.increment_access(node.id)
+        # ★优化（本笔）：旧实现 `for node, _ in results: self.increment_access(node.id)`
+        # —— 每个命中节点**新开一个 sqlite 连接**。改为一次交给批量单点（一条连接、
+        # 一次提交）。计数口径不变：只对最终返回的 `results` 计数；重复 id 经
+        # `executemany` 逐条语句各计一次（与旧逐调用一致）。
+        self.increment_access_many([node.id for node, _ in results])
         return results
 
     @staticmethod
@@ -2631,11 +2660,17 @@ class LayeredStore:
         提供者契约：provider.encode(text)->List[float]；provider.search(query, limit)->List[str]（节点ID）"""
         ids = provider.search(query, limit)
         nodes = []
+        _hit_ids = []
         for nid in ids:
             node = self.get_node(nid)
             if node:
                 nodes.append(node)
-                self.increment_access(nid)
+                _hit_ids.append(nid)
+        # ★优化（本笔）：旧实现此处逐命中调 `self.increment_access(nid)` ——
+        # 每次都**新开一个 sqlite 连接**（N 次 connect/commit/close）。改为把
+        # 命中 id 一次交给批量单点（一条连接、一次提交）。计数口径不变：
+        # 只对**实际取到节点**的 id 计数；`executemany` 逐条语句保住重复 id 各计一次。
+        self.increment_access_many(_hit_ids)
         return nodes
 
     @_transactional
@@ -8621,6 +8656,15 @@ class SpacetimeMemoryEngine:
         nodes = self.store.query_nodes(limit=-1)
         protected = set(self.store.get_protected_nodes())
         stats = {"rehearsed": 0, "boosted": 0, "degraded": 0, "compressible": 0}
+        # ★优化（本笔 · 零行为变更）：旧实现每命中一个演练节点就调一次
+        # `self.store.increment_access(n.id)` —— 每次**新开一个 sqlite 连接**。
+        # 改为**先筛出参与演练的节点集合**（过滤条件只写一遍），把它们的 id
+        # 一次批量提交；再对该集合跑逐节点判定。
+        # 「零行为变更」的依据：`new_count` 由 `n.access_count`（**本轮快照**）推出，
+        # 不依赖 `increment_access` 的返回值 ⇒ 计数与判定的先后顺序不影响任何判定；
+        # 各 `update_node_importance` 仍是各自 `@_transactional`（提交粒度不变）。
+        # 过滤条件（不可变层 / 保护 / `pending_verification` / 阈值）**逐字未动**。
+        _rehearsed = []
         for n in nodes:
             if n.layer in (MemoryLayer.ANCHOR, MemoryLayer.STRUCTURE):
                 continue
@@ -8629,14 +8673,27 @@ class SpacetimeMemoryEngine:
             if "pending_verification" in n.tags:
                 continue  # #263：未复核节点不参与演练（不被自抬到 1.0）
             if n.importance >= rehearsal_threshold:
-                self.store.increment_access(n.id)
-                new_count = (n.access_count or 0) + 1      # 判据用本次增量后的计数，勿用快照旧值
-                n.access_count = new_count                 # 同步副本，供同轮后续逻辑使用
-                if new_count % 10 == 0:
-                    self.store.update_node_importance(n.id, gain)
-                    stats["boosted"] += 1
-                stats["rehearsed"] += 1
-            elif n.importance < degrade_threshold:
+                _rehearsed.append(n)
+        self.store.increment_access_many([n.id for n in _rehearsed])
+        for n in _rehearsed:
+            new_count = (n.access_count or 0) + 1      # 判据用本次增量后的计数，勿用快照旧值
+            n.access_count = new_count                 # 同步副本，供同轮后续逻辑使用
+            if new_count % 10 == 0:
+                self.store.update_node_importance(n.id, gain)
+                stats["boosted"] += 1
+            stats["rehearsed"] += 1
+        # 降权/可压缩面：与演练面**互斥**（`importance >= rehearsal_threshold` 已在上支）
+        # ⇒ 旧实现在同一循环的 `elif` 里跑，现按同一条件在**原顺序**上跑。
+        for n in nodes:
+            if n.layer in (MemoryLayer.ANCHOR, MemoryLayer.STRUCTURE):
+                continue
+            if n.id in protected or "no_forget" in n.tags:
+                continue
+            if "pending_verification" in n.tags:
+                continue
+            if n.importance >= rehearsal_threshold:
+                continue  # 演练面已处理
+            if n.importance < degrade_threshold:
                 if n.access_count <= 2:
                     self.store.update_node_importance(n.id, -gain)
                     stats["degraded"] += 1
