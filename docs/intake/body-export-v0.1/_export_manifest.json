@@ -103,7 +103,7 @@
     {
      "file": "scene_model.py",
      "src": "aeis.scene_model",
-     "sha256": "06a6086ae7e87497",
+     "sha256": "c2d82122bcc4831e",
      "rewrites": 4,
      "sanitized": 0,
      "patches": 0,
