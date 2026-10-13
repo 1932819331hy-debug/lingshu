@@ -370,5 +370,28 @@ if _sie is not None:
     check('H 边行先 fetchall 再迭代（游标可复用）',
           "_rows_e = c.fetchall()" in _s, '')
 
+# ------------------------------------------- I delete_node 的 conflict 标签清理
+print('— I 静态面（delete_node 清 conflict 标签只取 tags 列）—')
+_dn = next((n for n in ast.walk(_tree)
+            if isinstance(n, ast.FunctionDef) and n.name == "delete_node"), None)
+check('I0 已定位 delete_node', _dn is not None, '')
+if _dn is not None:
+    _hits2 = []
+    for _loop in ast.walk(_dn):
+        if not isinstance(_loop, (ast.For, ast.While)):
+            continue
+        for _x in ast.walk(_loop):
+            if isinstance(_x, ast.Call) and isinstance(_x.func, ast.Attribute) \
+                    and _x.func.attr == "get_node":
+                _hits2.append(_x.lineno)
+    check('I delete_node 循环体内无 get_node', not _hits2,
+          f'残留于 L{_hits2}' if _hits2 else '')
+    _ds = ast.get_source_segment(SRC, _dn) or ""
+    check('I 改取 tags 列', "SELECT tags FROM nodes WHERE id=?" in _ds, '')
+    check('I 标签裁剪仍走 `_dumps_tags`（写口径单点）',
+          "_dumps_tags(tags)" in _ds, '')
+    check('I 「对端仍冲突则保留标签」的 continue 仍在',
+          "仍与其它节点冲突" in _ds or "continue" in _ds, '')
+
 print(f'\n=== N+1 优化守卫: {pass_n}/{pass_n + fail_n} 通过 ===')
 sys.exit(0 if fail_n == 0 else 1)
