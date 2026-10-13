@@ -8,6 +8,7 @@ _match_score 原为贪心 first-fit（取第一个匹配的未用检测即 break
 """
 
 import itertools
+import json
 
 
 def _lib():
@@ -47,6 +48,37 @@ def test_query_match_verdict_stable_across_orders():
     verdicts = {query_match(list(p), lib)[0]["verdict"]
                 for p in itertools.permutations(dets)}
     assert len(verdicts) == 1, f"verdict 应稳定，实际 {verdicts}"
+
+
+def test_relation_recipes_are_order_invariant_including_binding():
+    """带 tags.relations 的配方：检测换序后 score/verdict/角色绑定/关系证据必须一致。
+
+    F06 返工探针（原缺陷）：两个同类型通配 role 的配方下，d 与 reversed(d) 分别得到
+    0.667 与 1.0——命中数虽然顺序无关，绑定（角色↔检测）却被增广路的抢占顺序决定。
+    现在绑定取「规范检测序上字典序最小的最大匹配」：score/verdict/角色位置/逐条证据
+    在任意排列下逐位一致（role_detections 是原下标，随输入变化但不错指）。
+    """
+    from lingshu.nn.hex_query import ConnectionLibrary, query_match
+
+    lib = ConnectionLibrary()
+    lib.add_record("pair", [
+        {"type": "circle", "zone": "*", "color": "*", "role": "a"},
+        {"type": "circle", "zone": "*", "color": "*", "role": "b"}],
+        tags={"relations": [{"from": "a", "to": "b", "rel": "above"}]})
+    dets = [{"obj": "circle|red", "pos": "r0"}, {"obj": "circle|blue", "pos": "r8"}]
+    seen = set()
+    for p in itertools.permutations(range(len(dets))):
+        order = [dets[i] for i in p]
+        entry = query_match(order, lib)[0]
+        for role, positions in entry["roles"].items():
+            assert [order[i]["pos"] for i in entry["role_detections"][role]] == positions
+        seen.add((entry["score"], entry["verdict"],
+                  json.dumps(entry["roles"], sort_keys=True),
+                  json.dumps(entry["relations"], sort_keys=True)))
+    assert len(seen) == 1, seen
+    entry = query_match(list(dets), lib)[0]
+    assert entry["score"] == 1.0 and entry["verdict"] == "ACCEPT", entry
+    assert entry["roles"] == {"a": ["r0"], "b": ["r8"]}, entry["roles"]
 
 
 def test_max_matching_optimal_hit_count():

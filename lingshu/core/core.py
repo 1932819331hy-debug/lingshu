@@ -5561,55 +5561,206 @@ class SpacetimeMemoryEngine:
 
         - build: 从记忆中的视觉原语（vprim 标签）重建 3D 世界
           （params: limit 记忆节点数, screen_w/h 参考视角, multiview——vprim
-          节点不带相机位姿时**不做三角化**，退回单视角并回报
-          `reason="no_camera_pose"`；#211）
+          节点带（lingshu-camera 块）**真实相机位姿**时按该位姿多视角三角化，
+          位姿缺失/残缺/畸形 ⇒ status="error" 并给出具体 reason
+          （no_camera_pose / camera_pose_incomplete / bad_camera_pose），
+          不退回单视角、不伪造位姿；显式 multiview=False 保留旧单视角观测
+          路径。F04/#211）
         - render: 渲染 3D 世界为图像（params: path 输出路径, yaw/pitch/cx
           相机参数——任意视角透视投影；2D 是 3D 透视下的情况；screen_w/h
           单边上限 MAX_SCREEN_DIM，超限返回 error 而非分配位图（#416）；
           path 须落在白名单根内，否则返回 error（#277））
         - status: 当前 3D 世界状态（物体/相机）
-        - add: 手动添加物体（params: category, bbox 或 center/size/color）"""
+        - add: 手动添加物体（params: category, bbox 或 center/size/color；另可给
+          eid/tick/screen_w/h 与 camera——给了**真实位姿**的观测会按该位姿反投影
+          并绑定位姿落库，供 build(multiview=True) 读回；不给 camera 则与旧版一致。
+          **camera 若给，必须六参数齐备**（cx/cy/cz/yaw/pitch/fov_deg，fov 为别名），
+          空/缺项 ⇒ status="error" + reason="bad_camera_pose"（具体缺哪个字段），
+          不落库、不融合、不动旧世界——不用默认值补齐伪造位姿）"""
         p = params or {}
+        # F04：`parse_camera_observation` / `format_camera_observation` 是「观测 ⇄
+        # 记忆」的位姿载体读写口（六参数相机 + eid/tick/screen_w/h，见 world3d 模块）。
+        # 与 `World3D/Camera3D` 同一行导入：`core → world` 的反向依赖行数受
+        # tools/import_direction_lint.py 基线约束（只准减不准增），故**不**新开导入行。
         try:
-            from ..world.world3d import World3D, Camera3D, MAX_SCREEN_DIM
+            from ..world.world3d import (World3D, Camera3D, MAX_SCREEN_DIM,
+                                         CameraMetaError, parse_camera_observation,
+                                         format_camera_observation)
         except ImportError:
             try:
-                from ..world.world3d import World3D, Camera3D, MAX_SCREEN_DIM
+                from ..world.world3d import (World3D, Camera3D, MAX_SCREEN_DIM,
+                                             CameraMetaError, parse_camera_observation,
+                                             format_camera_observation)
             except Exception as e:
                 return {"status": "world3d_not_ready", "error": str(e)}
         # 世界状态（跨调用保持于引擎）
         if not hasattr(self, "_world3d"):
             self._world3d = World3D()
 
+        def persist_bound_observation(category, bbox, cam, sw, sh, eid, tick,
+                                      confidence, ts, source, importance):
+            """把**带真实相机位姿**的观测绑定进既有脑存储（F04 的落库唯一实现）。
+
+            返回 `(node_id, None)` 或 `(None, <门面 error dict>)`。两条规则：
+              ① 走**既有摄取接口**（`add_perception` → 既有 nodes 表 + 既有
+                 `condition_space` 列），不新建库/表/列；
+              ② `skip_dedup=True`——每条带位姿的观测都是独立观测（不同相机/帧），
+                 被 M5 去重并进旧节点会把"多视角"悄悄降成"单视角"。
+            写失败一律返回 error（**不吞**）：宁可不落库，也不留「内存里融合成功、
+            记忆里重建不出来」的半截观测。
+            """
+            try:
+                rec = format_camera_observation(
+                    category, bbox, cam, sw, sh, eid=eid, tick=tick,
+                    confidence=confidence, ts=ts, source=source)
+            except CameraMetaError as e:
+                return None, {"status": "error", "reason": e.reason, "error": str(e)}
+            cs = ConditionSpace(
+                observation_position="camera@(%.3f,%.3f,%.3f)"
+                                    % (cam.cx, cam.cy, cam.cz),
+                observation_tool="world3d 相机位姿观测",
+                time_window=(ts, ts),
+                existence_constraint="真实相机位姿观测（lingshu-camera v1）")
+            try:
+                node = self.add_perception(content=rec["content"],
+                                           importance=float(importance),
+                                           tags=["vprim"], condition_space=cs,
+                                           skip_dedup=True)
+            except Exception as e:
+                return None, {"status": "error",
+                              "reason": "observation_not_persisted",
+                              "error": "#F04 观测未落库（%s: %s）——拒绝只做内存融合"
+                                       % (type(e).__name__, e)}
+            return getattr(node, "id", None), None
+
+        def resolve_ingest_camera(raw):
+            """显式 `camera` 入参 → `(Camera3D, None)`，不合法 → `(None, 门面 error dict)`。
+
+            R6 返工（F04 摄取侧）：旧实现走 `Camera3D.from_meta(strict=False)`——缺项
+            回落 `Camera3D` 默认值（cz=0、fov_deg=60、yaw=0…）后**当成这一帧的真实
+            位姿**落库并融合：实测 `add_view`/`add` 给 `camera={}` 也返回 ok 且
+            `persisted=node_*`，等于凭默认值伪造位姿（#211「不编造视角」/F04「缺真实
+            相机位姿明确失败、不伪造位姿」）。故两条**真实摄取**通路一律 `strict=True`：
+            cx/cy/cz/yaw/pitch/fov_deg（`fov` 为别名）缺一即拒，返回
+            `status="error"` + `reason="bad_camera_pose"` + 点名缺失字段的消息；
+            **先判后写** ⇒ 不落 vprim 记忆、不进融合、不碰旧 `self._world3d`。
+            `from_meta(strict=False)` 仍保留为 world3d 模块的低层兼容口（直调 API 的
+            调用方按需使用），门面这两条摄取通路不再用它默认补齐。
+            """
+            try:
+                return Camera3D.from_meta(raw, strict=True), None
+            except CameraMetaError as e:
+                return None, {"status": "error", "reason": e.reason,
+                              "error": "#F04 显式 camera 必须是完整真实位姿（%s）"
+                                       "——缺项/空位姿不得用默认值补齐后落库或融合"
+                                       % (e,)}
+
         if action == "build":
             try:
                 from ..world.vprim import VPrim, parse_anchor  # noqa: F401
             except ImportError:
                 from ..world.vprim import parse_anchor  # noqa: F401
-            world = World3D()
             nodes = self.store.get_nodes_by_tag("vprim", limit=int(p.get("limit", 20)))
             sw = int(p.get("screen_w", 800))
             sh = int(p.get("screen_h", 600))
             multiview = bool(p.get("multiview", False))  # 多视角融合（阶段1 里程碑1.1）
+            if multiview:
+                # F04：多视角三角化**必须有真实相机位姿**——#211 先砍掉了「按索引凭空
+                # 造相机」（`yaw = i*30°-30°`、`cx = ±1.5`，注释「模拟环绕观测」）这条
+                # 伪造路径，但当时没有位姿载体格式 ⇒ 多视角**恒**退回单视角（能力缺位）。
+                # 本件补上通路：观测侧带真实位姿时由 `add_view` 落库（正文锚点行 +
+                # lingshu-camera 块：六参数相机 + eid/tick/screen_w/h），`build` 读回后
+                # **传给既有融合器** `MultiViewFusion`（经 World3D.add_view，不另写三角化）。
+                # 缺/畸形元数据一律 fail-closed（不退回单视角、不伪造位姿）：
+                #   no_camera_pose         没有一条观测带位姿（含库里根本没有 vprim）
+                #   camera_pose_incomplete 部分观测缺位姿——只重建带位姿的子集＝静默
+                #                          丢掉另一半世界，故整趟拒绝
+                #   bad_camera_pose        块在但解析/校验不过（版本、缺字段、非有限数…）
+                # 失败路径**不写** self._world3d：旧世界保持原样，不被半成品覆盖。
+                # 判据来源：公开 issue #211「期望行为：没有真实相机位姿时不做三角化
+                # （回退单视角，或明确返回 reason="no_camera_pose"），不编造视角」＋
+                # 分诊表 `triage_lingshu_ALL.md` 行 211（经验标定）＋ 理论
+                # `docs/theory/世界模型与语义时空图_完整理论整理与实现路线.md` §3.2
+                # 「三视图/双目视差——**已知相机参数**下的映射，非猜测」（已知位姿是前提）
+                # ＋ 第二批计划 `docs/second_third_batch_plan.md` F04「真实相机参数与
+                # eid/tick/尺寸观测绑定保存，跨实例重新加载后由核心 build 多视角重建」。
+                posed, unposed, malformed = [], [], []
+                for n in nodes:
+                    try:
+                        meta = parse_camera_observation(n.content or "")
+                    except CameraMetaError as e:
+                        malformed.append({"node": n.id, "error": str(e)})
+                        continue
+                    if meta is None:
+                        unposed.append(n.id)
+                    else:
+                        posed.append((meta, n.id))
+                if malformed:
+                    return {"status": "error", "mode": "error",
+                            "reason": "bad_camera_pose",
+                            "requested_mode": "multiview",
+                            "error": "#F04 相机元数据畸形：%d/%d 条 vprim 观测的 "
+                                     "lingshu-camera 块不可用（不猜、不补默认值）"
+                                     % (len(malformed), len(nodes)),
+                            "detail": {"malformed": malformed[:5]}}
+                if not posed:
+                    return {"status": "error", "mode": "error",
+                            "reason": "no_camera_pose",
+                            "requested_mode": "multiview",
+                            "error": "#F04 多视角重建需要真实相机位姿：%d 条 vprim 观测"
+                                     "没有一条带 lingshu-camera 位姿块——不做三角化，"
+                                     "也不自动退回单视角（旧观测可显式 "
+                                     "multiview=False 走单视角）" % len(nodes),
+                            "detail": {"nodes": len(nodes), "unposed": unposed[:5]}}
+                if unposed:
+                    return {"status": "error", "mode": "error",
+                            "reason": "camera_pose_incomplete",
+                            "requested_mode": "multiview",
+                            "error": "#F04 相机位姿不完整：%d/%d 条 vprim 观测没有位姿块，"
+                                     "多视角重建会静默丢掉它们——拒绝部分重建"
+                                     % (len(unposed), len(nodes)),
+                            "detail": {"unposed": unposed[:5], "posed": len(posed)}}
+
+                def _obs_key(item):        # 确定性顺序：有 tick 者在前、按 tick、再按节点 id
+                    m = item[0]
+                    t = m["tick"]
+                    return (t is None, float(t) if t is not None else 0.0, str(item[1]))
+
+                order = sorted(posed, key=_obs_key)
+                world = World3D()
+                views = []
+                for meta, nid in order:
+                    cam = Camera3D.from_meta(meta["camera"], strict=True)
+                    r = world.add_view(meta["category"], list(meta["bbox"]),
+                                       meta["screen_w"], meta["screen_h"],
+                                       camera=cam, confidence=meta["confidence"],
+                                       eid=meta["eid"], tick=meta["tick"])
+                    views.append({"node": nid, "category": meta["category"],
+                                  "eid": meta["eid"], "tick": meta["tick"],
+                                  "triangulated": bool(r["triangulated"]),
+                                  "center_3d": r["center_3d"]})
+                self._world3d = world
+                # `objects` 与单视角路径同口径（世界中的物体数，见下 #211②）；
+                # `observations` = 本趟喂给融合器的观测数；`cameras` 回显**实际读回
+                # 的位姿**（六参数全量），供调用方核对记忆里的位姿没被截断。
+                return {"status": "ok",
+                        "objects": len(world.objects),
+                        "observations": len(views),
+                        "mode": "multiview",
+                        "reason": None,
+                        "requested_mode": "multiview",
+                        "cameras": [m["camera"] for m, _ in order],
+                        "views": views,
+                        "scene": world.scene_text(),
+                        "detail": world.to_dict()}
+            # 单视角（`multiview=False`，含旧观测兼容）：按类别先验尺寸反投影建物。
+            world = World3D()
             added = 0
-            # #211：多视角三角化**必须有真实相机位姿**——记忆里的 vprim 只有
-            # category/bbox/confidence，没有拍摄时的相机位姿。旧实现按索引凭空造
-            # 一台相机（`yaw = i*30°-30°`、`cx = ±1.5`，注释「模拟环绕观测」）再交给
-            # `add_view` 交汇 ⇒ 得到的 3D 位置与真实世界无关（issue 实测：几乎相同的
-            # 三个 bbox 被造成两棵树，一棵贴在相机光心上）。现**不再编造视角**：
-            # vprim 节点未携带位姿 ⇒ 退回单视角并如实回报 `reason="no_camera_pose"`。
-            # 判据来源：公开 issue #211「期望行为：没有真实相机位姿时不做三角化
-            # （回退单视角，或明确返回 reason="no_camera_pose"），不编造视角」＋
-            # 分诊表 `triage_lingshu_ALL.md` 行 211（经验标定）＋ 理论
-            # `docs/theory/世界模型与语义时空图_完整理论整理与实现路线.md` §3.2
-            # 「三视图/双目视差——**已知相机参数**下的映射，非猜测」（已知位姿是前提）。
-            # 边界（削掉的判别力）：本件**不**新增位姿载体格式（把 yaw/pitch/cx/cy/cz
-            # 塞进 tags / condition_space 属新机制，须先裁定格式）；带真实位姿的多视角
-            # 仍可经 `world3d("add_view", {"camera": {...}})` 显式驱动（不受本件影响）。
             mode = "single_view"
             reason = None
-            if multiview:
-                reason = "no_camera_pose"
+            # #211②：`objects` 报**世界中的物体数**（旧实现报调用次数：单视角下 3 次
+            # 同类同位置的 `add_vprim` 被合并成 1 个物体，接口仍报 3）；本趟处理的
+            # 观测数另设 `observations` 字段承载（旧口径挪到这里，调用方按需取用）。
             for n in nodes:
                 text = n.content or ""
                 for token in text.split("；"):
@@ -5618,15 +5769,12 @@ class SpacetimeMemoryEngine:
                         world.add_vprim(vp, sw, sh)
                         added += 1
             self._world3d = world
-            # #211：`objects` 报**世界中的物体数**（旧实现报调用次数：单视角下 3 次
-            # 同类同位置的 `add_vprim` 被合并成 1 个物体，接口仍报 3）；本趟处理的
-            # 观测数另设 `observations` 字段承载（旧口径挪到这里，调用方按需取用）。
             return {"status": "ok",
                     "objects": len(world.objects),
                     "observations": added,
                     "mode": mode,
                     "reason": reason,
-                    "requested_mode": "multiview" if multiview else "single_view",
+                    "requested_mode": "single_view",
                     "scene": world.scene_text(),
                     "detail": world.to_dict()}
         if action == "render":
@@ -5703,33 +5851,96 @@ class SpacetimeMemoryEngine:
             bbox = p.get("bbox")
             if not category or not bbox or len(bbox) != 4:
                 return {"status": "error", "error": "category 与 bbox=[x1,y1,x2,y2] 必填"}
-            vp = VPrim(category, tuple(float(v) for v in bbox),
-                       float(p.get("confidence", 0.5)), source=str(p.get("source", "manual")),
-                       eid=str(p["eid"]) if p.get("eid") is not None else "",
-                       ts=float(p.get("timestamp", time.time())))
-            self._world3d.add_vprim(vp, int(p.get("screen_w", 800)),
-                                    int(p.get("screen_h", 600)), tick=p.get("tick"))
-            return {"status": "ok", "scene": self._world3d.scene_text()}
+            sw = int(p.get("screen_w", 800))
+            sh = int(p.get("screen_h", 600))
+            eid = str(p["eid"]) if p.get("eid") is not None else ""
+            tick = p.get("tick")
+            ts = float(p.get("timestamp", time.time()))
+            confidence = float(p.get("confidence", 0.5))
+            # F04：给 `camera`（真实位姿）时，这条单视角观测同样**绑定位姿落库**
+            # （与 add_view 同一条通路/同一块格式），供后续或跨引擎
+            # `build(multiview=True)` 读回三角化；不给 camera ⇒ 行为与旧版逐位一致
+            # （只进内存世界，不落库——默认相机不是这一帧的真实位姿）。
+            # R6 返工：显式 camera **必须六参数齐备**（`from_meta(strict=False)` 的
+            # 默认补齐被实测成「`camera={}` 也 ok 且 persisted=node_*」的伪造位姿
+            # 通路）；缺项在写任何东西之前即拒（见 resolve_ingest_camera）。
+            cam = None
+            if p.get("camera") is not None:
+                cam, err = resolve_ingest_camera(p["camera"])
+                if err is not None:
+                    return err
+            persisted = None
+            if cam is not None:
+                persisted, err = persist_bound_observation(
+                    category, bbox, cam, sw, sh, eid, tick, confidence, ts,
+                    str(p.get("source", "manual")), p.get("importance", 0.6))
+                if err is not None:
+                    return err
+            vp = VPrim(category, tuple(float(v) for v in bbox), confidence,
+                       source=str(p.get("source", "manual")), eid=eid, ts=ts)
+            world_cam = self._world3d.camera
+            if cam is not None:
+                # 反投影按**这条观测的位姿**走（「投影-关联」可回代）；用完还原世界
+                # 相机，不把一次观测的位姿留成世界默认视角。
+                self._world3d.camera = cam
+            try:
+                self._world3d.add_vprim(vp, sw, sh, tick=tick)
+            finally:
+                self._world3d.camera = world_cam
+            return {"status": "ok", "scene": self._world3d.scene_text(),
+                    "persisted": persisted}
         if action == "add_view":
             """多视角融合（阶段1 · 里程碑1.1）：category + bbox + 视角相机 → 三角化。
-            首次观测记录；≥2 视角触发射线交汇收敛（借鉴 DUSt3R 多视图对齐）。"""
+            首次观测记录；≥2 视角触发射线交汇收敛（借鉴 DUSt3R 多视图对齐）。
+
+            F04：显式给 `camera`（**真实位姿**）时，这条观测同时**绑定位姿落库**
+            （vprim 节点正文 = 锚点行 + lingshu-camera 块，经既有
+            `add_perception` 摄取接口与 `condition_space` 声明，不新建库/表），
+            使 `build(multiview=True)` 能在本引擎**或新引擎**里按真实位姿重建。
+            功能边界（如实标注）：只给"当前相机"（未显式给 camera）时**不落库**——
+            默认相机是站立视角的缺省值，不是这台设备这一帧的真实位姿，落库即为
+            伪造位姿（#211/F04 同一口径）。"""
             category = str(p.get("category", ""))
             bbox = p.get("bbox")
             if not category or not bbox or len(bbox) != 4:
                 return {"status": "error", "error": "category 与 bbox=[x1,y1,x2,y2] 必填"}
             sw = int(p.get("screen_w", 800))
             sh = int(p.get("screen_h", 600))
-            # 视角相机（可选：缺省当前相机）
+            tick = p.get("tick")
+            ts = float(p.get("timestamp", time.time()))
+            confidence = float(p.get("confidence", 0.5))
+            # 视角相机（可选：缺省当前相机）。F04：**六参数全量**保留
+            # （cx/cy/cz/yaw/pitch/fov_deg，`fov` 为别名）——旧实现只取
+            # yaw/pitch/cx/cy，静默丢掉 cz 与 fov ⇒ 三角化按错位姿收敛
+            # （实测把真值 (0.6,1.0,6.0) 重建到偏 0.25~0.4 m 处）。
+            # R6 返工：显式 camera **必须六参数齐备**——空/缺项一律 fail-closed
+            # （status=error + reason=bad_camera_pose + 点名缺字段），**不落库、
+            # 不融合、不碰旧世界**；也不存在「不持久化但报告融合成功」的中间态
+            # （见 resolve_ingest_camera 的判据说明）。不给 camera ⇒ 旧单视角
+            # 内存行为逐位不变（persisted=None）。
             cam = None
-            if p.get("camera"):
-                cp = p["camera"]
-                cam = Camera3D(yaw=float(cp.get("yaw", 0)), pitch=float(cp.get("pitch", 0)),
-                               cx=float(cp.get("cx", 0)), cy=float(cp.get("cy", 1.2)))
+            if p.get("camera") is not None:
+                cam, err = resolve_ingest_camera(p["camera"])
+                if err is not None:
+                    return err
+            persisted = None
+            if cam is not None:
+                # 先落库、后融合（fail-closed）：写不进去就整条失败，绝不做「内存里
+                # 融合成功、记忆里重建不出来」的半截观测。
+                persisted, err = persist_bound_observation(
+                    category, bbox, cam, sw, sh,
+                    str(p["eid"]) if p.get("eid") is not None else "",
+                    tick, confidence, ts, str(p.get("source", "world3d")),
+                    p.get("importance", 0.6))
+                if err is not None:
+                    return err
             result = self._world3d.add_view(category, [float(v) for v in bbox],
                                             sw, sh, camera=cam,
-                                            confidence=float(p.get("confidence", 0.5)),
-                                            eid=str(p["eid"]) if p.get("eid") is not None else "", tick=p.get("tick"))
+                                            confidence=confidence,
+                                            eid=str(p["eid"]) if p.get("eid") is not None else "",
+                                            tick=tick)
             result["scene"] = self._world3d.scene_text()
+            result["persisted"] = persisted
             return {"status": "ok", **result}
         return {"status": "error", "error": f"未知动作 {action}（可用: build/render/status/add/add_view/graph/verify/verify_conflict）"}
 
@@ -6310,7 +6521,11 @@ class SpacetimeMemoryEngine:
         - decision: 决策状态（L7 好奇观测分布）
         - memory: 时空记忆（L2）
         - graph: 认知图（L3）
-        - state: 闭环状态"""
+        - state: 闭环状态
+        - configure_action: 配置一个实体的行动目标（params: entity_id, target（目标
+          实体 id 或三维坐标）, step_size, policy, fixed_action）——参数原样转发给
+          SevenLayerLoop.configure_action；与 L7 **观察策略**（init 的 policy）互不影响
+        - clear_action: 关闭行动配置（转发 SevenLayerLoop.clear_action）"""
         p = params or {}
         try:
             from ..world.seven_layer_loop import SevenLayerLoop
@@ -6368,7 +6583,58 @@ class SpacetimeMemoryEngine:
             return {"status": "ok", "graph": self._sll.graph_state()}
         if action == "state":
             return {"status": "ok", "loop": self._sll.state()}
-        return {"status": "error", "error": f"未知动作 {action}（可用: init/create/entity/path/run/step/report/audit/verify/decision/memory/graph/state）"}
+        if action == "configure_action":
+            # F08：行动接口门面——参数**原样转发**给 SevenLayerLoop.configure_action
+            # （C 侧签名：configure_action(entity_id, target, step_size=1.0,
+            # policy="predictive", fixed_action="east")；target 为目标实体 id 或三维坐标）。
+            # 门面只做两件事：补齐缺省参数（键不存在时才补）、判必填项在场；
+            # **值的合法性一律由 C 侧裁决**（单一真源，避免两处口径漂移）。
+            # **不改观察策略语义**：`self._sll.policy`（好奇/轮询…）是 L7 的观察选择
+            # 策略，行动配置是另一回事，此处不解读也不覆盖它。
+            #
+            # R6 返工（实测绕过）：旧实现先 `tuple(float(v) for v in target)` 与
+            # `float(p.get("step_size", 1.0))`——`float(True) == 1.0`，
+            # 于是 `target=[True,1.5,5], step_size=True` 被**洗成合法数值**再转发，
+            # C 侧「坐标/步长拒 bool」的 fail-closed 校验根本看不到原值，门面返回 ok；
+            # 且 `step_size=None` 时 `float(None)` 直接抛 TypeError 穿透门面。
+            # 现改为**保留原始类型**转发：bool 仍是 bool、None 仍是 None、字符串步长
+            # 仍是字符串 ⇒ 由 C 的 `validate_action` / `_resolve_target` 拒；转换
+            # 异常源被移除，C 侧明确的 ValueError 由下面既有分支转成
+            # `reason="action_config_rejected"` 的门面 error dict（**不把 invalid
+            # 转 valid、不让异常穿透**；非法配置一律不改变已生效配置）。
+            fn = getattr(self._sll, "configure_action", None)
+            if fn is None:
+                return {"status": "sll_action_not_ready",
+                        "error": "SevenLayerLoop 尚未提供 configure_action"
+                                 "（F08 的 C 侧实现未就绪）"}
+            entity_id = str(p.get("entity_id", ""))
+            if not entity_id:
+                return {"status": "error",
+                        "error": "entity_id 必填（配置行动的主体实体）"}
+            if p.get("target") is None:
+                return {"status": "error",
+                        "error": "target 必填（目标实体 id 或三维坐标）"}
+            try:
+                cfg = fn(entity_id, p["target"],
+                         step_size=p.get("step_size", 1.0),
+                         policy=p.get("policy", "predictive"),
+                         fixed_action=p.get("fixed_action", "east"))
+            except ValueError as e:
+                # C 侧把「未知 policy / 未知动作 / 受控实体不在场 / 不合法步长」定为
+                # fail-closed（ValueError，且配置一律不变）。门面**不改**这条判据，
+                # 只把它包成与其它动作一致的门面返回形（模型驱动面拿得到可读原因，
+                # 而不是一个穿透门面的异常）。
+                return {"status": "error", "reason": "action_config_rejected",
+                        "error": str(e)}
+            return {"status": "ok", "action_config": cfg}
+        if action == "clear_action":
+            fn = getattr(self._sll, "clear_action", None)
+            if fn is None:
+                return {"status": "sll_action_not_ready",
+                        "error": "SevenLayerLoop 尚未提供 clear_action"
+                                 "（F08 的 C 侧实现未就绪）"}
+            return {"status": "ok", "action_config": fn()}
+        return {"status": "error", "error": f"未知动作 {action}（可用: init/create/entity/path/run/step/report/audit/verify/decision/memory/graph/state/configure_action/clear_action）"}
 
     def world_generator(self, action: str, params: dict = None) -> dict:
         """文字生图/文字生视频（里程碑4.3 · 世界模型生成器）：

@@ -1,0 +1,522 @@
+=== SCRIPT tests/test_brain_store.py ===
+  PASS S1 脑侧握手 serverInfo
+  PASS S2 ingest_scene 写入 3 实体
+  PASS S3 世界重建实体集合
+  PASS S4 类别经 cat: 标签取回
+  PASS S5 坐标经 spatial.coords3d 直存取回
+  PASS S6 状态经槽位投影取回（事件是源）
+  PASS S7 第二实体状态
+  PASS S8 状态更新后重载取新值
+  PASS S9a 幽灵节点已写入（对照组）
+  PASS S9b 无 spatial 标签者被适配器侧过滤
+  PASS S10a 21 实体写入成功（issue #2 场景，对照组）
+  PASS S10b limit=200 ⇒ 新增候选恰为写入的 21 个（脑端 k 生效；改前只回 20）
+  PASS S10c 世界重建实体集合＝写入集合（增量口径；改前缺末位实体）
+  PASS S11 limit=1 ⇒ 至多 1 个候选（改前回落 k=20 ⇒ 20 个）
+  PASS S12a REJECT 标定物已写入（对照组）
+  PASS S12b REJECT 资格节点不注入世界重建（PR#3 部位②）
+  PASS S12c BLINDSPOT 实体保留（只踢 REJECT，不清空）
+  PASS S12d accept_states=set() 关闭过滤 ⇒ REJECT 回候选（旧行为兼容口）
+  PASS S12e accept_states={'ACCEPT'} 收紧 ⇒ REJECT 与 BLINDSPOT 均出局
+  PASS S12f 缺 state 者 fail-open 保留（未知≠否决；PR 原写法会静默剔除）
+  PASS S13a 两个同名实体节点已写入（对照组）
+  PASS S13b 同实体名·节点 id A 的状态＝自己记的 s13_a（不被 B 覆盖）
+  PASS S13c 同实体名·节点 id B 的状态＝自己记的 s13_b（不被 A 覆盖）
+
+===== SUMMARY 23/23 通过 =====
+VERDICT=PASS（M1 读向 + M2 写向 最小闭环全过；隔离库）
+=== SCRIPT tests/test_wm_verify_unobserved.py ===
+== A 组：报告人场景（未观测假设不计分）+ C 组（假设留图） ==
+  PASS A1 真实观测自然触发生长（假设数=1）
+  PASS A2 假设不是物理实体（从未被观测）
+  PASS A3 真实 actor 照旧计分且未命中（hit=False distance=2.0）
+  PASS A4 未观测假设标 pending 且 hit 不为 True（不再自证命中）
+  PASS A5 计分只含已验证：total=1 hits=0 hit_rate=0.0（pending=1）
+  PASS C1 假设节点仍在 nodes 里（未被删）
+  PASS C2 假设的条件空间仍在 conditions 里
+  PASS C3 seek(A→H) 关系边仍在 edges 里
+== B 组：坑 b（此前见过、后来被遮蔽的真实实体） ==
+  PASS B1 遮蔽前真实实体已进图
+  PASS B2 此前见过后被遮蔽者 → pending，不参与计分（坑 b）
+  PASS B3 计分项只含本轮真观测者
+  PASS B4 陈旧记忆留在图中且位置未被改写（不删不改）
+  PASS B5 其 last_seen 停在被遮蔽前（故 last_seen==tick 不可作判据）
+  PASS B6 对照组：仍被观测者（a）照旧计分命中
+== D 组：兼容性（快照缺失 / 空观测轮） ==
+  PASS D1 从未 perceive：total=0 + no_observation（不回退 nodes）
+  PASS D2 无节点无预测：total=0 + no_observation + 空 details
+  PASS D3 空观测轮：全部 pending、total=0、快照在场（不标 no_observation）
+
+===== SUMMARY 17/17 通过 =====
+VERDICT=PASS（issue #1 守卫：未观测预测不计分；假设/陈旧记忆留图）
+=== SCRIPT tests/test_hex_cnn.py ===
+
+[1] 蜂窝晶格(axial/pointy-top)
+  [PASS] 原点 cell 中心在原点
+  [PASS] 同行相邻间距 = √3·size
+  [PASS] 像素→cell 往返 (1, 0)
+  [PASS] 六邻 6 个且互不相同
+  [PASS] 6 邻等距(各向同性——蜂窝核心性质) spread=3.11e-15
+
+[2] HexConv 手写核性质
+  [PASS] 平滑核对常数场恒等(归一化核)
+  [PASS] Laplacian 对常数场零响应
+  [PASS] center-surround 对常数场零响应(拮抗平衡)
+  [PASS] 纵向边缘核在阶跃处有响应 边缘响应 75.0
+  [PASS] HexConv 输出形状保持
+
+[3] 图像↔晶格
+  [PASS] 晶格尺寸合理 (27, 32, 3)
+  [PASS] 白块区域 cell 亮于角落 块内=255 角落=0
+  [PASS] 可视化画布非空且亮度合理 (707, 982, 3) mean=19.8
+
+[4-6] SKIP：上游素材 data/img/0.png 未随导出（构造性段①②③照跑）
+
+13 passed, 0 failed
+=== SCRIPT tests/test_hex_composite.py ===
+  PASS v1 数据集生成
+  PASS v1 会意匹配 car 完整
+  PASS v1 证据密度
+  PASS v2 配方数 8
+  PASS v2 配方部件可解析
+  PASS v2 配方方位签名互异
+  PASS v2 数据集生成
+  PASS v2 属性落盘
+  PASS 属性标定三阈值齐
+  PASS 花纹提取精度 ≥95%
+  PASS 尺寸提取精度 ≥95%
+  PASS 尺寸只在圆上判定
+  PASS 提取确定性（两次调用一致）
+  PASS v2 雪人（尺寸属性命中）
+  PASS v2 尺寸不符不匹配 snowman
+  PASS 属性消融恢复形状级匹配
+  PASS v2 车（花纹必要属性）
+  PASS v2 车身花纹不符不匹配
+  PASS 密度 v2 属性计入
+  PASS 密度 v2 无属性回退 v1
+  PASS 密度门 ACCEPT
+  PASS 密度门 DEFER(依据不足)
+  PASS 密度门 DEFER(配方不完整优先)
+  PASS 无匹配 DEFER
+
+===== HEX-COMPOSITE v2 回归: 24/24 通过 =====
+=== SCRIPT tests/test_hex_gen.py ===
+  PASS 两子句编译
+  PASS 三元组齐全时无 shape/color/zone 缺省
+  PASS 缺省补全且落账
+  PASS P1① 兑现率@48px ≥95%（构造性）
+    [数字] 48px 兑现率 = 96.1% (73/76)
+  PASS P1① 兑现率@96px ≥95%（构造性）
+    [数字] 96px 兑现率 = 100.0% (79/79)
+  PASS zone 映射表群性质（逆变换复合=恒等）
+  PASS rot90cw 角点映射
+  PASS 映射封闭于 9 宫格词汇
+  PASS P1③ 变换不变性 rot90cw ≥95%
+    [数字] rot90cw 不变率 = 100.0%
+  PASS P1③ 变换不变性 rot90ccw ≥95%
+    [数字] rot90ccw 不变率 = 100.0%
+  PASS P1③ 变换不变性 rot180 ≥95%
+    [数字] rot180 不变率 = 100.0%
+  PASS P1③ 变换不变性 fliph ≥95%
+    [数字] fliph 不变率 = 100.0%
+  PASS P1③ 变换不变性 flipv ≥95%
+    [数字] flipv 不变率 = 100.0%
+  PASS 端到端兑现
+  PASS 端到端变换（r0→rot90cw→r2）
+  PASS 确定性（同 seed 同输出）
+  PASS 未知变换报错
+  PASS 花纹词解析（条纹→striped/实心→solid）
+  PASS 尺寸词解析（大→large/小→small）
+  PASS 词表完整（3 花纹×2 尺寸）
+  PASS 无属性词时缺省落账
+  PASS R2 带属性兑现率@48px ≥95%
+    [数字] 48px 带属性兑现率 = 95.3% (61/64)
+  PASS R2 带属性兑现率@96px ≥95%
+    [数字] 96px 带属性兑现率 = 100.0% (55/55)
+    [数字] 96px 回读：花纹总 50/62 = 80.6%（分项 {'solid': '19/21', 'striped': '19/23', 'dotted': '12/18'}）；尺寸 13/13 = 100.0%
+  PASS R2 回读花纹 ≥80%（次级，如实记录）
+  PASS R2 回读尺寸（圆） ≥80%
+  PASS 带属性端到端兑现
+  PASS 组合律（rot90²=rot180；fliph∘flipv=rot180）
+  PASS 平移入界映射（r0→r4 r4→r8）
+  PASS 平移出界落账（r0 出界丢弃；r4→r1 r8→r5）
+  PASS 平移后构造性兑现率 ≥95%
+    [数字] 平移（入界部件）兑现率 = 100.0%；出界落账 21 条
+
+===== HEX-GEN P1 回归: 30/30 通过 =====
+=== SCRIPT tests/test_core_export_all.py ===
+<workspace>\lingshu\core\core.py:4170: ComponentDiscoveryWarning: [issue156] 组件 'entity_registry' 未在受控解析面找到（已查 7 个条目；LINGSHU_COMPONENT_ROOT 未设置；cwd/空串 sys.path 条目已排除）。若确需该组件，请用 LINGSHU_COMPONENT_ROOT 或 PYTHONPATH 显式声明其所在目录。
+  from entity_registry import EntityRegistry
+<workspace>\lingshu\core\core.py:4157: ComponentDiscoveryWarning: [issue156] 组件 'semantic_space' 未在受控解析面找到（已查 7 个条目；LINGSHU_COMPONENT_ROOT 未设置；cwd/空串 sys.path 条目已排除）。若确需该组件，请用 LINGSHU_COMPONENT_ROOT 或 PYTHONPATH 显式声明其所在目录。
+  from semantic_space import SemanticSpaceProvider
+<workspace>\lingshu\core\core.py:4148: ComponentDiscoveryWarning: [issue156] 组件 'attention_policy' 未在受控解析面找到（已查 7 个条目；LINGSHU_COMPONENT_ROOT 未设置；cwd/空串 sys.path 条目已排除）。若确需该组件，请用 LINGSHU_COMPONENT_ROOT 或 PYTHONPATH 显式声明其所在目录。
+  from attention_policy import AttentionPolicy
+<workspace>\lingshu\core\core.py:4126: ComponentDiscoveryWarning: [issue156] 组件 'prediction_engine' 未在受控解析面找到（已查 7 个条目；LINGSHU_COMPONENT_ROOT 未设置；cwd/空串 sys.path 条目已排除）。若确需该组件，请用 LINGSHU_COMPONENT_ROOT 或 PYTHONPATH 显式声明其所在目录。
+  from prediction_engine import PredictionEngine
+<workspace>\lingshu\world\prediction.py:26: ComponentDiscoveryWarning: [issue156] 组件 'spacetime_memory_core' 未在受控解析面找到（已查 7 个条目；LINGSHU_COMPONENT_ROOT 未设置；cwd/空串 sys.path 条目已排除）。若确需该组件，请用 LINGSHU_COMPONENT_ROOT 或 PYTHONPATH 显式声明其所在目录。
+  from spacetime_memory_core import LayeredStore as _LayeredStore
+<workspace>\lingshu\core\core.py:4102: ComponentDiscoveryWarning: [issue156] 组件 'lifecycle_engine' 未在受控解析面找到（已查 7 个条目；LINGSHU_COMPONENT_ROOT 未设置；cwd/空串 sys.path 条目已排除）。若确需该组件，请用 LINGSHU_COMPONENT_ROOT 或 PYTHONPATH 显式声明其所在目录。
+  from lifecycle_engine import LifecycleEngine
+<workspace>\lingshu\core\core.py:4073: ComponentDiscoveryWarning: [issue156] 组件 'flywheel_engine' 未在受控解析面找到（已查 7 个条目；LINGSHU_COMPONENT_ROOT 未设置；cwd/空串 sys.path 条目已排除）。若确需该组件，请用 LINGSHU_COMPONENT_ROOT 或 PYTHONPATH 显式声明其所在目录。
+  from flywheel_engine import FlywheelEngine
+<workspace>\lingshu\core\core.py:4082: ComponentDiscoveryWarning: [issue156] 组件 'self_cognition_engine' 未在受控解析面找到（已查 7 个条目；LINGSHU_COMPONENT_ROOT 未设置；cwd/空串 sys.path 条目已排除）。若确需该组件，请用 LINGSHU_COMPONENT_ROOT 或 PYTHONPATH 显式声明其所在目录。
+  from self_cognition_engine import SelfCognitionEngine
+<workspace>\lingshu\core\core.py:4063: ComponentDiscoveryWarning: [issue156] 组件 'body' 未在受控解析面找到（已查 7 个条目；LINGSHU_COMPONENT_ROOT 未设置；cwd/空串 sys.path 条目已排除）。若确需该组件，请用 LINGSHU_COMPONENT_ROOT 或 PYTHONPATH 显式声明其所在目录。
+  from body import build_default_registry
+== A 组：报告人场景（缺 entities 表不得抛异常） ==
+  PASS A1 前提：公开仓形态下 entities 表不存在（未装 entity_registry）
+  PASS A2 export_all 在缺 entities 表的公开仓形态下不抛异常
+  PASS A3 导出产物已落盘
+  PASS A4 exported_nodes 与实际节点数一致
+  PASS A5 缺失表被显式标注（skipped_tables == ['entities']）
+  PASS A6 降级信息随产物落盘（meta.skipped_tables）
+  PASS A7 存在的表照旧完整导出
+  PASS A8 缺失表不写入空壳键（不伪造 entities 字段）
+  PASS A9 产物键集不超出 M13 表清单
+== B 组：export → import 回灌闭环 ==
+  PASS B1 import_all 回灌公开仓形态产物不抛异常
+  PASS B2 回灌节点数与导出一致
+  PASS B3 skipped 表不进入 imported 计数
+  PASS B4 回灌侧同样显式标注 skipped_tables
+  PASS B5 回灌后库内确有 2 个节点
+  PASS B6 回灌后完整性校验通过（无孤儿边）
+  PASS B7 产物含 entities 行时回灌照旧不崩（修前 OperationalError）
+  PASS B8 该路径下 entities 仍进入 skipped_tables
+== C 组：对照（装了扩展必须照旧导出） ==
+  PASS C1 表存在时 skipped_tables 为空（降级未退化为永久跳过）
+  PASS C2 存在的 entities 表照旧被导出
+  PASS C3 全表在场时 tables 计数等于表清单长度
+  PASS C4 回灌侧同样照旧导入 entities
+== D 组：边界与确定性 ==
+  PASS D1 空库/近空库导出：skipped 1 张、tables = 清单长度-1
+  PASS D2 meta 始终在场且含降级标注
+  PASS D3 tables 计数与落盘的实际表数一致
+  PASS D4 同库两次导出的内容一致（确定性）
+  PASS D5 对照库确认 entities 非 SQLite 内置表
+
+===== SUMMARY 26/26 通过 =====
+VERDICT=PASS（issue #16 守卫：缺失表降级 + 显式标注；表在场时照旧导出）
+=== SCRIPT tests/test_scene_follow_patrol.py ===
+========================================================================
+test_scene_follow_patrol · `follow` 沿路径巡逻守卫
+========================================================================
+
+A 组：起点恰为路径点 0 —— 不得静止
+  PASS 起点在路径点上仍持续移动（修前为 0 tick）
+  PASS 起点在路径点上也能推进到后续路径点
+
+B 组：起点在路径外 —— 必须推进到 wp1 / wp2
+  PASS 推进到第 2 个路径点（修前最小距离 5.831）
+  PASS 推进到第 3 个路径点（修前最小距离 7.071）
+  PASS 离开起点路径点邻域（修前 x 取值恒在 [8.94, 9.15]）
+
+C 组：巡逻循环 —— 走完一圈回到起点附近
+  PASS 访问过路径点 wp0
+  PASS 访问过路径点 wp1
+  PASS 访问过路径点 wp2
+  PASS 一圈之后回到 wp0（说明是循环而非单向终止）
+
+D 组：确定性 —— 同参数两次运行逐位相同
+  PASS 两次运行轨迹逐位相同
+
+E 组：既有契约 —— follow（静态路径）仍被判为可精确预测
+  PASS follow + 已注册路径 ⇒ _is_deterministic 仍为 True
+  PASS follow 单 tick 位移 == speed（单位方向语义未变）
+
+F 组：影子重放逐位对齐（★耦合守卫，非缺陷探测器；缺陷探测见 A/B/C 组）
+  PASS follow 全程按 exact 模式预测
+  PASS follow 150 tick 无 miss
+  PASS 影子重放与实体实际位置逐位一致（distance 恒为 0）
+
+========================================================================
+FOLLOW_PATROL 15/15 通过
+全部通过
+=== SCRIPT tests/test_issue145_causal_depth_cycles.py ===
+<workspace>\lingshu\core\core.py:4170: ComponentDiscoveryWarning: [issue156] 组件 'entity_registry' 未在受控解析面找到（已查 7 个条目；LINGSHU_COMPONENT_ROOT 未设置；cwd/空串 sys.path 条目已排除）。若确需该组件，请用 LINGSHU_COMPONENT_ROOT 或 PYTHONPATH 显式声明其所在目录。
+  from entity_registry import EntityRegistry
+<workspace>\lingshu\core\core.py:4157: ComponentDiscoveryWarning: [issue156] 组件 'semantic_space' 未在受控解析面找到（已查 7 个条目；LINGSHU_COMPONENT_ROOT 未设置；cwd/空串 sys.path 条目已排除）。若确需该组件，请用 LINGSHU_COMPONENT_ROOT 或 PYTHONPATH 显式声明其所在目录。
+  from semantic_space import SemanticSpaceProvider
+<workspace>\lingshu\core\core.py:4148: ComponentDiscoveryWarning: [issue156] 组件 'attention_policy' 未在受控解析面找到（已查 7 个条目；LINGSHU_COMPONENT_ROOT 未设置；cwd/空串 sys.path 条目已排除）。若确需该组件，请用 LINGSHU_COMPONENT_ROOT 或 PYTHONPATH 显式声明其所在目录。
+  from attention_policy import AttentionPolicy
+<workspace>\lingshu\core\core.py:4126: ComponentDiscoveryWarning: [issue156] 组件 'prediction_engine' 未在受控解析面找到（已查 7 个条目；LINGSHU_COMPONENT_ROOT 未设置；cwd/空串 sys.path 条目已排除）。若确需该组件，请用 LINGSHU_COMPONENT_ROOT 或 PYTHONPATH 显式声明其所在目录。
+  from prediction_engine import PredictionEngine
+<workspace>\lingshu\world\prediction.py:26: ComponentDiscoveryWarning: [issue156] 组件 'spacetime_memory_core' 未在受控解析面找到（已查 7 个条目；LINGSHU_COMPONENT_ROOT 未设置；cwd/空串 sys.path 条目已排除）。若确需该组件，请用 LINGSHU_COMPONENT_ROOT 或 PYTHONPATH 显式声明其所在目录。
+  from spacetime_memory_core import LayeredStore as _LayeredStore
+<workspace>\lingshu\core\core.py:4102: ComponentDiscoveryWarning: [issue156] 组件 'lifecycle_engine' 未在受控解析面找到（已查 7 个条目；LINGSHU_COMPONENT_ROOT 未设置；cwd/空串 sys.path 条目已排除）。若确需该组件，请用 LINGSHU_COMPONENT_ROOT 或 PYTHONPATH 显式声明其所在目录。
+  from lifecycle_engine import LifecycleEngine
+<workspace>\lingshu\core\core.py:4073: ComponentDiscoveryWarning: [issue156] 组件 'flywheel_engine' 未在受控解析面找到（已查 7 个条目；LINGSHU_COMPONENT_ROOT 未设置；cwd/空串 sys.path 条目已排除）。若确需该组件，请用 LINGSHU_COMPONENT_ROOT 或 PYTHONPATH 显式声明其所在目录。
+  from flywheel_engine import FlywheelEngine
+<workspace>\lingshu\core\core.py:4082: ComponentDiscoveryWarning: [issue156] 组件 'self_cognition_engine' 未在受控解析面找到（已查 7 个条目；LINGSHU_COMPONENT_ROOT 未设置；cwd/空串 sys.path 条目已排除）。若确需该组件，请用 LINGSHU_COMPONENT_ROOT 或 PYTHONPATH 显式声明其所在目录。
+  from self_cognition_engine import SelfCognitionEngine
+<workspace>\lingshu\core\core.py:4063: ComponentDiscoveryWarning: [issue156] 组件 'body' 未在受控解析面找到（已查 7 个条目；LINGSHU_COMPONENT_ROOT 未设置；cwd/空串 sys.path 条目已排除）。若确需该组件，请用 LINGSHU_COMPONENT_ROOT 或 PYTHONPATH 显式声明其所在目录。
+  from body import build_default_registry
+== A 组：超深链 ⇒ 截断链（不丢弃） ==
+  PASS A1 7 步链 max_depth=5 ⇒ 恰 1 条（旧：0 条）
+  PASS A2 截断链仍是 list 且长度=max_depth=5、终点=第 5 跳
+  PASS A3 截断链标 truncated=True / cyclic=False（两标记不混）
+  PASS A4 截断链可照旧迭代/拆解边（兼容用法）
+  PASS A5 预算内完整链照旧 1 条且不标截断（原读数=1 保持）
+  PASS A6 importance_weighted 分支对截断链照常排序（兼容）
+  PASS A7 include_subgraph 分支照常装饰（兼容）
+== B 组：回边/环 ⇒ 存链并标 cyclic（不吞掉可达部分） ==
+  PASS B1 A→B→C→B ⇒ ≥1 条（旧：0 条）
+  PASS B2 带环链标 cyclic=True（可达部分不吞掉）
+  PASS B3 带环链含回边（A→B→C→B，尾边闭回 B）
+  PASS B4 带环链不标截断（回边与截断是两种终点）
+  PASS B5 无环纯链照旧 1 条、两标记皆 False（兼容）
+== C 组：环检测覆盖 2 环/自环 + 去重 ==
+  PASS C1 A⇄B + C→C find_cycles ≥2 个环（旧：0）
+  PASS C2 含 2 环 A⇄B（旧条件 len(path)>=2 漏报）
+  PASS C3 含自环 C→C（旧漏报）
+  PASS C4 self_check cycles_found ≥2（旧：0——错误放心信号）
+  PASS C5 3 环 A→B→C→A 恰报 1 次（逐节点重复已去重）
+  PASS C6 无环图：三色探测 False 且 find_cycles 空
+== D 组：规模——self_check < 1s（45 节点） ==
+    [D] 9 层×2（18 节点，32 边）self_check 0.002s
+    [D] 9 层×3（27 节点，72 边）self_check 0.003s
+    [D] 9 层×4（36 节点，128 边）self_check 0.003s
+    [D] 9 层×5（45 节点，200 边）self_check 0.004s
+  PASS D1 18/27/36/45 节点 self_check 均 < 1s（旧量级 0.02/0.43/4.51/29.3s）
+== E 组：语义区分——空列表=真无因果后果 ==
+  PASS E1 无出边 ⇒ 空列表（真无因果后果）
+  PASS E2 仅非因果出边 ⇒ 空列表（默认仅 CAUSAL）
+  PASS E3 relation_types 过滤路径照常可查（similar 链 1 条）
+  PASS E4 超深链非空且标截断（空列表不再混同「链太长」）
+
+===== SUMMARY 23/23 通过 =====
+VERDICT=PASS（issue #145 守卫：截断链/带环链可区分；2 环与自环可检出；self_check 不随规模指数增长）
+=== SCRIPT tests/test_coggraph_r4_and_viewer.py ===
+
+===== SUMMARY 24/24 通过 =====
+VERDICT=PASS
+=== SCRIPT tests/test_coggraph_generic_tag.py ===
+<workspace>\tests\test_coggraph_generic_tag.py:5: SyntaxWarning: invalid escape sequence '\d'
+  `GENERIC_TAG` 三个短前缀分支只锚定了开头（`^sha` / `^precise` / `^v\d`）⇒
+  [R5] 未提供 --bodies-root，跳过正文互引（不假装通过）
+  [R5] 未提供 --bodies-root，跳过正文互引（不假装通过）
+== A 组：阳性对照（结构性标签仍被剔除） ==
+  PASS A 结构性标签仍被剔除：doc
+  PASS A 结构性标签仍被剔除：md
+  PASS A 结构性标签仍被剔除：node
+  PASS A 结构性标签仍被剔除：unit
+  PASS A 结构性标签仍被剔除：skill
+  PASS A 结构性标签仍被剔除：case
+  PASS A 结构性标签仍被剔除：doc:spec
+  PASS A 结构性标签仍被剔除：level:2
+  PASS A 结构性标签仍被剔除：lang:zh
+  PASS A 结构性标签仍被剔除：sha
+  PASS A 结构性标签仍被剔除：sha256
+  PASS A 结构性标签仍被剔除：sha:abc123
+  PASS A 结构性标签仍被剔除：precise
+  PASS A 结构性标签仍被剔除：precise_pose
+  PASS A 结构性标签仍被剔除：v1
+  PASS A 结构性标签仍被剔除：v2
+  PASS A 结构性标签仍被剔除：v10
+  PASS A 结构性标签仍被剔除：v2.1
+== B 组：阴性对照（内容标签不再被误杀） ==
+  PASS B 内容标签不再被误杀：shape
+  PASS B 内容标签不再被误杀：shared
+  PASS B 内容标签不再被误杀：shadow
+  PASS B 内容标签不再被误杀：sharding
+  PASS B 内容标签不再被误杀：precisely
+  PASS B 内容标签不再被误杀：v2model
+  PASS B 内容标签不再被误杀：preciseness
+  PASS B 内容标签不再被误杀：v2abc
+  PASS B 内容标签不再被误杀：shampoo
+  PASS B 内容标签不再被误杀：circle
+  PASS B 内容标签不再被误杀：stripe
+  PASS B 内容标签不再被误杀：red
+  PASS B 内容标签不再被误杀：square
+  PASS B 内容标签不再被误杀：triangle
+== C 组：收紧边界恰好等于预期 ==
+  PASS C 新判据没有多杀任何标签（只收紧、不放开）
+  PASS C 放开清单恰好等于预期误杀清单
+  [读数] 样本 34 个：旧判据剔除 27 个 → 新判据剔除 18 个（放开 9 个）
+== D 组：content_tags 端到端 ==
+  PASS D content_tags 只剔除形态标签
+  PASS D norm_tag 的 strip+lower 仍生效
+  PASS D 空标签被跳过、不进入内容标签集
+== E 组：R3 共现边端到端（修复后成立） ==
+耗时 0.0s
+规则产出： {"R1_same_bucket": 0, "R2_same_source": 0, "R3_tag_jaccard": 1, "R4_same_day": 0, "R5_body_crossref": 0}
+推导边 1 / 枢纽 0 / 抽检 1 条 → <workspace>\artifacts\second_third_batch\test_tmp\coggraph_r3_7_46um9f\new\out
+  PASS E/F main() 正常返回
+  PASS E 修复后 R3 共现边成立（shape/shadow/sharding 参与共现）
+  PASS E R3 边权重=Jaccard(4/6)
+  PASS E 纯形态标签节点 n3 不产生任何推导边
+== F 组：夹具自证（旧判据下边不成立） ==
+耗时 0.0s
+规则产出： {"R1_same_bucket": 0, "R2_same_source": 0, "R3_tag_jaccard": 0, "R4_same_day": 0, "R5_body_crossref": 0}
+推导边 0 / 枢纽 0 / 抽检 0 条 → <workspace>\artifacts\second_third_batch\test_tmp\coggraph_r3_old_gdxgsm0k\old\out
+  PASS E/F main() 正常返回
+  PASS F 旧判据下同一夹具不产生 R3 边（夹具具辨别力）
+  PASS F 旧判据下共享内容标签数 < min_shared(3)
+  PASS F 新判据下共享内容标签数 = 4
+
+===== SUMMARY 45/45 通过 =====
+VERDICT=PASS（issue #77 守卫：GENERIC_TAG 短前缀分支带非字母边界，只收紧误杀面、不放开既有口径）
+=== SCRIPT tests/test_hexgen_multi_seed_metric.py ===
+dims=15（extent…harm8）
+== A 组：确定性渲染器 + 每形状类 2 个不同配方（分子必须为 0） ==
+  PASS B 组·夹具辨别力：旧口径（按形状类）的 extent sd > 1  old=2.19089
+  PASS A 组·确定性渲染 ⇒ within_prompt_sd 全 0（旧口径在此处报 2.0 量级）  max=0.0
+  PASS A 组·分子 0 ⇒ 比值全 0  [0.0, 0.0, 0.0]
+  PASS A 组·median_ratio = 0
+  PASS A 组·无不可分维（件内也是 0，不需要点名）
+  PASS A 组·worst_dims 仍出 5 个  ['extent', 'log_aspect', 'solidity', 'compactness', 'n_peaks']
+  PASS A 组·维度数不变  15
+== C 组：件内有散布、类均值相同 ⇒ 该维不可分，比值必须是 None 而不是 0.0 ==
+  PASS C 组·extent 类间差 = 0
+  PASS C 组·extent 件内 > 0  2.0
+  PASS C 组·extent 被点名为不可分维  ['extent']
+  PASS C 组·不可分维的比值是 None（不是 0.0 = 最优）
+  PASS C 组·不可分维排在 worst_dims 最前（旧行为排最后）  ['extent', 'solidity']
+  PASS C 组·median_ratio 仍是有定义的 float（不可分维没把它变成 nan）
+  PASS C 组·有定义的维照旧给比值（solidity）  0.471
+  PASS C 组·只有 extent 不可分  ['extent']
+== D 组：每类只 1 个配方（对照：旧口径下比值本就是 0） ==
+  PASS D 组·确定性 ⇒ 分子全 0
+  PASS D 组·比值全 0
+  PASS D 组·median_ratio = 0
+== E 组：报告必须是严格 JSON（不允许 NaN/Infinity 泄漏） ==
+  PASS E 组·json.dumps(allow_nan=False) 通过  1112 字节
+  PASS E 组·全部维不可分时 median_ratio 为 None（而不是 nan）
+  PASS E 组·全部维都点名了  15
+  PASS E 组·比值列全 None
+== F 组：空读件仍单独计数、不参与统计 ==
+  PASS F 组·n_img_empty = 1  1
+  PASS F 组·empty_rate ≈ 1/6（4 位小数）  0.1667
+  PASS F 组·空读件不污染分子（该 prompt 只剩确定性 2 张）
+== G 组：prompt 内按自由度 pooled（不是 sd 的算术平均） ==
+  PASS G 组·分子 = pooled 后再按类取中位  got=0.40825 want=0.40825
+  PASS G 组·不是 sd 的算术平均（否则夹具抓不到加权错）  naive=0.35355
+  PASS G 组·类间差 > 0（该维有定义）  5.65685
+  PASS G 组·比值有定义且非 0  0.072
+
+===== SUMMARY 29/29 通过 =====
+VERDICT=PASS（issue #58 守卫：③ 号尺子的分子是同 prompt 内散布；不可分维点名且比值 None）
+=== SCRIPT tests/test_longterm_gate_novelty.py ===
+<workspace>\lingshu\core\core.py:4170: ComponentDiscoveryWarning: [issue156] 组件 'entity_registry' 未在受控解析面找到（已查 7 个条目；LINGSHU_COMPONENT_ROOT 未设置；cwd/空串 sys.path 条目已排除）。若确需该组件，请用 LINGSHU_COMPONENT_ROOT 或 PYTHONPATH 显式声明其所在目录。
+  from entity_registry import EntityRegistry
+<workspace>\lingshu\core\core.py:4157: ComponentDiscoveryWarning: [issue156] 组件 'semantic_space' 未在受控解析面找到（已查 7 个条目；LINGSHU_COMPONENT_ROOT 未设置；cwd/空串 sys.path 条目已排除）。若确需该组件，请用 LINGSHU_COMPONENT_ROOT 或 PYTHONPATH 显式声明其所在目录。
+  from semantic_space import SemanticSpaceProvider
+<workspace>\lingshu\core\core.py:4148: ComponentDiscoveryWarning: [issue156] 组件 'attention_policy' 未在受控解析面找到（已查 7 个条目；LINGSHU_COMPONENT_ROOT 未设置；cwd/空串 sys.path 条目已排除）。若确需该组件，请用 LINGSHU_COMPONENT_ROOT 或 PYTHONPATH 显式声明其所在目录。
+  from attention_policy import AttentionPolicy
+<workspace>\lingshu\core\core.py:4126: ComponentDiscoveryWarning: [issue156] 组件 'prediction_engine' 未在受控解析面找到（已查 7 个条目；LINGSHU_COMPONENT_ROOT 未设置；cwd/空串 sys.path 条目已排除）。若确需该组件，请用 LINGSHU_COMPONENT_ROOT 或 PYTHONPATH 显式声明其所在目录。
+  from prediction_engine import PredictionEngine
+<workspace>\lingshu\world\prediction.py:26: ComponentDiscoveryWarning: [issue156] 组件 'spacetime_memory_core' 未在受控解析面找到（已查 7 个条目；LINGSHU_COMPONENT_ROOT 未设置；cwd/空串 sys.path 条目已排除）。若确需该组件，请用 LINGSHU_COMPONENT_ROOT 或 PYTHONPATH 显式声明其所在目录。
+  from spacetime_memory_core import LayeredStore as _LayeredStore
+<workspace>\lingshu\core\core.py:4102: ComponentDiscoveryWarning: [issue156] 组件 'lifecycle_engine' 未在受控解析面找到（已查 7 个条目；LINGSHU_COMPONENT_ROOT 未设置；cwd/空串 sys.path 条目已排除）。若确需该组件，请用 LINGSHU_COMPONENT_ROOT 或 PYTHONPATH 显式声明其所在目录。
+  from lifecycle_engine import LifecycleEngine
+<workspace>\lingshu\core\core.py:4073: ComponentDiscoveryWarning: [issue156] 组件 'flywheel_engine' 未在受控解析面找到（已查 7 个条目；LINGSHU_COMPONENT_ROOT 未设置；cwd/空串 sys.path 条目已排除）。若确需该组件，请用 LINGSHU_COMPONENT_ROOT 或 PYTHONPATH 显式声明其所在目录。
+  from flywheel_engine import FlywheelEngine
+<workspace>\lingshu\core\core.py:4082: ComponentDiscoveryWarning: [issue156] 组件 'self_cognition_engine' 未在受控解析面找到（已查 7 个条目；LINGSHU_COMPONENT_ROOT 未设置；cwd/空串 sys.path 条目已排除）。若确需该组件，请用 LINGSHU_COMPONENT_ROOT 或 PYTHONPATH 显式声明其所在目录。
+  from self_cognition_engine import SelfCognitionEngine
+<workspace>\lingshu\core\core.py:4063: ComponentDiscoveryWarning: [issue156] 组件 'body' 未在受控解析面找到（已查 7 个条目；LINGSHU_COMPONENT_ROOT 未设置；cwd/空串 sys.path 条目已排除）。若确需该组件，请用 LINGSHU_COMPONENT_ROOT 或 PYTHONPATH 显式声明其所在目录。
+  from body import build_default_registry
+== test_longterm_gate_novelty ==
+[G1] 排名无关性：同一内容，只改它的排位
+  PASS G1 榜内/榜外 novelty 一致  | buried=0.000 visible=0.000
+  PASS G1 既有整句 novelty≈0  | 0.000
+[G2] 既有整句不再被判为新（prefeed 不重复入库）
+  PASS G2 prefeed 判为常规路径  | {'novel': False, 'novelty': 0.0, 'action': 'routine'}
+  PASS G2 未新增节点  | rows 301→301
+[G3] 回报 = 事实（不得声称未生效的提权）
+  PASS G3 未提权时不回报 node_id / importance  | {'novel': False, 'novelty': 0.0, 'action': 'routine'}
+[G4] 不误杀：全新内容仍判为新
+  PASS G4 全新内容 novelty ≥ NOVEL_TRIGGER  | 1.000
+  PASS G4 prefeed 强化编码且新增 1 行  | rows 300→301
+  PASS G4 回报 importance = 实际落库值  | 0.586
+[G5] existing_id 生效：评估既有节点自身时相对其它节点计新
+  PASS G5 含自身 → 不新  | 0.000
+  PASS G5 排除自身 → 该节点内容相对其它节点是新的  | 1.000
+-- 10 passed, 0 failed --
+VERDICT=PASS
+=== SCRIPT tests/test_state_write_observable.py ===
+  PASS T1a 正常路径 ingest 无异常
+  PASS T1b 正常路径状态落账且重建为 shy
+  PASS T1c 正常路径不误报警告
+  PASS T2a 台账不可写时 ingest 仍不抛（向后兼容）
+  PASS T2b 台账不可写时发出 RuntimeWarning
+  PASS T2c 台账 0 行、重建回落 neutral（失败已可见）
+  PASS T2d 节点正文仍写 shy —— 正是需要被暴露的那处矛盾
+  PASS T3a 空状态不报警（无状态可写，非写失败）
+  PASS T3b 空状态重建 neutral
+
+===== SUMMARY 9/9 通过 =====
+VERDICT=PASS（状态写入失败可观测；正常/空状态不误报）
+=== SCRIPT tests/test_coggraph_naming_report.py ===
+
+===== SUMMARY 38/38 通过 =====
+VERDICT=PASS
+=== SCRIPT tests/test_skeleton_fk_order_guard.py ===
+======================================================================
+Skeleton3D 父链旋转合成顺序守卫（issue 见 PR 说明）
+======================================================================
+repo = <workspace>
+======================================================================
+===== SUMMARY 12/12 通过 =====
+VERDICT=PASS
+=== SCRIPT tests/test_expression_render_guard.py ===
+========================================================================
+表情/渲染守卫：set_expression 高光几何 + 腮红颜色 + 渲染像素
+========================================================================
+  [A] 高光几何断言 78 条，失败 0 条
+  [B] 腮红断言 24 条，失败 0 条
+  [C] 像素断言 14 条，失败 0 条
+  [D] 幂等断言 5 条，失败 0 条
+
+===== SUMMARY 121/121 通过 =====
+VERDICT=PASS
+=== SCRIPT tests/test_hex_grid_extent.py ===
+== A 组：覆盖契约（无画外采样 / 铺满宽与高） ==
+  PASS A1 48x48/16：匀色图每个 cell 恰为该色（画外采样 cell 数 = 0）
+  PASS A2 48x48/16：贴右缘亮线点亮第 15 列且只亮右侧 1/10
+  PASS A1 48x48/32：匀色图每个 cell 恰为该色（画外采样 cell 数 = 0）
+  PASS A2 48x48/32：贴右缘亮线点亮第 31 列且只亮右侧 1/10
+  PASS A1 120x160/32：匀色图每个 cell 恰为该色（画外采样 cell 数 = 0）
+  PASS A2 120x160/32：贴右缘亮线点亮第 31 列且只亮右侧 1/10
+  PASS A1 328x200/48：匀色图每个 cell 恰为该色（画外采样 cell 数 = 0）
+  PASS A2 328x200/48：贴右缘亮线点亮第 47 列且只亮右侧 1/10
+  PASS A1 262x200/40：匀色图每个 cell 恰为该色（画外采样 cell 数 = 0）
+  PASS A2 262x200/40：贴右缘亮线点亮第 39 列且只亮右侧 1/10
+  PASS A1 64x64/8：匀色图每个 cell 恰为该色（画外采样 cell 数 = 0）
+  PASS A2 64x64/8：贴右缘亮线点亮第 7 列且只亮右侧 1/10
+  PASS A1 32x32/16：匀色图每个 cell 恰为该色（画外采样 cell 数 = 0）
+  PASS A2 32x32/16：贴右缘亮线点亮第 15 列且只亮右侧 1/10
+== B 组：画幅 9 宫格 ↔ 晶格 9 宫格 ==
+  PASS B1 48px/16 列：晶格 9 宫格最亮格 = 画幅 9 宫格所画格（9/9）
+== C 组：L4 质心象限 ==
+  PASS C1 l4_position（能量质心→象限）= 所画格（9/9）
+== D 组：返回 grid 与采样节距自洽 ==
+  PASS D1 48x48/16：grid 同行间距 √3·s = W/(cells_across+0.5)
+  PASS D1 48x48/32：grid 同行间距 √3·s = W/(cells_across+0.5)
+  PASS D1 120x160/32：grid 同行间距 √3·s = W/(cells_across+0.5)
+  PASS D1 328x200/48：grid 同行间距 √3·s = W/(cells_across+0.5)
+  PASS D1 262x200/40：grid 同行间距 √3·s = W/(cells_across+0.5)
+  PASS D1 64x64/8：grid 同行间距 √3·s = W/(cells_across+0.5)
+  PASS D1 32x32/16：grid 同行间距 √3·s = W/(cells_across+0.5)
+
+===== SUMMARY 23/23 通过 =====
+VERDICT=PASS（晶格铺满画幅：无画外采样，9 宫格与 L4 质心位置对齐）
+=== SCRIPT tests/test_hex_text_contracts.py ===
+== A 组：fuse_consistency 判分口径（1 全符 / 0.5 半符 / 0 冲突） ==
+  PASS A1 「右下有红色圆形」→ 1.0 ACCEPT（全符）
+  PASS A2 「右下有红色三角形」→ 0.5 DEFER（半符）
+  PASS A3 「右下有绿色三角形」→ 0.0 REJECT（冲突（位置对、形状颜色全错））
+  PASS A4 「右下有东西」→ 0.5 DEFER（未陈述形状颜色：判定不变）
+  PASS A5 「右下有红色」→ 0.75 DEFER（只陈述颜色且相符：判定不变）
+  PASS A6 「右下有绿色」→ 0.25 REJECT（只陈述颜色且冲突）
+  PASS A7 「左上有红色圆形」→ 0.4 DEFER（位置异但物体同：判定不变）
+  PASS A8 「左上有东西」→ 0.0 REJECT（缺词子句且位置不中：不崩）
+  PASS A9 「左上有红色」→ 0.0 REJECT（只陈述颜色且位置不中：不崩）
+  PASS A10 双路无证据 → BLINDSPOT（不变）
+== B 组：corrupt_description 不级联 ==
+  PASS B1 rate=1.0：形状与颜色都被改掉（180/180）
+  PASS B2 rate=1.0：改后仍解析为同一位置的单个完整子句（180/180）
+  PASS B3 rate=0：恒等
+  PASS B4 rate=0.5：每属性改写频率 ≈ 0.5（360 次）
+
+===== SUMMARY 14/14 通过 =====
+VERDICT=PASS（冲突子句可被 REJECT；噪声描述真改原义且不级联）
+FINAL SCRIPT GATE: 18/18 exit 0

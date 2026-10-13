@@ -114,7 +114,7 @@
     {
      "file": "scene_simulator.py",
      "src": "aeis.scene_simulator",
-     "sha256": "8128017c055a8f6d",
+     "sha256": "9410caafd0ebd3f4",
      "rewrites": 4,
      "sanitized": 0,
      "patches": 0,
@@ -136,7 +136,7 @@
     {
      "file": "seven_layer_loop.py",
      "src": "aeis.seven_layer_loop",
-     "sha256": "5fbc5033eb3f2d42",
+     "sha256": "22ca7b71b6526e30",
      "rewrites": 8,
      "sanitized": 0,
      "patches": 0,
@@ -250,7 +250,7 @@
     {
      "file": "world3d.py",
      "src": "aeis.world3d",
-     "sha256": "41a18b0b0e93506f",
+     "sha256": "7d662b75c71cd428",
      "rewrites": 16,
      "sanitized": 0,
      "patches": 0,
@@ -314,7 +314,7 @@
     {
      "file": "core.py",
      "src": "aeis.core",
-     "sha256": "bec07819468eab69",
+     "sha256": "2c8a0f7e65774494",
      "rewrites": 34,
      "sanitized": 2,
      "patches": 2,
@@ -416,7 +416,7 @@
     {
      "file": "hex_gen.py",
      "src": "aeis.hex_gen",
-     "sha256": "eaee7d3ff6191edd",
+     "sha256": "450ca48442e4c73c",
      "rewrites": 3,
      "sanitized": 0,
      "patches": 0,
@@ -460,7 +460,7 @@
     {
      "file": "hex_query.py",
      "src": "aeis.hex_query",
-     "sha256": "8143c596b26d4a70",
+     "sha256": "d2413453b792145f",
      "rewrites": 1,
      "sanitized": 0,
      "patches": 0,
@@ -671,6 +671,26 @@
    "lingshu/world/world3d.py": "7b7527deb009dd70",
    "lingshu/world/world_model.py": "97a0f817684fa51e",
    "lingshu/core/core.py": "f8c30b183d430416"
+  }
+ },
+ "second_third_batch": {
+  "date": "2026-10-13",
+  "base_commit": "5603e28",
+  "scope": [
+   "F04",
+   "F06",
+   "F07",
+   "F08"
+  ],
+  "report": "docs/second_third_batch_validation.md",
+  "previous_sha256": {
+   "lingshu/core/core.py": "bec07819468eab69",
+   "lingshu/nn/hex_composite.py": "111796661833fe52",
+   "lingshu/nn/hex_gen.py": "eaee7d3ff6191edd",
+   "lingshu/nn/hex_query.py": "8143c596b26d4a70",
+   "lingshu/world/scene_simulator.py": "8128017c055a8f6d",
+   "lingshu/world/seven_layer_loop.py": "5fbc5033eb3f2d42",
+   "lingshu/world/world3d.py": "41a18b0b0e93506f"
   }
  }
 }

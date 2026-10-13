@@ -145,18 +145,73 @@ def _poly_points(shape: str, cx: int, cy: int, rad: int):
     return [(cx, cy)]
 
 
-def _paint_polygon(img, shape, cx, cy, rad, col, pattern):
-    """多边形绘制（PIL 填充→mask→花纹裁剪；纯确定性）。"""
+def _paint_polygon(img, shape, cx, cy, rad, col, pattern, period: int = 3):
+    """多边形绘制（PIL 填充→mask→花纹裁剪；纯确定性）。
+
+    period = 花纹网格周期（**渲染参数**，见 hex_composite._paint 的口径说明）；
+    period=3 与旧实现逐像素一致。
+    """
     from PIL import Image, ImageDraw
+    period = max(2, int(period))
     ov = Image.new("L", (img.shape[1], img.shape[0]), 0)
     ImageDraw.Draw(ov).polygon(_poly_points(shape, cx, cy, rad), fill=255)
     mask = np.asarray(ov) > 0
     yy, xx = np.mgrid[0:img.shape[0], 0:img.shape[1]]
     if pattern == "striped":
-        mask &= (xx % 3 == 0)
+        mask &= (xx % period == 0)
     elif pattern == "dotted":
-        mask &= (xx % 3 == 0) & (yy % 3 == 0)
+        mask &= (xx % period == 0) & (yy % period == 0)
     img[mask] = col
+
+
+def _paint_base_patterned(img, shape, cx, cy, rad, col, pattern, period):
+    """基本形状（circle/triangle/stripe）的**周期可变**绘制（F07 渲染参数通道）。
+
+    period == 3 ⇒ 直接走 hex_composite._paint（两副本共用的同一实现，默认路径零漂移，
+    也不必让 nn/hex_composite.py 与 gen/ 副本分叉——tests/test_issue171 的 G4 钉死
+    两副本逐字节相同，故这里只对**非默认周期**走局部几何）。
+    局部几何与 _paint 的三个分支逐字对应，仅把花纹网格常数 3 换成 period；period=3
+    的逐像素等价性由 tests/test_second_batch_relations_feedback.py 的对照自检钉住。
+    """
+    period = max(2, int(period))
+    if period == 3:
+        _paint(img, shape, cx, cy, rad, col, pattern)
+        return
+    if shape == "circle":
+        yy, xx = np.mgrid[0:img.shape[0], 0:img.shape[1]]
+        disk = (xx - cx) ** 2 + (yy - cy) ** 2 <= rad ** 2
+        if pattern == "striped":
+            disk &= (xx % period == 0)
+        elif pattern == "dotted":
+            disk &= (xx % period == 0) & (yy % period == 0)
+        img[disk] = col
+    elif shape == "triangle":
+        for t in range(rad):
+            half = int(t * 0.9)
+            y = cy - rad + t
+            if 0 <= y < img.shape[0]:
+                if pattern == "striped":
+                    xs = np.arange(max(0, cx - half), min(img.shape[1], cx + half + 1))
+                    img[y, xs[xs % period == 0]] = col
+                elif pattern == "dotted":
+                    xs = np.arange(max(0, cx - half), min(img.shape[1], cx + half + 1))
+                    xs = xs[(xs % period == 0) & (y % period == 0)]
+                    img[y, xs] = col
+                else:
+                    img[y, max(0, cx - half):cx + half + 1] = col
+    else:  # stripe 块
+        x0, x1 = max(0, cx - rad), min(img.shape[1], cx + rad)
+        y0, y1 = max(0, cy - rad), min(img.shape[0], cy + rad)
+        if pattern == "striped":
+            cols = np.arange(x0, x1)
+            img[y0:y1, cols[cols % period == 0]] = col
+        elif pattern == "dotted":
+            ys, xs = np.mgrid[y0:y1, x0:x1]
+            blk = img[y0:y1, x0:x1]
+            blk[(ys % period == 0) & (xs % period == 0)] = col
+            img[y0:y1, x0:x1] = blk
+        else:
+            img[y0:y1, x0:x1] = col
 
 
 def _match_open(seg: str, table: Dict[str, str]) -> Optional[str]:
@@ -223,12 +278,19 @@ def compile_description(text: str) -> Dict:
 def render_relations(parts: List[Dict], size: int = 48, seed: int = 7,
                      noise: bool = True,
                      supersample: int = 1,
-                     background: str = "white") -> Tuple[np.ndarray, List[Dict]]:
+                     background: str = "white",
+                     overrides: Optional[Dict[int, Dict]] = None
+                     ) -> Tuple[np.ndarray, List[Dict]]:
     """部件关系 → 图像 + 落格日志（构造性验证的原始记录）。
 
     每部件画在目标 zone 中心（±size//24 抖动，保证落格仍在 zone 内）；
     花纹/尺寸缺省 solid/medium（hex_composite 渲染词汇，P1② 再扩词）。
+
+    overrides（F07）：{部件下标: {"pattern_period": int}} —— **只改渲染参数**，
+    不动 parts 意图（形状/颜色/方位/花纹/尺寸一律照 parts 画）。缺省 None =
+    全部部件用 period=3（与历史产物逐像素一致）；落格日志逐条记实际 period。
     """
+    overrides = overrides or {}
     rng = np.random.default_rng(seed)
     bg_key = BACKGROUND_WORDS.get(background, background)
     bg_fn = _BACKGROUNDS.get(bg_key)
@@ -250,17 +312,19 @@ def render_relations(parts: List[Dict], size: int = 48, seed: int = 7,
         size_attr = p.get("size", "medium")
         rad = size // 14 if size_attr == "small" else (
             size // 7 if size_attr == "large" else size // 10)
+        period = max(2, int((overrides.get(i) or {}).get("pattern_period", 3)))
         if shape in EXT_SHAPES:
             _paint_polygon(img, shape, cx, cy, rad,
-                           _part_rgb(color), pattern)
+                           _part_rgb(color), pattern, period)
         else:
-            _paint(img, shape, cx, cy, rad, _part_rgb(color), pattern)
+            _paint_base_patterned(img, shape, cx, cy, rad, _part_rgb(color),
+                                  pattern, period)
         zone_landed = rc_zone(min(2, max(0, cy * 3 // size)),
                               min(2, max(0, cx * 3 // size)))
         log.append({"part": i, "shape": shape, "color": color,
                     "zone_intended": p["zone"], "zone_landed": zone_landed,
                     "pattern": pattern, "size": size_attr,
-                    "center": (cx, cy)})
+                    "pattern_period": period, "center": (cx, cy)})
     if noise:
         img += (rng.random(img.shape) * 18).astype(np.uint8)
     if supersample > 1:
@@ -345,39 +409,293 @@ def verify_constructive(parts: List[Dict], img: np.ndarray) -> Dict:
 ATTR_CALIB_96 = {"tx_solid": 2.78, "vert_striped": 0.665, "area_cut": 397.0}
 
 
-def verify_readback(img: np.ndarray, parts: List[Dict], log: List[Dict],
-                    calib: Optional[Dict] = None) -> Dict:
-    """像素回读次级指标：extract_attributes 独立从渲染图读回花纹/尺寸。
+#: 回读通道覆盖的色词表（M4.3j 提取器只认这三个——超表不猜，见下）。
+READBACK_COLORS = ("red", "green", "blue")
 
-    与构造性验证互补——构造性对「日志」，回读对「像素」（属性真的画出来
-    且可被观测到）。尺寸档只在圆上判（M4.3j 口径）；medium 部件不计尺寸项。
+
+def _readback_records(img: np.ndarray, parts: List[Dict], log: List[Dict],
+                      calib: Optional[Dict] = None) -> List[Dict]:
+    """逐部件的**像素回读记录**（verify_readback 与 F07 修正循环的唯一读取路径）。
+
+    只读渲染图像素（extract_attributes），不读 parts/log 的账；覆盖范围＝提取器
+    能判的部分（色词表内 red/green/blue；尺寸只对圆定义）。两条消费者共用本函数，
+    防「验证侧」与「修正侧」各写一套读法而口径漂移。
     """
     from .hex_composite import extract_attributes
     c = calib or ATTR_CALIB_96
-    pat_ok = pat_n = size_ok = size_n = 0
-    misses = []
+    out = []
     for i, p in enumerate(parts):
         entry = next((e for e in log if e["part"] == i), None)
         if entry is None:
             continue
         # 诚实护栏：M4.3j 提取器色词表仅 red/green/blue——开放词汇色
         # （orange/gray/…）超出词表不计回读（不猜），词表扩展列 P3 合流
-        if p["color"] not in ("red", "green", "blue"):
+        if p["color"] not in READBACK_COLORS:
             continue
         a = extract_attributes(img, entry["zone_landed"], p["color"], c,
                                shape_hint=p["shape"])
+        size_spec = (p["size"] if (p["shape"] == "circle"
+                                   and p["size"] in ("small", "large")) else None)
+        out.append({"part": i, "color": p["color"], "shape": p["shape"],
+                    "zone": entry["zone_landed"], "read": a,
+                    "pattern_spec": p["pattern"], "size_spec": size_spec})
+    return out
+
+
+def _readback_coverage(parts: List[Dict], log: List[Dict]) -> Dict:
+    """回读通道的**覆盖账**：逐 part 记「可判 / 不可判 + 原因」。
+
+    不可判的三种情形（一律如实落账，**不得**被当作「零差异」）：
+      · color 不在回读色词表（READBACK_COLORS，red/green/blue）⇒ 超表不猜；
+      · log 缺该 part 的落格记录 ⇒ 没有 zone_landed，回读窗口无从定位；
+      · parts 为空 ⇒ 没有任何可判项（covered 为空即整体不可验证）。
+    返回 {"parts": 部件总数, "covered": 可判 part 下标, "uncovered": [{part,color,reason}]}。
+    """
+    landed = set()
+    for e in (log or []):
+        if isinstance(e, dict) and isinstance(e.get("part"), int):
+            landed.add(e["part"])
+    covered: List[int] = []
+    uncovered: List[Dict] = []
+    for i, p in enumerate(parts or []):
+        color = p.get("color")
+        if color not in READBACK_COLORS:
+            uncovered.append({"part": i, "color": color,
+                              "reason": (f"色 {color!r} 不在回读色词表 "
+                                         f"{list(READBACK_COLORS)}（超表不猜）")})
+        elif i not in landed:
+            uncovered.append({"part": i, "color": color,
+                              "reason": "缺对应落格日志（无 zone_landed，回读窗口无从定位）"})
+        else:
+            covered.append(i)
+    return {"parts": len(parts or []), "covered": covered, "uncovered": uncovered}
+
+
+def verify_readback(img: np.ndarray, parts: List[Dict], log: List[Dict],
+                    calib: Optional[Dict] = None) -> Dict:
+    """像素回读次级指标：extract_attributes 独立从渲染图读回花纹/尺寸。
+
+    与构造性验证互补——构造性对「像素里的 zone+色」，回读对「像素里的花纹/尺寸」
+    （属性真的画出来且可被观测到）。尺寸档只在圆上判（M4.3j 口径）；medium 部件
+    不计尺寸项。misses=花纹不符清单；size_misses=尺寸不符清单（F07 修正循环按
+    这两张清单定位部件；旧字段语义未变）。
+    """
+    pat_ok = pat_n = size_ok = size_n = 0
+    misses, size_misses = [], []
+    for rec in _readback_records(img, parts, log, calib):
+        read = rec["read"]
         pat_n += 1
-        hit = a.get("pattern") == p["pattern"]
+        hit = read.get("pattern") == rec["pattern_spec"]
         pat_ok += int(hit)
         if not hit:
-            misses.append({"part": i, "spec_pattern": p["pattern"],
-                           "read": a.get("pattern"), "zone": entry["zone_landed"]})
-        if p["shape"] == "circle" and p["size"] in ("small", "large"):
+            misses.append({"part": rec["part"], "spec_pattern": rec["pattern_spec"],
+                           "read": read.get("pattern"), "zone": rec["zone"]})
+        if rec["size_spec"] is not None:
             size_n += 1
-            size_ok += int(a.get("size") == p["size"])
+            if read.get("size") == rec["size_spec"]:
+                size_ok += 1
+            else:
+                size_misses.append({"part": rec["part"], "spec_size": rec["size_spec"],
+                                    "read": read.get("size"), "span": read.get("span"),
+                                    "zone": rec["zone"]})
     return {"pattern_acc": round(pat_ok / max(1, pat_n), 4), "n_pattern": pat_n,
             "size_acc": round(size_ok / max(1, size_n), 4) if size_n else None,
-            "n_size": size_n, "misses": misses}
+            "n_size": size_n, "misses": misses, "size_misses": size_misses}
+
+
+# ==================== F07 · 有限确定性反馈修正（像素读回驱动）====================
+# 纪律（与 P1 的旁路纪律一致）：
+#   · 只改**渲染参数**（overrides: pattern_period）——原始 text 与 parts 意图
+#     （形状/颜色/方位/花纹/尺寸）一律不动，验证判据一个不放宽；
+#   · 差异的度量是**真实渲染图像**的独立像素回读（extract_attributes），不是
+#     渲染器自己的落格日志——日志自证不算证据；
+#   · 同一 seed 全程不变：改善不得来自换 seed 碰运气；
+#   · 只接受**严格下降**且不损伤构造性证据（zone+色的像素命中数不降）的改动，
+#     否则回退该项（保留旧图）；
+#   · 覆盖范围＝既有回读通道（色词表 red/green/blue，尺寸只对圆；96px 是
+#     M4.3j 提取器的面积下限口径）。48px 等**不可验证**的情形明确不修正、
+#     不声称成功，只如实落 reason；
+#   · **空真护栏**：只要没有任何可判部件（全 coverage 外 / parts 为空 / 缺对应
+#     落格日志）就 verifiable=False、before/after=None，绝不拿「0 差异」冒充
+#     通过；部分覆盖（RGB + 其他色）如实披露 covered/uncovered 计数与原因，
+#     RGB 的已验证结论不得外推到未覆盖部件。
+
+#: 默认修正轮数上限（小上限；**每轮至多接受一处改动** ⇒ 上限即「最多修正多少个
+#: 部件/参数」，轮记录与改动一一对应；0 = 关闭对照）
+REFINE_DEFAULT_ROUNDS = 2
+#: 属性回读可验证下限（与 generate_from_text 既有回读门同口径）
+REFINE_MIN_SIZE = 96
+#: 修正阶梯（确定性顺序，逐格试；每格只改被定位部件的**渲染参数**）
+REFINE_LADDER: Tuple[Dict, ...] = ({"pattern_period": 2}, {"pattern_period": 4})
+
+
+def readback_mismatches(img: np.ndarray, parts: List[Dict], log: List[Dict],
+                        size: int, calib: Optional[Dict] = None) -> Dict:
+    """真实图像的独立像素回读差异（F07 修正循环的度量口径）+ **覆盖账**。
+
+    total = 可判定的失配项数（pattern 不符 + 圆尺寸不符，逐部件逐项计）；
+    coverage = 本函数实际参与判定的部件（可判/不可判 + 原因），由
+    _readback_coverage 逐 part 落账。
+
+    诚实护栏（**不把「不可判」报成「零差异」**——空真不是通过）：
+      · size < REFINE_MIN_SIZE ⇒ verifiable=False、total=None（提取器面积下限）；
+      · coverage.covered 为空（全 coverage 外 / parts 为空 / 缺对应落格日志）
+        ⇒ verifiable=False、total=None，并说明未覆盖的 part 与原因；
+      · 部分覆盖（RGB + orange 混合）⇒ verifiable=True 但如实披露 covered/
+        uncovered 与 note：**已验证结论不得外推到未覆盖部件**。
+    """
+    cov = _readback_coverage(parts, log)
+    if size < REFINE_MIN_SIZE:
+        return {"verifiable": False, "total": None, "items": [], "coverage": cov,
+                "note": (f"{size}px < {REFINE_MIN_SIZE}px：属性回读不可判"
+                         f"（不修正、不声称成功）")}
+    if not cov["covered"]:
+        if not cov["parts"]:
+            note = "parts 为空：没有任何可判项（不修正、不声称成功）"
+        else:
+            note = (f"回读覆盖为空：0/{cov['parts']} 个部件可判，未覆盖 part "
+                    f"{[u['part'] for u in cov['uncovered']]}（不修正、不声称成功）")
+        return {"verifiable": False, "total": None, "items": [], "coverage": cov,
+                "note": note}
+    items: List[Dict] = []
+    for rec in _readback_records(img, parts, log, calib):
+        read = rec["read"]
+        if read.get("pattern") != rec["pattern_spec"]:
+            items.append({"part": rec["part"], "kind": "pattern",
+                          "spec": rec["pattern_spec"], "read": read.get("pattern"),
+                          "zone": rec["zone"]})
+        if rec["size_spec"] is not None and read.get("size") != rec["size_spec"]:
+            items.append({"part": rec["part"], "kind": "size",
+                          "spec": rec["size_spec"], "read": read.get("size"),
+                          "span": read.get("span"), "zone": rec["zone"]})
+    note = "" if not cov["uncovered"] else (
+        f"部分覆盖：{len(cov['covered'])}/{cov['parts']} 个部件参与回读判定，"
+        f"未覆盖 part {[u['part'] for u in cov['uncovered']]}"
+        f"（原因见 coverage.uncovered）——已验证结论不得外推到未覆盖部件")
+    return {"verifiable": True, "total": len(items), "items": items,
+            "coverage": cov, "note": note}
+
+
+def refine_render(parts: List[Dict], size: int = REFINE_MIN_SIZE, seed: int = 7,
+                  rounds: Optional[int] = None, supersample: int = 1,
+                  calib: Optional[Dict] = None) -> Dict:
+    """有限确定性反馈修正：像素回读定位失配部件 → 只调渲染参数 → 严格改善才留。
+
+    size = **请求尺寸**（回读可验证性口径）；渲染尺寸 = size*supersample（与
+    generate_from_text 既有调用一致）。返回里 before/after 都是**该轮真实渲染图**
+    上的独立回读读数；after 在最后一张图上重新读一次（不复用循环内记账）。
+
+    诚实护栏：没有任何可判部件（全 coverage 外 / parts 为空 / 缺对应落格日志）、
+    size<96、supersample≠1 ⇒ verifiable=False、before/after=**None**、不改图像，
+    绝不把「不可判」报成「零差异」；部分覆盖如实披露（refine.coverage）。
+    """
+    cap = REFINE_DEFAULT_ROUNDS if rounds is None else max(0, int(rounds))
+    overrides: Dict[int, Dict] = {}
+
+    def render(ov: Dict[int, Dict]):
+        return render_relations(parts, size=size * supersample, seed=seed,
+                                supersample=supersample, overrides=ov or None)
+
+    img, log = render(overrides)
+    base = readback_mismatches(img, parts, log, size, calib)
+    base_con = verify_constructive(parts, img)["matched"]
+    records: List[Dict] = [{"round": 0, "diff_before": base["total"],
+                            "diff_after": base["total"], "changes": [],
+                            "stop_reason": None}]
+
+    def result(stop_reason: str, verifiable: Optional[bool] = None,
+               note: Optional[str] = None) -> Dict:
+        """收口：不可验证时 before/after = **None**（不用 0 冒充「零差异」）。
+
+        coverage 同时给出通道口径（colors/size_shape/min_size/params）、逐 part
+        覆盖账（parts/covered/uncovered）、本次**实际参与判定**的 part（judged）
+        与不可判/部分覆盖的原因（reason）——RGB 已验证不外推到未覆盖部件。
+        """
+        ok = bool(base["verifiable"]) if verifiable is None else bool(verifiable)
+        final = readback_mismatches(img, parts, log, size, calib)
+        reason = base["note"] if note is None else note
+        if ok and not reason:
+            reason = final["note"]          # 部分覆盖：如实披露未覆盖 part
+        before = base["total"] if ok else None
+        after = final["total"] if ok else None
+        records[-1]["stop_reason"] = stop_reason
+        cov = dict(final["coverage"])
+        cov["judged"] = list(cov["covered"]) if ok else []
+        cov.update({"colors": list(READBACK_COLORS), "size_shape": "circle",
+                    "min_size": REFINE_MIN_SIZE,
+                    "params": [dict(c) for c in REFINE_LADDER],
+                    "reason": reason or None})
+        return {
+            "image": img, "log": log, "rounds": records,
+            "before": before, "after": after,
+            "improved": bool(before is not None and after is not None
+                             and after < before),
+            "verifiable": ok,
+            "stop_reason": stop_reason,
+            "overrides": [{"part": i, "render_params": ov}
+                          for i, ov in sorted(overrides.items())],
+            "unresolved": ([{"part": it["part"], "kind": it["kind"],
+                             "spec": it["spec"], "read": it["read"]}
+                            for it in final["items"]] if ok else []),
+            "coverage": cov,
+            "note": reason,
+        }
+
+    if supersample != 1:
+        # ATTR_CALIB_96 是按 96px 渲染口径标定的；supersample≠1 时图像尺度变了，
+        # 该标定不成立 ⇒ 回读不可用（与 48px 同等处置：verifiable=False、
+        # before/after=None、不修正、不声称成功——数值再像也不是可判读数）。
+        return result(f"supersample={supersample}≠1：回读标定口径不符（不修正、不声称成功）",
+                      verifiable=False,
+                      note=(f"supersample={supersample}≠1：ATTR_CALIB_96 的 96px 标定"
+                            f"口径不成立，本次读数不可判（不修正、不声称成功）"))
+    if not base["verifiable"]:
+        return result(base["note"])
+    if cap <= 0:
+        return result("修正已关闭（refine_rounds=0）：只报告，不改动图像")
+    if base["total"] == 0:
+        return result("零差异：无需修正（图像未改）")
+
+    stop_reason = "达上限：仍有未消除的差异"
+    for r in range(1, cap + 1):
+        snapshot = readback_mismatches(img, parts, log, size, calib)
+        items, round_before = snapshot["items"], snapshot["total"]
+        changes: List[Dict] = []
+        # 每轮至多接受**一处**改动（按部件下标、阶梯顺序确定的第一处严格改善）：
+        # 轮记录与改动一一对应，上限语义 =「最多修正多少个部件」，且单轮代价可控。
+        for item in items:
+            pi = item["part"]
+            cur_ov = overrides.get(pi, {})
+            accepted = False
+            for cand in REFINE_LADDER:
+                if all(cur_ov.get(k) == v for k, v in cand.items()):
+                    continue              # 该参数已在用 ⇒ 不重试同一格
+                trial = dict(overrides)
+                trial[pi] = {**cur_ov, **cand}
+                timg, tlog = render(trial)
+                td = readback_mismatches(timg, parts, tlog, size, calib)
+                if td["total"] < round_before and \
+                        verify_constructive(parts, timg)["matched"] >= base_con:
+                    img, log, overrides = timg, tlog, trial
+                    changes.append({"part": pi, "kind": item["kind"],
+                                    "render_params": trial[pi],
+                                    "diff_before": round_before,
+                                    "diff_after": td["total"]})
+                    accepted = True
+                    break
+            if accepted:
+                break
+        cur_total = readback_mismatches(img, parts, log, size, calib)["total"]
+        records.append({"round": r, "diff_before": round_before,
+                        "diff_after": cur_total, "changes": changes,
+                        "stop_reason": None})
+        if cur_total == 0:
+            stop_reason = "已消除全部可判差异"
+            break
+        if not changes:
+            stop_reason = "无改进：候选渲染参数均未使差异严格下降"
+            break
+    return result(stop_reason)
 
 
 # ==================== 关系层变换（P1③）====================
@@ -415,22 +733,35 @@ def shift_relations(parts: List[Dict], dr: int, dc: int) -> Dict:
 
 def generate_from_text(text: str, size: int = 48, seed: int = 7,
                        transform: Optional[str] = None,
-                       supersample: int = 1) -> Dict:
-    """端到端：文字 → 关系 →（可选变换）→ 渲染 → 构造性验证（+回读次级）。
+                       supersample: int = 1,
+                       refine_rounds: int = REFINE_DEFAULT_ROUNDS) -> Dict:
+    """端到端：文字 → 关系 →（可选变换）→ 渲染 →（有限反馈修正）→ 验证。
 
     回读次级指标仅在 size≥96 时计算（48px 小物体低于提取器面积下限，
     M4.3j extract_attributes 的诚实边界）。
+
+    refine_rounds（F07）：有限确定性反馈修正的轮数上限，缺省 2（小上限），
+    传 0 = 关闭对照。修正只调渲染参数（pattern_period），**不改 text/parts 意图、
+    不改 seed、不放宽任何判据**；每轮的差异/改动/停止原因在 refine.rounds 里，
+    before/after 是真实最终图像的独立像素回读读数。size<96、supersample≠1 或
+    **回读覆盖为空**（无任何可判部件）时一律 verifiable=False、before/after=None、
+    不修正、不声称成功（refine.coverage 给出可判/不可判的逐 part 账与原因）；
+    部分覆盖时如实披露，不把 RGB 的结论外推到未覆盖色。旧返回字段（image/parts/
+    log/constructive/readback/defaults_applied/transform）形状不变。
     """
     compiled = compile_description(text)
     parts = compiled["parts"]
     if transform is not None:
         parts = transform_relations(parts, transform)
-    img, log = render_relations(parts, size=size * supersample, seed=seed,
-                                supersample=supersample)
+    refined = refine_render(parts, size=size, seed=seed, rounds=refine_rounds,
+                            supersample=supersample)
+    img, log = refined["image"], refined["log"]
     verdict = verify_constructive(parts, img)
     readback = (verify_readback(img, parts, log)
                 if size >= 96 else {"note": "48px 低于提取器面积下限，不计"})
     return {"image": img, "parts": parts, "log": log,
             "constructive": verdict, "readback": readback,
             "defaults_applied": compiled["defaults_applied"],
-            "transform": transform}
+            "transform": transform, "text": text,
+            "refine": {k: v for k, v in refined.items()
+                       if k not in ("image", "log")}}

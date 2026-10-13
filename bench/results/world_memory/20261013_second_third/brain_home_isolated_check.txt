@@ -1,0 +1,26 @@
+  PASS S1 脑侧握手 serverInfo
+  PASS S2 ingest_scene 写入 3 实体
+  PASS S3 世界重建实体集合
+  PASS S4 类别经 cat: 标签取回
+  PASS S5 坐标经 spatial.coords3d 直存取回
+  PASS S6 状态经槽位投影取回（事件是源）
+  PASS S7 第二实体状态
+  PASS S8 状态更新后重载取新值
+  PASS S9a 幽灵节点已写入（对照组）
+  PASS S9b 无 spatial 标签者被适配器侧过滤
+  PASS S10a 21 实体写入成功（issue #2 场景，对照组）
+  PASS S10b limit=200 ⇒ 新增候选恰为写入的 21 个（脑端 k 生效；改前只回 20）
+  PASS S10c 世界重建实体集合＝写入集合（增量口径；改前缺末位实体）
+  PASS S11 limit=1 ⇒ 至多 1 个候选（改前回落 k=20 ⇒ 20 个）
+  PASS S12a REJECT 标定物已写入（对照组）
+  PASS S12b REJECT 资格节点不注入世界重建（PR#3 部位②）
+  PASS S12c BLINDSPOT 实体保留（只踢 REJECT，不清空）
+  PASS S12d accept_states=set() 关闭过滤 ⇒ REJECT 回候选（旧行为兼容口）
+  PASS S12e accept_states={'ACCEPT'} 收紧 ⇒ REJECT 与 BLINDSPOT 均出局
+  PASS S12f 缺 state 者 fail-open 保留（未知≠否决；PR 原写法会静默剔除）
+  PASS S13a 两个同名实体节点已写入（对照组）
+  PASS S13b 同实体名·节点 id A 的状态＝自己记的 s13_a（不被 B 覆盖）
+  PASS S13c 同实体名·节点 id B 的状态＝自己记的 s13_b（不被 A 覆盖）
+
+===== SUMMARY 23/23 通过 =====
+VERDICT=PASS（M1 读向 + M2 写向 最小闭环全过；隔离库）

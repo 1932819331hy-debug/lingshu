@@ -16,6 +16,13 @@ SceneSimulator = WorldServer + 场景语义：
   - flee(predator)：逃离追捕者（逃跑）
   - follow(path)：沿路径移动（巡逻）
 
+受控动作（F08 · 沙盒离散移动 · 真实执行侧）：
+  - set_command(entity_id, action, step_size)：登记受控实体**下一 tick** 的离散动作
+    （east/west/north/south/stay，见 ACTION_NAMES），由 step() 消费一次；
+  - 受控实体在该 tick **不**走自主行为分支（_decide 不被调用、不消耗 _rng），
+    位移严格＝ 方向 × step_size（越界按边界钳制、坐标取整 2 位）；
+  - 这是「执行 actuator」：它按登记的动作移动**实际**实体，不参与任何预测/评分。
+
 设计参考：
   - Cosmos（3d-world/world-model）：世界基础模型（场景级演化）
   - DynamicCity（3d-world/4d-dynamic）：4D 占用序列
@@ -48,6 +55,15 @@ MAX_STEPS_PER_CALL = 100_000
 #: 演化历史 / 行为日志环形缓冲长度（#424：长期运行只增不减）
 HISTORY_MAXLEN = 10_000
 BEHAVIOR_LOG_MAXLEN = 50_000
+
+#: F08 受控实体的离散动作空间（平面 x/z，y 不变）——本表是本仓**唯一**方向真源。
+#: 约定（本仓此前未定义方位 ⇒ 此处显式钉住）：east=+x / west=-x /
+#: north=-z / south=+z / stay=原地不动。
+ACTION_DELTAS: Dict[str, Tuple[float, float]] = {
+    "east": (1.0, 0.0), "west": (-1.0, 0.0),
+    "north": (0.0, -1.0), "south": (0.0, 1.0), "stay": (0.0, 0.0)}
+#: 动作表的**稳定顺序**——决策 tie-break 与审计候选顺序的唯一来源（确定性）。
+ACTION_NAMES: Tuple[str, ...] = ("east", "west", "north", "south", "stay")
 
 
 @dataclass
@@ -96,6 +112,10 @@ class SceneSimulator:
         # 巡逻必须**提交**目标：若每 tick 只重算"最近点"，实体推进一格后
         # 最近点会立刻变回原点 ⇒ 原地振荡，永不前进。
         self._follow_target: Dict[str, int] = {}
+        # F08：受控实体**待消费**的离散动作（entity_id -> {action, step_size}）。
+        # 单次消费：step() 取走即删——登记的动作只作用于紧接的那一个 tick，
+        # 不登记 ⇒ 行为与历史完全一致（默认关闭时零影响）。
+        self._commands: Dict[str, Dict] = {}
         self.tick_count = 0
         # 确定性随机：**同一实体插入顺序下**可复现（#428：step 按 entities 迭代
         # 序决策，随机数按该序切分，且决策读目标 pos 后同循环写回 ⇒ 换插入顺序
@@ -218,6 +238,87 @@ class SceneSimulator:
             return (0.0, 0.0, 0.0)
         return (dx / n, dy, dz / n)
 
+    # ---- F08 受控动作（真实执行侧 actuator）----
+
+    @staticmethod
+    def validate_action(action: str, step_size: float = 1.0) -> float:
+        """fail-closed 校验离散动作 + 步长，返回 float(step_size)。
+
+        未知动作 / 非数值 / 非有限 / 非正步长一律 ValueError——不静默夹取、
+        不静默改写（判据＝《PR 审核细则 v0.1》§三.3 边界诚实：不静默降级）。
+        """
+        if action not in ACTION_DELTAS:
+            raise ValueError("未知动作 %r（可用：%s）"
+                             % (action, "/".join(ACTION_NAMES)))
+        if isinstance(step_size, bool) or not isinstance(step_size, (int, float)):
+            raise ValueError("step_size 需为有限正数，收到 %r" % (step_size,))
+        size = float(step_size)
+        if not math.isfinite(size) or size <= 0:
+            raise ValueError("step_size 需为有限正数，收到 %r" % (step_size,))
+        return size
+
+    def set_command(self, entity_id: str, action: str,
+                    step_size: float = 1.0) -> Dict:
+        """登记受控实体**下一 tick** 的离散动作（单次消费）。返回登记副本。
+
+        校验先于写入：失败时既不改 _commands，也不触碰实体状态（无污染）。
+        """
+        size = self.validate_action(action, step_size)
+        if entity_id not in self.entities:
+            raise ValueError("受控实体 %r 不在场景中（现有：%s）"
+                             % (entity_id, "/".join(sorted(self.entities))))
+        self._commands[entity_id] = {"entity": entity_id, "action": action,
+                                     "step_size": size}
+        return dict(self._commands[entity_id])
+
+    def clear_command(self, entity_id: Optional[str] = None) -> Dict:
+        """撤销待消费动作（entity_id=None ⇒ 撤销全部）。返回撤销清单。"""
+        if entity_id is None:
+            removed = sorted(self._commands)
+            self._commands.clear()
+        else:
+            removed = [entity_id] if entity_id in self._commands else []
+            self._commands.pop(entity_id, None)
+        return {"removed": removed, "pending": sorted(self._commands)}
+
+    def commands(self) -> Dict[str, Dict]:
+        """当前待消费动作（副本，供审计）。"""
+        return {eid: dict(cmd) for eid, cmd in self._commands.items()}
+
+    def _apply_command(self, eid: str, e: SceneEntity, cmd: Dict) -> Optional[Dict]:
+        """执行受控动作（真实位移）——返回行动记录；原地 stay 返回 None。
+
+        与自主行为分支共用同一套世界响应口径：边界钳制 + 坐标取整 2 位 +
+        velocity＝本 tick 实际位移。step_size 已在登记时校验为有限正数，故
+        位置必然有限（此处保留 #347 防御性拒绝）。
+        """
+        dx, dz = ACTION_DELTAS[cmd["action"]]
+        step = cmd["step_size"]
+        old = e.pos
+        nx, nz = old[0] + dx * step, old[2] + dz * step
+        if not (math.isfinite(nx) and math.isfinite(nz)):
+            warnings.warn(
+                "scene_simulator: 受控实体 %s 的下一位置非有限（%r, %r）⇒ 拒绝写入"
+                % (eid, nx, nz), RuntimeWarning, stacklevel=3)
+            e.velocity = (0.0, 0.0, 0.0)
+            return None
+        nx = max(0.5, min(self.world.size - 0.5, nx))
+        nz = max(0.5, min(self.world.size - 0.5, nz))
+        e.pos = (round(nx, 2), old[1], round(nz, 2))
+        e.velocity = (round(e.pos[0] - old[0], 2), 0.0,
+                      round(e.pos[2] - old[2], 2))
+        # 决策记录（behavior_log）与自主行为同面：含动作名/步长，便于外部审计
+        # 「这一 tick 谁被指挥动了」。stay 也留一条（动作确实被决策并执行，
+        # 只是位移为 0）——而 actions 计数仍只数**实际位移**（#193-A 口径）。
+        self._behavior_log.append({"tick": self.tick_count, "entity": eid,
+                                   "behavior": e.behavior, "commanded": True,
+                                   "action": cmd["action"], "step_size": step,
+                                   "pos": e.pos})
+        if e.velocity == (0.0, 0.0, 0.0):
+            return None
+        return {"entity": eid, "category": e.category, "behavior": e.behavior,
+                "commanded": True, "action": cmd["action"], "new_pos": e.pos}
+
     # ---- 决策循环（场景演化）----
 
     def _approach_distance(self, e: SceneEntity) -> Optional[float]:
@@ -268,6 +369,14 @@ class SceneSimulator:
             self.tick_count += 1
             actions = []
             for eid, e in self.entities.items():
+                # F08：受控动作优先——登记的动作在本 tick 消费一次，且**不**走
+                # 自主行为分支（不调用 _decide ⇒ 不消耗共享 _rng、不读目标规则）。
+                cmd = self._commands.pop(eid, None)
+                if cmd is not None:
+                    record = self._apply_command(eid, e, cmd)
+                    if record is not None:
+                        actions.append(record)
+                    continue
                 # 决策
                 direction = self._decide(e)
                 if direction == (0.0, 0.0, 0.0):

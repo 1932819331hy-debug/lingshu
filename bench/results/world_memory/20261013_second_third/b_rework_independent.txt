@@ -1,0 +1,38 @@
+[数字] F06 绑定: {"body": ["r1"], "wheel": ["r6", "r8"]} 关系命中 2 / 2
+.[数字] F06 布局: good score=1.0 rel=2 | flipped score=0.8 rel=1
+.[数字] F06 仅改声明: above=0.75 below=1.0
+.[数字] F06 旧配方键集: ['all_scores', 'id', 'margin', 'name', 'score', 'verdict'] | 评分 = _match_score（逐例相等）
+.[数字] F06 坏关系: unknown=0.75 broken=0.5 squashed=0.667
+.[数字] F06 重复/未绑定: 同格重复=0.5 单检测=0.25 车身未绑定=0.75
+.[数字] F06 默认库 car: score=1.0 证据=[{"above": true}, {"side_by_side": true}]
+.[数字] F06 顺序无关(通配双角色): 2 个排列 -> 1 份报告 {"a": ["r0"], "b": ["r8"]}；score=1.0 绑定={"a": [0], "b": [1]}
+.[数字] F06 6 个排列 -> 1 份报告；relation_hits=2
+.[数字] F06 旧配方排列: 键集=['all_scores', 'id', 'margin', 'name', 'score', 'verdict']；每个排列 score=1.0（2 conn 全命中）
+.[数字] F06 斜向: above=True left_of=True 同格 left_of=False side_by_side(同排)=True
+.[数字] F06 同 role 有向: left_of=True right_of=True(witness r8) 对称去重 observed=1
+.[数字] F07 端到端 '中间有点纹三角' seed=0: 差异 1 -> 0；parts=[{"shape": "triangle", "color": "red", "zone": "r4", "pattern": "dotted", "size": "medium"}]
+.[数字] F07 零差异: before=0 after=0 overrides=[] 图像逐像素相同
+.[数字] F07 上限/不可修正: cap1=1(达上限) cap2=0 | 不可修正 before=1 after=1 overrides=[]
+.[数字] F07 48px: verifiable=False after=None stop='48px < 96px：属性回读不可判（不修正、不声称成功）'
+.[数字] F07 意图/seed: text='中间有点纹三角' parts=[{"shape": "triangle", "color": "red", "zone": "r4", "pattern": "dotted", "size": "medium"}] overrides=[{"part": 0, "render_params": {"pattern_period": 2}}]
+.[数字] F07 覆盖外: verifiable=False before=None after=None | 覆盖 0/1 未覆盖=[0]
+.[数字] F07 周期通道 period=3 与共享 _paint 逐像素一致（486 例对照）
+.[数字] F07 supersample=2: verifiable=False after=None stop='supersample=2≠1：回读标定口径不符（不修正、不声称成功）'
+.[数字] F07 批量 60 例: 差异 18 -> 7；改善用例 7；逐例不劣化
+.[数字] F07 端到端覆盖外: verifiable=False before=None after=None parts=[{"shape": "circle", "color": "orange", "zone": "r0", "pattern": "solid", "size": "medium"}]
+.[数字] F07 混合覆盖: before=1 after=0 | covered=[0] uncovered=[1]
+.[数字] F07 空/缺账: empty=False no_log=False（同图有账时 covered=[0]）
+.[数字] F07 红色点纹圆 seed=7: 独立读数 1 -> 0；覆盖=[0]
+...........  PASS A0 夹具：红圆像素确实在 r0  px=253
+  PASS A1 期望与像素一致 ⇒ rate=1.0  {'rate': 1.0, 'matched': 1, 'total': 1, 'scored': 1, 'unverifiable': 0, 'misses': []}
+  PASS A2 夹具：红像素已抹净
+  PASS A3 图上无该色像素 ⇒ rate=0.0（旧日志口径下为 1.0）  {'rate': 0.0, 'matched': 0, 'total': 1, 'scored': 1, 'unverifiable': 0, 'misses': [{'part': 0, 'spec': {'shape': 'circle', 'color': 'red', 'zone': 'r0'}, 'reason': '期望 zone 内无该色像素', 'pixels': 0}]}
+  PASS B1 旧口径（日志恒等比对）在同一夹具上仍报 1.0 ⇒ A3 的 0.0 是新判据读像素得来  old_style=1.0
+  PASS C1 期望 zone=r8 而像素在 r0 ⇒ matched=0/rate=0.0  {'rate': 0.0, 'matched': 0, 'total': 1, 'scored': 1, 'unverifiable': 0, 'misses': [{'part': 0, 'spec': {'shape': 'circle', 'color': 'red', 'zone': 'r8'}, 'reason': '期望 zone 内无该色像素', 'pixels': 0}]}
+  PASS D0 夹具：黑与噪声底逐通道差 < 阈值（确实不可分）  dist=12.0 bg=[21.0, 21.0, 21.0]
+  PASS D1 不可分色 ⇒ unverifiable=1、scored=0、rate=0.0（不记为兑现）  {'rate': 0.0, 'matched': 0, 'total': 1, 'scored': 0, 'unverifiable': 1, 'misses': [{'part': 0, 'spec': {'shape': 'circle', 'color': 'black', 'zone': 'r4'}, 'reason': '色与背景不可分', 'color_bg_dist': 12.0}]}
+  PASS E1 黑画在灰底上 ⇒ 色可分 ⇒ rate=1.0（不是一刀切排除黑）  dist=549.0 {'rate': 1.0, 'matched': 1, 'total': 1, 'scored': 1, 'unverifiable': 0, 'misses': []}
+  PASS F1 generate_from_text 的 constructive 与手算像素口径一致  {'rate': 1.0, 'matched': 2, 'total': 2, 'scored': 2, 'unverifiable': 0, 'misses': []}
+  PASS F2 抹净部件色像素后端到端读数掉到 0.0  {'rate': 0.0, 'matched': 0, 'total': 2, 'scored': 2, 'unverifiable': 0, 'misses': [{'part': 0, 'spec': {'shape': 'circle', 'color': 'red', 'zone': 'r0', 'pattern': 'solid', 'size': 'medium'}, 'reason': '期望 zone 内无该色像素', 'pixels': 0}, {'part': 1, 'spec': {'shape': 'triangle', 'color': 'green', 'zone': 'r8', 'pattern': 'solid', 'size': 'medium'}, 'reason': '期望 zone 内无该色像素', 'pixels': 0}]}
+........uu...............
+58 passed, 2 subtests passed in 0.89s

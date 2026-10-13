@@ -1,0 +1,56 @@
+...........................                                              [100%]
+============================== warnings summary ===============================
+tests/test_second_batch_camera.py: 11 warnings
+tests/test_third_batch_core_action.py: 10 warnings
+tests/test_issue211_world3d_build_guard.py: 6 warnings
+  <workspace>\lingshu\core\core.py:4170: ComponentDiscoveryWarning: [issue156] 组件 'entity_registry' 未在受控解析面找到（已查 7 个条目；LINGSHU_COMPONENT_ROOT 未设置；cwd/空串 sys.path 条目已排除）。若确需该组件，请用 LINGSHU_COMPONENT_ROOT 或 PYTHONPATH 显式声明其所在目录。
+    from entity_registry import EntityRegistry
+
+tests/test_second_batch_camera.py: 11 warnings
+tests/test_third_batch_core_action.py: 10 warnings
+tests/test_issue211_world3d_build_guard.py: 6 warnings
+  <workspace>\lingshu\core\core.py:4157: ComponentDiscoveryWarning: [issue156] 组件 'semantic_space' 未在受控解析面找到（已查 7 个条目；LINGSHU_COMPONENT_ROOT 未设置；cwd/空串 sys.path 条目已排除）。若确需该组件，请用 LINGSHU_COMPONENT_ROOT 或 PYTHONPATH 显式声明其所在目录。
+    from semantic_space import SemanticSpaceProvider
+
+tests/test_second_batch_camera.py: 11 warnings
+tests/test_third_batch_core_action.py: 10 warnings
+tests/test_issue211_world3d_build_guard.py: 6 warnings
+  <workspace>\lingshu\core\core.py:4148: ComponentDiscoveryWarning: [issue156] 组件 'attention_policy' 未在受控解析面找到（已查 7 个条目；LINGSHU_COMPONENT_ROOT 未设置；cwd/空串 sys.path 条目已排除）。若确需该组件，请用 LINGSHU_COMPONENT_ROOT 或 PYTHONPATH 显式声明其所在目录。
+    from attention_policy import AttentionPolicy
+
+tests/test_second_batch_camera.py: 11 warnings
+tests/test_third_batch_core_action.py: 10 warnings
+tests/test_issue211_world3d_build_guard.py: 6 warnings
+  <workspace>\lingshu\core\core.py:4126: ComponentDiscoveryWarning: [issue156] 组件 'prediction_engine' 未在受控解析面找到（已查 7 个条目；LINGSHU_COMPONENT_ROOT 未设置；cwd/空串 sys.path 条目已排除）。若确需该组件，请用 LINGSHU_COMPONENT_ROOT 或 PYTHONPATH 显式声明其所在目录。
+    from prediction_engine import PredictionEngine
+
+tests/test_second_batch_camera.py::test_c1_camera_meta_persists_and_rebuilds_in_a_new_engine
+  <workspace>\lingshu\world\prediction.py:26: ComponentDiscoveryWarning: [issue156] 组件 'spacetime_memory_core' 未在受控解析面找到（已查 7 个条目；LINGSHU_COMPONENT_ROOT 未设置；cwd/空串 sys.path 条目已排除）。若确需该组件，请用 LINGSHU_COMPONENT_ROOT 或 PYTHONPATH 显式声明其所在目录。
+    from spacetime_memory_core import LayeredStore as _LayeredStore
+
+tests/test_second_batch_camera.py: 11 warnings
+tests/test_third_batch_core_action.py: 10 warnings
+tests/test_issue211_world3d_build_guard.py: 6 warnings
+  <workspace>\lingshu\core\core.py:4102: ComponentDiscoveryWarning: [issue156] 组件 'lifecycle_engine' 未在受控解析面找到（已查 7 个条目；LINGSHU_COMPONENT_ROOT 未设置；cwd/空串 sys.path 条目已排除）。若确需该组件，请用 LINGSHU_COMPONENT_ROOT 或 PYTHONPATH 显式声明其所在目录。
+    from lifecycle_engine import LifecycleEngine
+
+tests/test_second_batch_camera.py: 11 warnings
+tests/test_third_batch_core_action.py: 10 warnings
+tests/test_issue211_world3d_build_guard.py: 6 warnings
+  <workspace>\lingshu\core\core.py:4073: ComponentDiscoveryWarning: [issue156] 组件 'flywheel_engine' 未在受控解析面找到（已查 7 个条目；LINGSHU_COMPONENT_ROOT 未设置；cwd/空串 sys.path 条目已排除）。若确需该组件，请用 LINGSHU_COMPONENT_ROOT 或 PYTHONPATH 显式声明其所在目录。
+    from flywheel_engine import FlywheelEngine
+
+tests/test_second_batch_camera.py: 11 warnings
+tests/test_third_batch_core_action.py: 10 warnings
+tests/test_issue211_world3d_build_guard.py: 6 warnings
+  <workspace>\lingshu\core\core.py:4082: ComponentDiscoveryWarning: [issue156] 组件 'self_cognition_engine' 未在受控解析面找到（已查 7 个条目；LINGSHU_COMPONENT_ROOT 未设置；cwd/空串 sys.path 条目已排除）。若确需该组件，请用 LINGSHU_COMPONENT_ROOT 或 PYTHONPATH 显式声明其所在目录。
+    from self_cognition_engine import SelfCognitionEngine
+
+tests/test_second_batch_camera.py: 11 warnings
+tests/test_third_batch_core_action.py: 10 warnings
+tests/test_issue211_world3d_build_guard.py: 6 warnings
+  <workspace>\lingshu\core\core.py:4063: ComponentDiscoveryWarning: [issue156] 组件 'body' 未在受控解析面找到（已查 7 个条目；LINGSHU_COMPONENT_ROOT 未设置；cwd/空串 sys.path 条目已排除）。若确需该组件，请用 LINGSHU_COMPONENT_ROOT 或 PYTHONPATH 显式声明其所在目录。
+    from body import build_default_registry
+
+-- Docs: https://docs.pytest.org/en/stable/how-to/capture-warnings.html
+27 passed, 217 warnings in 1.10s
