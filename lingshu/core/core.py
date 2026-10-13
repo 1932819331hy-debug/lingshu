@@ -3287,9 +3287,15 @@ class LayeredStore:
                 causal_adj.setdefault(s, []).append(t)
                 causal_conf[(s, t)] = cf if cf is not None else 0.5
         max_deg = max(deg.values()) if deg else 1
-        c_.execute("SELECT id, importance FROM nodes")
+        # ★优化（本笔 · 零行为变更）：把 `state_attributes` **并入这趟主查询**。
+        # 旧实现在下方循环里逐节点调 `_read_state_attr(nid, "structural_boost", 0.0)`
+        # ⇒ N 次 `SELECT state_attributes FROM nodes WHERE id=?`（N+1）。该列与
+        # `id, importance` 同表同行 ⇒ 一并取出、按 `_state_attr_of` 单点解析一次。
+        c_.execute("SELECT id, importance, state_attributes FROM nodes")
         rows = c_.fetchall()
-        imp_map = {nid: (imp if imp is not None else 0.5) for nid, imp in rows}
+        imp_map = {nid: (imp if imp is not None else 0.5) for nid, imp, _sa in rows}
+        _sb_map = {nid: self._state_attr_of(_sa, "structural_boost", 0.0)
+                   for nid, _imp, _sa in rows}
 
         # 因果上游度传播（BFS · 深度上限 · 节点去重 · 路径置信度加权）
         influence: Dict[str, float] = {}
@@ -3315,7 +3321,7 @@ class LayeredStore:
         movers = []
         protected = []
         applied = 0
-        for nid, imp in rows:
+        for nid, imp, _sa in rows:
             infl = influence.get(nid, 0)
             # 上游度写入 state_attributes（可检索/可查）
             if infl > 0 and not dry_run:
@@ -3343,7 +3349,10 @@ class LayeredStore:
             # min(1.0, base + boost)`，`delta = new_imp - imp`；结构不变时
             # delta=0（不动），结构增强时只补差额，总提升 ≤ boost_cap。
             # 判据来源：公开 issue #299「修复建议（最小补丁）」。
-            sb = self._read_state_attr(nid, "structural_boost", 0.0)
+            # ★优化（本笔）：`sb` 取自上方主查询一并取回并解析好的 `_sb_map`
+            # （旧实现此处调 `_read_state_attr` ⇒ 每节点一次 SELECT，N+1）。
+            # 取值口径逐位不变：同一个 `_state_attr_of` 单点、同一个默认 0.0。
+            sb = _sb_map.get(nid, 0.0)
             sb = sb if isinstance(sb, (int, float)) else 0.0
             base = imp - sb
             new_imp = min(1.0, base + boost)
@@ -3396,19 +3405,19 @@ class LayeredStore:
                   (json.dumps(sa, ensure_ascii=False), node_id))
         self.conn.commit()
 
-    def _read_state_attr(self, node_id: str, key: str, default=None):
-        """读单个 state_attributes 键（缺键/非法 JSON/非 dict ⇒ 返回 default）。
+    @staticmethod
+    def _state_attr_of(sa_raw, key: str, default=None):
+        """从 `state_attributes` 原始文本里取一个键（缺值/非法 JSON/非 dict ⇒ default）。
 
-        #299：`recalc_structural_importance` 需要读回上次已施加的
-        `structural_boost` 作为地板，故加此小 helper。
+        ★本笔把它从 `_read_state_attr` 里**提出来成单点**：`recalc_structural_importance`
+        原先在循环里逐节点调 `_read_state_attr` ⇒ **N 次 SELECT**。而该列与它上方那趟
+        `SELECT id, importance FROM nodes` **同表同行** —— 列一并取出后在此**解析一次**即可。
+        两条路径（单点查询 / 批量取出）共用本函数 ⇒ 容错口径不可能分叉。
         """
-        c = self.conn.cursor()
-        c.execute("SELECT state_attributes FROM nodes WHERE id=?", (node_id,))
-        row = c.fetchone()
-        if not row or not row[0]:
+        if not sa_raw:
             return default
         try:
-            sa = json.loads(row[0])
+            sa = json.loads(sa_raw)
         except (ValueError, TypeError):
             # 窄口径（#170 建议 b）：`json.loads` 只抛这两类——`JSONDecodeError`
             # 是 `ValueError` 子类，入参非 str/bytes 抛 `TypeError`。本处「坏档当
@@ -3419,6 +3428,23 @@ class LayeredStore:
         if not isinstance(sa, dict):
             return default
         return sa.get(key, default)
+
+    def _read_state_attr(self, node_id: str, key: str, default=None):
+        """读单个 state_attributes 键（缺键/非法 JSON/非 dict ⇒ 返回 default）。
+
+        #299：`recalc_structural_importance` 需要读回上次已施加的
+        `structural_boost` 作为地板，故加此小 helper。
+
+        ★本笔：解析体已抽到 `_state_attr_of` 单点；本函数保留为「已知 node_id 时」
+        的便捷入口（一次 SELECT）。**批量场景请勿逐节点调本函数**——见
+        `recalc_structural_importance` 里「列随主查询一并取出」的用法。
+        """
+        c = self.conn.cursor()
+        c.execute("SELECT state_attributes FROM nodes WHERE id=?", (node_id,))
+        row = c.fetchone()
+        if not row:
+            return default
+        return self._state_attr_of(row[0], key, default)
 
     def _protect_upstream(self, node_id: str, infl: float, floor: float):
         """越上游越要记录：保护登记 + no_forget + importance 保底。"""
