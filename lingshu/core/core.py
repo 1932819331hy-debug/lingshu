@@ -1495,9 +1495,16 @@ class LayeredStore:
                           (EdgeType.OPPOSITE.value, peer, peer))
                 if c.fetchone()[0]:
                     continue  # 对端仍与其它节点冲突 ⇒ 标签保留
-                pnode = self.get_node(peer)
-                if pnode and "conflict" in (pnode.tags or []):
-                    tags = [t for t in pnode.tags if t != "conflict"]
+                # ★优化（本笔 · 零行为变更）：本处只用对端的 **tags** 一个字段，
+                # 旧实现 `self.get_node(peer)` 是 `SELECT *`（读整行 + 建 `STNode`）。
+                # 改为只取 `tags`。`json.loads` 与 `STNode.from_row` 同款裸调
+                # （该列由 `_dumps_tags` 写、`from_row` 亦裸解析）⇒ 坏行失败语义一致；
+                # `fetchone()` 为 None 时与旧 `pnode` 为 None 同分支（都不进 if）。
+                c.execute("SELECT tags FROM nodes WHERE id=?", (peer,))
+                _prow = c.fetchone()
+                _ptags = (json.loads(_prow[0]) if _prow and _prow[0] else []) if _prow else None
+                if _ptags is not None and "conflict" in _ptags:
+                    tags = [t for t in _ptags if t != "conflict"]
                     c.execute("UPDATE nodes SET tags=? WHERE id=?", (_dumps_tags(tags), peer))
                     c.execute("INSERT INTO action_logs (ts, action_type, summary, node_ids,"
                               " outcome, context) VALUES (?,?,?,?,?,?)",
