@@ -81,8 +81,7 @@
   {
    "file": "tests/test_hex_train.py",
    "src": "tests/test_hex_train.py",
-   "bytes": 9625,
-   "sha256": "47eb8a7651af6c39",
+   "bytes": 9620, "sha256": "5a9bac783beb473a",
    "rewrites": 11,
    "patches": 0,
    "sanitized": 0

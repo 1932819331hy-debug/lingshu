@@ -187,7 +187,7 @@ def test_four_state_verdicts():
     assert rep["accept_precision"] >= 0.8, f"ACCEPT 精确率不足: {rep}"
     # 全零输入 → 响应趋零 → BLINDSPOT(诚实声明不知道)
     _, pooled0 = net.forward(np.zeros_like(lat[:1]))
-    r0 = four_state_classify(net, pooled0, cards)[0]
+    r0 = four_state_classify(pooled0, cards)[0]
     assert r0["verdict"] in ("BLINDSPOT", "DEFER"), f"零输入应诚实降级: {r0}"
 
 
