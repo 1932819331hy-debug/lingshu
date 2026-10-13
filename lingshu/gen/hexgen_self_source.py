@@ -17,7 +17,7 @@
 
 红线：白箱（零 LLM、纯 stdlib+numpy）；**只读复用** `aeis.hex_composite._paint`（既有确定性画笔）
 与 `hexgen_c1_real` 的读出链、`hexgen_multi_seed` 的 summarize；不修改它们。
-命令行：python experiments/hexgen_self_source.py
+命令行：python -X utf8 -m lingshu.gen.hexgen_self_source（仓根执行；参数见 --help）
 """
 import argparse
 import io
