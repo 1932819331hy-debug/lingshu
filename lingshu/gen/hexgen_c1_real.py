@@ -572,7 +572,7 @@ def _feat_vec(f):
 
 
 # ==================== 4. 纹理特征（花纹：平涂 vs 有花纹） ====================
-def texture_features(img, sil, core, bg=None):
+def texture_features(img, core, bg=None):
     """物体内部的**纹理**读数（尺度无关）：
       · `tex_rel` = 核心区亮度标准差 / 物体色到背景的距离 —— **平涂 vs 有花纹**的判别量。
         为何不用 R273 的「占空比」：本语料的花纹是**颜色调制**而不是挖洞，实测三类花纹的
@@ -635,7 +635,7 @@ def measure_item(it, tol=TOL, d=6, erode_r=ERODE_R):
         if not px.any():
             px = core if core.any() else sil
         med_rgb = np.median(it["img"][px], axis=0)
-        tex = texture_features(it["img"], sil, core, bg=bg)
+        tex = texture_features(it["img"], core, bg=bg)
         core_hp = erode(sil, HP_RADIUS + 1)
         if core_hp.sum() < 40:
             core_hp = core
