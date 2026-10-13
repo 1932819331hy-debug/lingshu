@@ -1414,10 +1414,27 @@ class LayeredStore:
         """
         c.execute("SELECT id, relation_type, source_id, target_id FROM edges"
                   " WHERE source_id=? OR target_id=?", (node_id, node_id))
-        for eid, rel, sid, tid in c.fetchall():
+        _rows_e = c.fetchall()
+        # ★优化（本笔 · 零行为变更）：旧实现逐边 `self.get_node(other)` —— 即
+        # `SELECT * FROM nodes WHERE id=?`（读**整行** + 建 `STNode`），而本处只用
+        # **对端 layer** 一个字段。改为先收集全部对端 id、按 `_SQL_IN_CHUNK`（#417
+        # 的 IN 绑定上限单点）分批取 `id, layer`，循环内查表。
+        # 转换用 `MemoryLayer(...)`，与 `STNode.from_row` 的 `MemoryLayer(row[8])`
+        # **同款裸露转换** ⇒ 行内 layer 非法时的失败语义与旧路径逐位一致。
+        _others = list({(tid if sid == node_id else sid)
+                        for _eid, _rel, sid, tid in _rows_e})
+        _layer_of: Dict[str, MemoryLayer] = {}
+        for _i in range(0, len(_others), _SQL_IN_CHUNK):
+            _chunk = _others[_i:_i + _SQL_IN_CHUNK]
+            _ph = ",".join("?" * len(_chunk))
+            for _oid, _lay in c.execute(
+                    f"SELECT id, layer FROM nodes WHERE id IN ({_ph})",
+                    _chunk).fetchall():
+                _layer_of[_oid] = MemoryLayer(_lay)
+        for eid, rel, sid, tid in _rows_e:
             other = tid if sid == node_id else sid
-            peer = self.get_node(other)
-            if peer is None or peer.layer not in self.IMMUTABLE_LAYERS:
+            _lay = _layer_of.get(other)
+            if _lay is None or _lay not in self.IMMUTABLE_LAYERS:
                 continue
             c.execute("INSERT INTO action_logs (ts, action_type, summary, node_ids,"
                       " outcome, context) VALUES (?,?,?,?,?,?)",
@@ -1548,12 +1565,22 @@ class LayeredStore:
         对 SELF 端点的边不做角色限制（与 #191 一致）。
         """
         if self.role != Role.PRIMARY:
+            # ★优化（本笔 · 零行为变更）：本闸只看端点的 **layer** 一个字段，而旧实现
+            # 逐端点 `self.get_node(nid)`（`SELECT *`，读整行 + 建 `STNode`）。
+            # 改为只取 `layer`（两个 id、最多两条轻查询）。`MemoryLayer(...)` 与
+            # `STNode.from_row` 同款裸露转换 ⇒ 非法 layer 的失败语义一致；
+            # 不存在该 id 时 `fetchone()` 为 None，与旧 `n is None` 同分支。
+            _c = self.conn.cursor()
             for nid in (edge.source_id, edge.target_id):
-                n = self.get_node(nid)
-                if n is not None and n.layer in self.SHARED_LAYERS:
+                _c.execute("SELECT layer FROM nodes WHERE id=?", (nid,))
+                _row = _c.fetchone()
+                if _row is None:
+                    continue
+                _lay = MemoryLayer(_row[0])
+                if _lay in self.SHARED_LAYERS:
                     raise PermissionError(
                         f"role={self.role.value} 无权写共享层端点（{nid} 为 "
-                        f"{n.layer.value}）的边，共享层边由父节点主控（#234）")
+                        f"{_lay.value}）的边，共享层边由父节点主控（#234）")
 
     @_transactional
     def add_edge(self, edge: STEdge) -> str:
