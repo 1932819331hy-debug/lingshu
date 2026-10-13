@@ -334,5 +334,41 @@ if _p is not None:
     check('G 旧入口仍在（node 为 None 即 False）',
           "if node is None:" in _ps or "node_id is None" in _ps, '')
 
+# ------------------------------------------- H 另两处「只读 layer」的逐节点 get_node
+print('— H 静态面（_strip_incident_edges / _assert_edge_role 只取 layer 列）—')
+for _fname in ("_strip_incident_edges", "_assert_edge_role"):
+    _fn2 = None
+    for _n2 in ast.walk(_tree):
+        if isinstance(_n2, ast.FunctionDef) and _n2.name == _fname:
+            _fn2 = _n2
+            break
+    check(f'H0 已定位 {_fname}', _fn2 is not None, '')
+    if _fn2 is None:
+        continue
+    _hits = []
+    for _loop in ast.walk(_fn2):
+        if not isinstance(_loop, (ast.For, ast.While)):
+            continue
+        for _x in ast.walk(_loop):
+            if isinstance(_x, ast.Call) and isinstance(_x.func, ast.Attribute) \
+                    and _x.func.attr == "get_node":
+                _hits.append(_x.lineno)
+    check(f'H {_fname} 循环体内无 get_node', not _hits,
+          f'残留于 L{_hits}' if _hits else '')
+    _seg = ast.get_source_segment(SRC, _fn2) or ""
+    check(f'H {_fname} 改取 layer 列', "SELECT layer FROM nodes WHERE id=?" in _seg
+          or "SELECT id, layer FROM nodes WHERE id IN" in _seg, '')
+    check(f'H {_fname} 用 MemoryLayer(...) 转换（与 from_row 同款）',
+          "MemoryLayer(" in _seg, '')
+
+_sie = next((n for n in ast.walk(_tree)
+             if isinstance(n, ast.FunctionDef) and n.name == "_strip_incident_edges"), None)
+if _sie is not None:
+    _s = ast.get_source_segment(SRC, _sie) or ""
+    check('H 批量取层沿 `_SQL_IN_CHUNK` 分批（#417 的 IN 上限单点）',
+          "_SQL_IN_CHUNK" in _s, '')
+    check('H 边行先 fetchall 再迭代（游标可复用）',
+          "_rows_e = c.fetchall()" in _s, '')
+
 print(f'\n=== N+1 优化守卫: {pass_n}/{pass_n + fail_n} 通过 ===')
 sys.exit(0 if fail_n == 0 else 1)
