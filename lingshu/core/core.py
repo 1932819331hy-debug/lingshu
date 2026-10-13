@@ -1816,21 +1816,46 @@ class LayeredStore:
             if not frontier or len(visited) > max_nodes:
                 break
             nxt = []
-            for nid in frontier:
+            # ★优化（本笔）：旧实现**逐 frontier 节点**发查询（扇出大时每层
+            # 1–2×|frontier| 条 SQL）。现把整层 frontier 按 `_SQL_IN_CHUNK`
+            # （#417 的 IN 绑定上限单点）分批一次查回，再**按 frontier 原顺序**
+            # 分组消费 ⇒ 每层 1–2×ceil(|frontier|/chunk) 条。
+            #
+            # 行为等价性（如实标注）：
+            #   · `visited` 的更新时机与顺序**逐位不变**（仍按 frontier 顺序、
+            #     逐行判定）⇒ `result` 的**元素集合与顺序**与旧实现一致；
+            #   · 每条 SQL 的**列集与 WHERE 语义**未变（`source_id IN (…)` 是
+            #     `source_id=?` 的并集），`rel_clause`/`params` 原样沿用；
+            #   · **未加 `ORDER BY`**（旧实现也没有）⇒ 同一源的多条候选边，其
+            #     行序仍由 SQLite 的访问路径决定。若某目标节点可经**同一源**的
+            #     多条边到达，旧/新选中哪条 `edge_id` 取决于该行序——本件不主张
+            #     这一序在两种写法下逐位相同（见 PR 的「未验」节）。
+            _by_src: Dict[str, list] = {}
+            _by_dst: Dict[str, list] = {}
+            for _i in range(0, len(frontier), _SQL_IN_CHUNK):
+                _chunk = frontier[_i:_i + _SQL_IN_CHUNK]
+                _ph = ",".join("?" * len(_chunk))
                 if direction in ("out", "both"):
                     for row in c.execute(
-                            f"SELECT e.target_id AS tid, e.id AS eid FROM edges e "
-                            f"WHERE e.source_id=?{rel_clause}",
-                            [nid] + params).fetchall():
+                            f"SELECT e.source_id AS s, e.target_id AS tid, e.id AS eid "
+                            f"FROM edges e WHERE e.source_id IN ({_ph}){rel_clause}",
+                            _chunk + params).fetchall():
+                        _by_src.setdefault(row["s"], []).append(row)
+                if direction in ("in", "both"):
+                    for row in c.execute(
+                            f"SELECT e.target_id AS t, e.source_id AS sid, e.id AS eid "
+                            f"FROM edges e WHERE e.target_id IN ({_ph}){rel_clause}",
+                            _chunk + params).fetchall():
+                        _by_dst.setdefault(row["t"], []).append(row)
+            for nid in frontier:
+                if direction in ("out", "both"):
+                    for row in _by_src.get(nid, ()):
                         if row["tid"] not in visited:
                             visited.add(row["tid"]); nxt.append(row["tid"])
                             result.append({"node_id": row["tid"], "depth": depth,
                                            "edge_id": row["eid"], "direction": "out"})
                 if direction in ("in", "both"):
-                    for row in c.execute(
-                            f"SELECT e.source_id AS sid, e.id AS eid FROM edges e "
-                            f"WHERE e.target_id=?{rel_clause}",
-                            [nid] + params).fetchall():
+                    for row in _by_dst.get(nid, ()):
                         if row["sid"] not in visited:
                             visited.add(row["sid"]); nxt.append(row["sid"])
                             result.append({"node_id": row["sid"], "depth": depth,
