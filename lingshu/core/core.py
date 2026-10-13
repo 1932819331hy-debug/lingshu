@@ -3103,14 +3103,28 @@ class LayeredStore:
         结构层节点打 `conflict` 标签并建 OPPOSITE 边）。判据来源：公开 issue #234
         「期望行为」＋「建议修复 4」。（`add_edge` 的角色闸另会拦共享层端点边。）
         """
+        # ★优化（本笔 · 零行为变更）：本方法此前对两端点合计调 **4 次**
+        # `self.get_node(...)`（`SELECT *`，读整行 + 建 `STNode`）：
+        #   ① 角色闸逐端点取整节点（其实只用 `layer`）；
+        #   ② 存在性检查 `if not self.get_node(a_id) or not self.get_node(b_id)`。
+        # 现先各取一次 `layer`（两行、轻查询）同时供两用：
+        #   `_lay[nid] is None` ⇔ 该 id 不存在（与旧 `get_node(...) is None` 同义）。
+        # `MemoryLayer(...)` 与 `STNode.from_row` 同款裸露转换 ⇒ 非法 layer 的
+        # 失败语义一致。
+        _c0 = self.conn.cursor()
+        _lay: Dict[str, Optional[MemoryLayer]] = {}
+        for _nid0 in (a_id, b_id):
+            _c0.execute("SELECT layer FROM nodes WHERE id=?", (_nid0,))
+            _r0 = _c0.fetchone()
+            _lay[_nid0] = None if _r0 is None else MemoryLayer(_r0[0])
         if self.role != Role.PRIMARY:
             for nid in (a_id, b_id):
-                n = self.get_node(nid)
-                if n is not None and n.layer in self.SHARED_LAYERS:
+                _l0 = _lay[nid]
+                if _l0 is not None and _l0 in self.SHARED_LAYERS:
                     raise PermissionError(
                         f"role={self.role.value} 无权登记共享层节点（{nid} 为 "
-                        f"{n.layer.value}）的冲突，共享层由父节点主控（#234）")
-        if not self.get_node(a_id) or not self.get_node(b_id):
+                        f"{_l0.value}）的冲突，共享层由父节点主控（#234）")
+        if _lay[a_id] is None or _lay[b_id] is None:
             return None
         edge = STEdge(
             id=f"edge_{uuid.uuid4().hex[:8]}_{int(time.time()*1000)}",
@@ -3121,11 +3135,18 @@ class LayeredStore:
             confidence=0.3, verified=False)
         self.add_edge(edge)
         for nid in (a_id, b_id):
-            node = self.get_node(nid)
-            if node and "conflict" not in node.tags:
-                node.tags.append("conflict")
-                c = self.conn.cursor()
-                c.execute("UPDATE nodes SET tags=? WHERE id=?", (_dumps_tags(node.tags), nid))
+            # ★优化（本笔）：本段只用 **tags**；旧 `self.get_node(nid)` 读整行 + 建
+            # `STNode`。改为直取 `tags`。`json.loads` 与 `from_row` 同款裸调 ⇒
+            # 坏行失败语义一致；`fetchone()` 为 None 与旧 `node` 为 None 同分支。
+            c = self.conn.cursor()
+            c.execute("SELECT tags FROM nodes WHERE id=?", (nid,))
+            _tr = c.fetchone()
+            if _tr is None:
+                continue
+            _tlist = json.loads(_tr[0]) if _tr[0] else []
+            if "conflict" not in _tlist:
+                _tlist.append("conflict")
+                c.execute("UPDATE nodes SET tags=? WHERE id=?", (_dumps_tags(_tlist), nid))
                 self.conn.commit()
         return edge
 
@@ -7443,15 +7464,22 @@ class SpacetimeMemoryEngine:
                 rejected.append({"id": nid, "layer": layer.value,
                                  "reason": "本地层不入共享层（章程：实例独立）"})
                 continue
-            existing = self.store.get_node(nid)
-            if existing is not None:
-                same = (existing.layer == node.layer
-                        and existing.content == node.content)
+            # ★优化（本笔 · 零行为变更）：本段只用接收侧既有节点的 **layer** 与
+            # **content** 两列做冲突判定，旧实现 `self.store.get_node(nid)` 是
+            # `SELECT *`（读整行 + 建 `STNode`），每进来一条就发一次。改为直取两列。
+            # `fetchone()` 为 None ⇔ 该 id 不存在（与旧 `existing is None` 同义）；
+            # `MemoryLayer(...)` 与 `STNode.from_row` 同款裸露转换 ⇒ 失败语义一致。
+            _cx = self.store.conn.cursor()
+            _cx.execute("SELECT layer, content FROM nodes WHERE id=?", (nid,))
+            _xr = _cx.fetchone()
+            if _xr is not None:
+                _xl = MemoryLayer(_xr[0])
+                same = (_xl == node.layer and _xr[1] == node.content)
                 if same:
                     identical.append(nid)
                     continue
                 conflicts.append({"id": nid, "incoming_layer": layer.value,
-                                  "existing_layer": existing.layer.value})
+                                  "existing_layer": _xl.value})
                 if not overwrite:
                     continue
             try:
