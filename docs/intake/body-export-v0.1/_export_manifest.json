@@ -261,7 +261,7 @@
     {
      "file": "world_learner.py",
      "src": "aeis.world_learner",
-     "sha256": "6dd26dbb1cfdb043",
+     "sha256": "80943255192950d9",
      "rewrites": 8,
      "sanitized": 0,
      "patches": 0,
@@ -274,7 +274,7 @@
     {
      "file": "world_model.py",
      "src": "aeis.world_model",
-     "sha256": "a43d7026e81f32e8",
+     "sha256": "afbe4cfeeeec4868",
      "rewrites": 4,
      "sanitized": 0,
      "patches": 0,
@@ -651,6 +651,25 @@
   },
   "integration_base": "777e18f62dfe6918ad271437b887c78d020f0ea4",
   "benchmark_base": "c22385cb2d75f36bc12fd1de4449edbf92be8698",
-  "metrics_migration": "docs/world_model_metrics_migration.md"
+  "metrics_migration": "docs/world_model_metrics_migration.md",
+  "inference_window_update": {
+   "date": "2026-10-12",
+   "base_commit": "cb3a6ea2dbd9771d685b2bf5c1fe398abe69e419",
+   "report": "docs/world_inference_iteration.md",
+   "previous_sha256": {
+    "world_learner.py": "9066b4cf784d0a56",
+    "world_model.py": "97a0f817684fa51e"
+   },
+   "note": "Shared observation statistics and relation evidence semantics; not a new upstream export.",
+   "review_fix": {
+    "date": "2026-10-12",
+    "review": "https://github.com/FuRongJun-1999/dsh-bounty/issues/34",
+    "previous_head": "6921932b15db31d4be2c150e90f8924f7fab132b",
+    "previous_sha256": {
+     "world_model.py": "435a7cf54030b9c5"
+    },
+    "note": "Retain Unified relations with insufficient mixed evidence; align measured-stop evidence with learner."
+   }
+  }
  }
 }

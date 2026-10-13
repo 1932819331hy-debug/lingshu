@@ -33,7 +33,7 @@ import random
 from dataclasses import dataclass, field, asdict
 from typing import Dict, List, Optional, Tuple
 
-from .motion import estimate_motion, recent_direction
+from .motion import ObservationWindow, recent_direction
 
 # 3D 场景模拟器实现已迁移至 AEIS——大脑保留接口，缺失时 SceneSimulator=None
 try:
@@ -239,9 +239,12 @@ class UnifiedWorldModel:
 
     # ================= 模式推断（观测-only 启发式） =================
 
-    def _motion_stats(self, eid: str, window: int = 8) -> Tuple[float, float]:
+    def _motion_stats(self, eid: str, window: int = 8,
+                      observations=None) -> Tuple[float, float]:
         """真实观测位移/dt；没有新样本不能更新成零速度。"""
-        stats = estimate_motion(self.history, eid, window)
+        if observations is None:
+            observations = ObservationWindow(self.history, window)
+        stats = observations.motion(eid)
         if stats is not None:
             self._motion_estimates[eid] = stats[:2]
             if stats[3] is not None:
@@ -255,34 +258,8 @@ class UnifiedWorldModel:
         return self._pair_stats(a, b, window)[0]
 
     def _pair_stats(self, a: str, b: str, window: int = 8) -> Tuple[float, int]:
-        scores = []
-        samples = 0
-        prev = None
-        start = max(0, len(self.history) - window)
-        context = []
-        if any(a not in rec["entities"] or b not in rec["entities"]
-               for rec in self.history[start:]):
-            for index in range(start - 1, -1, -1):
-                rec = self.history[index]
-                if a in rec["entities"] and b in rec["entities"]:
-                    context = [rec]
-                    break
-        for rec in context + self.history[start:]:
-            ea = rec["entities"].get(a)
-            eb = rec["entities"].get(b)
-            if ea is None or eb is None:
-                continue
-            if prev is not None:
-                samples += 1  # Observed zero motion is contrary evidence too.
-                dx, dz = ea[0] - prev[0], ea[2] - prev[2]
-                dl = math.hypot(dx, dz)
-                if dl > 1e-6:
-                    tx, tz = eb[0] - ea[0], eb[2] - ea[2]
-                    tl = math.hypot(tx, tz)
-                    if tl > 1e-6:
-                        scores.append((dx * tx + dz * tz) / (dl * tl))
-            prev = ea
-        return (round(sum(scores) / len(scores), 3) if scores else 0.0, samples)
+        score, _directional, measured = ObservationWindow(self.history, window).pair(a, b)
+        return score, measured
 
     def infer_patterns(self, window: int = 8, force: bool = False) -> Dict:
         """从轨迹推断行为模式（观测-only，无世界内部访问）。
@@ -293,11 +270,12 @@ class UnifiedWorldModel:
         """
         if self._patterns and not force:
             return self._patterns
+        observations = ObservationWindow(self.history, window)
         pat = {"relations": [], "speed_estimates": {}, "entropy": {},
                "behavior_inference": {}}
         eids = list(self.nodes.keys())
         for eid in eids:
-            cons, speed = self._motion_stats(eid, window)
+            cons, speed = self._motion_stats(eid, window, observations)
             pat["speed_estimates"][eid] = speed
             pat["entropy"][eid] = cons
         # 关系推断（趋向/远离）
@@ -312,9 +290,13 @@ class UnifiedWorldModel:
             for b in eids:
                 if a == b or self.nodes[b].attrs.get("hypothesis"):
                     continue
-                c, samples = self._pair_stats(a, b, window)
-                sufficient = sufficient or samples >= 3
-                if abs(c) > abs(best_c):
+                c, directional, samples = observations.pair(a, b)
+                # Insufficient direction samples cannot retract an old relation.
+                # Only measured zero motion (not coincident movement) is stop evidence.
+                sufficient = (sufficient or directional >= 3
+                              or (samples >= 3 and directional == 0
+                                  and observations.motion(a)[3] is None))
+                if directional >= 3 and abs(c) > abs(best_c):
                     best_c, best_t, best_sign = c, b, c
             rel = None
             if best_t is not None:
