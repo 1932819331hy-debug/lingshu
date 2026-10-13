@@ -11,6 +11,7 @@ import pytest
 
 from lingshu.nn.hex_cnn import hex_conv
 from lingshu.nn.hex_hier import HexHierNet
+from lingshu.nn.hex_unit import UnitHeadNet
 from lingshu.nn.hex_train import (HexNet, calibrate_class_cards, four_state_accuracy,
                             four_state_classify, hex_conv_batch,
                             normalize_lattices, pretrain_selfsup, train_infogap)
@@ -97,6 +98,28 @@ def test_set_vec_does_not_alias_caller_buffer_hier():
         net.set_vec(v2)
         assert np.array_equal(net.get_vec(), v2), \
             f"HexHierNet(stacked={stacked}) 载入语义不正确"
+
+
+def test_set_vec_does_not_alias_caller_buffer_unit():
+    """守卫(#557,同族 #340):UnitHeadNet.set_vec 不得把 theta 别名到调用方缓冲。
+
+    判据来源:本 PR #557 取证——clean main 实测 `np.shares_memory(net.theta, v)`
+    为 True,且调用方 `v += 1e3` 后 `get_vec()` 的 theta 段随之变(静默改参);
+    PR head 为 False 且不变。
+    ★ 本件**不**断言「载入逐位相等」:实测两侧都 False——`gain` 经
+    `np.clip(v[:k], -GAIN_BOUND, GAIN_BOUND)` 截断,`get_vec()` 回读的是截断后
+    的值,属既有行为(非本 PR 引入),故不列入本守卫判据。
+
+    断言两件事:① theta 不与调用方缓冲共享内存;② 调用方原地改自己的
+    vec 后,模型参数读数逐位不变。
+    """
+    net = UnitHeadNet(HexHierNet())
+    vec = net.get_vec()
+    net.set_vec(vec)
+    assert not np.shares_memory(net.theta, vec), "UnitHeadNet.theta 别名到调用方缓冲"
+    snap = net.get_vec().copy()
+    vec += 1e3                                   # 调用方原地改自己的缓冲
+    assert np.array_equal(net.get_vec(), snap), "调用方写入穿透到模型参数"
 
 
 def test_branch_deadzone_freezes():
