@@ -97,7 +97,7 @@ def service(tmp_path):
     storage.mkdir(mode=0o700)
     # Only a temporary fixture directory is changed; no persistent user ACLs.
     if os.name == "nt":
-        account = subprocess.check_output(["whoami", "/user", "/fo", "csv", "/nh"], text=True)
+        account = subprocess.check_output(["whoami", "/user", "/fo", "csv", "/nh"], text=True, encoding="utf-8", errors="replace")
         import csv
         sid = next(csv.reader([account.strip()]))[1]
         subprocess.run(["icacls", str(storage), "/inheritance:r", "/grant:r", f"*{sid}:(OI)(CI)F"], check=True, capture_output=True)
@@ -185,7 +185,7 @@ def test_authenticated_process_business_workflow(service):
 def test_permission_boundary_rejects_public_storage(tmp_path):
     if os.name == "nt":
         # The default temporary directory inherits broader ACLs; test explicit grants.
-        account = subprocess.check_output(["whoami", "/user", "/fo", "csv", "/nh"], text=True)
+        account = subprocess.check_output(["whoami", "/user", "/fo", "csv", "/nh"], text=True, encoding="utf-8", errors="replace")
         import csv
         sid = next(csv.reader([account.strip()]))[1]
         subprocess.run(["icacls", str(tmp_path), "/inheritance:r", "/grant:r", f"*{sid}:(OI)(CI)F", "*S-1-1-0:(OI)(CI)R"], check=True, capture_output=True)
