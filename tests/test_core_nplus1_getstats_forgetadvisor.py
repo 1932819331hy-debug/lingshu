@@ -437,5 +437,69 @@ if _as2 is not None:
     check('J apply_shared_sync 的 identical/conflicts/overwrite 分支仍在',
           'identical.append(nid)' in _asrc and 'if not overwrite:' in _asrc, '')
 
+# ------------------------------------------------- K increment_access 批量化
+print('— K 静态面（increment_access 收进批量单点，不再每节点新开连接）—')
+_ia = next((n for n in ast.walk(_tree)
+            if isinstance(n, ast.FunctionDef) and n.name == "increment_access"), None)
+_iam = next((n for n in ast.walk(_tree)
+             if isinstance(n, ast.FunctionDef) and n.name == "increment_access_many"), None)
+check('K0 已定位 increment_access / increment_access_many',
+      _ia is not None and _iam is not None, '')
+if _ia is not None and _iam is not None:
+    _ia_s = ast.get_source_segment(SRC, _ia) or ""
+    _iam_s = ast.get_source_segment(SRC, _iam) or ""
+    check('K 单节点入口委派给批量单点（不复制实现）',
+          "self.increment_access_many([node_id])" in _ia_s, '')
+    check('K 批量单点用 executemany（保住重复 id 各计一次）',
+          "obs.executemany(" in _iam_s, '')
+    check('K 批量单点**没有**用 `WHERE id IN (...)`（那会把重复 id 只计一次）',
+          _iam_s.count("obs.execute(") == 1
+          and "obs.executemany(" in _iam_s,
+          'obs.execute( 调用 %d 次（应仅 PRAGMA 那一次）' % _iam_s.count("obs.execute("))
+    check('K 批量单点仍重设连接级 foreign_keys', "PRAGMA foreign_keys=ON" in _iam_s, '')
+    check('K 批量单点仍是「尽力而为」（OperationalError ⇒ pass）',
+          "except sqlite3.OperationalError:" in _iam_s, '')
+    check('K 空输入早退（不发连接）', "if not ids:" in _iam_s, '')
+
+    _loop_ia = []
+    for _fn in ast.walk(_tree):
+        if not isinstance(_fn, (ast.FunctionDef, ast.AsyncFunctionDef)):
+            continue
+        for _loop in ast.walk(_fn):
+            if not isinstance(_loop, (ast.For, ast.While)):
+                continue
+            for _x in ast.walk(_loop):
+                if isinstance(_x, ast.Call) and isinstance(_x.func, ast.Attribute) \
+                        and _x.func.attr == "increment_access":
+                    _loop_ia.append((_fn.name, _x.lineno))
+    check('K 全仓循环体内不再出现 increment_access', not _loop_ia,
+          f'残留 {_loop_ia}' if _loop_ia else '')
+
+    _iam_calls = sum(
+        1 for _fn in ast.walk(_tree)
+        for _x in ast.walk(_fn)
+        if isinstance(_x, ast.Call) and isinstance(_x.func, ast.Attribute)
+        and _x.func.attr == "increment_access_many")
+    check('K 批量单点有 ≥3 处调用（semantic_search / 检索结果 / 演练）',
+          _iam_calls >= 3, f'实测 {_iam_calls} 处')
+
+    _reh = next((n for n in ast.walk(_tree)
+                 if isinstance(n, ast.FunctionDef) and n.name == "consolidate_cycle"), None)
+    check('K0 已定位 consolidate_cycle', _reh is not None, '')
+    if _reh is not None:
+        _rs3 = ast.get_source_segment(SRC, _reh) or ""
+        check('K 演练面仍只对 `importance >= rehearsal_threshold` 计数',
+              "_rehearsed.append(n)" in _rs3, '')
+        check('K 演练面四条过滤逐字未动',
+              'MemoryLayer.ANCHOR, MemoryLayer.STRUCTURE' in _rs3
+              and '"no_forget" in n.tags' in _rs3
+              and '"pending_verification" in n.tags' in _rs3
+              and 'n.importance >= rehearsal_threshold' in _rs3, '')
+        check('K `new_count` 仍由快照 `n.access_count` 推出（不依赖 increment 返回值）',
+              "(n.access_count or 0) + 1" in _rs3, '')
+        check('K 降权/可压缩面仍在（`elif` 拆成显式 continue 后等价）',
+              "n.importance < degrade_threshold" in _rs3
+              and 'n.importance >= rehearsal_threshold:\n                continue' in _rs3, '')
+
 print(f'\n=== N+1 优化守卫: {pass_n}/{pass_n + fail_n} 通过 ===')
 sys.exit(0 if fail_n == 0 else 1)
