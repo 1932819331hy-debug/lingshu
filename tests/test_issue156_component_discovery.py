@@ -87,6 +87,9 @@ STDLIB_ALLOWED = frozenset({
     "sqlite3",
     # IO / 文本 / 数值 / 随机
     "io", "re", "math", "random",
+    # 语法树（ast：2026-10-12 外部 PR 引入 world/coord_contract.py——标准库；
+    # 守卫按设计判红「未知裸名」，此处补分类而非放宽判据）
+    "ast",
     # 命令行 / 子进程
     "argparse", "subprocess",
 })
