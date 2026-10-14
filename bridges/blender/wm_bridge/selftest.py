@@ -419,6 +419,63 @@ def gi_pose_guard(out):
 
 
 
+# ═══════════════════════════════════════════════════════ F 工厂门（四条产线）
+def _factory_gates():
+    """跑四条产线的机械门（**子进程**，各自带 `VERDICT=`），返回 `[(id, ok, detail)]`。
+
+    为什么放进来：这些门本来就独立可跑，但**没人会去逐个跑**（"没跑过"与"没通过"
+    在观感上是一样的 —— 本仓已经踩过两次：物理门一直是死的、IoU 验收从没被算过）。
+    接到既有的自检入口上，跑一次 `selftest.py` 就能看见四条产线。
+
+    口径（**与 `_det/gate_all.py` 一致**）：
+      · `VERDICT=PASS` ⇒ 通过
+      · **跑不起来**（缺 numpy / PIL / 上游 lingshu 源码树）⇒ 标 **`SKIP`**，
+        并且 `ok=True` 只表示"不是失败"，**明细里明确写 SKIP** —— 汇总会单独计数，
+        **绝不把 SKIP 说成通过**。
+      · 其它 ⇒ 失败。
+    """
+    import subprocess
+    #: ⚠ **不要数 `..` 的层数**：本文件在 `wm_bridge/selftest.py`，到桥根只需**一级** `..`；
+    #: 我第一版写成 `"..", ".."`（照抄了别的文件的写法）⇒ 三个门全被判"脚本不在"、
+    #: 静默走了 SKIP。这是本会话**第三次**踩"数层数"的坑（另两次：`factory/_deps.py`、
+    #: 搬进 `anim/_det/` 的 GIF 脚本）⇒ 统一改成**向上找含 `wm_bridge/` 的那一级**。
+    root = os.path.dirname(os.path.abspath(__file__))
+    while not os.path.isdir(os.path.join(root, "wm_bridge")):
+        up = os.path.dirname(root)
+        if up == root:
+            raise RuntimeError("找不到桥根（含 wm_bridge/ 的那一级）")
+        root = up
+    gates = (
+        ("F1 步态接触（足端不穿地）", "wm_bridge/factory/anim/_det/gate_gait_contact.py"),
+        ("F2 折角阈值面数自适应", "wm_bridge/factory/vec/_det/gate_crease_adaptive.py"),
+        ("F3 物理预测（解析真值）", "wm_bridge/factory/anim/_det/gate_physics.py"),
+    )
+    out = []
+    for label, rel in gates:
+        path = os.path.join(root, rel)
+        if not os.path.isfile(path):
+            out.append((label, True, "SKIP：门脚本不在（%s）" % rel))
+            continue
+        r = subprocess.run([sys.executable, "-X", "utf8", path], cwd=root,
+                           capture_output=True, text=True,
+                           encoding="utf-8", errors="replace")
+        txt = (r.stdout or "") + (r.stderr or "")
+        verdict = ""
+        for ln in txt.splitlines():
+            if ln.strip().startswith("VERDICT="):
+                verdict = ln.strip().split("=", 1)[1].strip()
+        if verdict == "PASS":
+            out.append((label, True, "VERDICT=PASS"))
+        elif not verdict and ("ModuleNotFoundError" in txt or "ImportError" in txt):
+            out.append((label, True, "SKIP：缺依赖（%s）"
+                        % txt.strip().splitlines()[-1][:90]))
+        elif "物理来源不可用" in txt:
+            out.append((label, True, "SKIP：找不到上游 lingshu 源码树（设 WM_LINGSHU_ROOT）"))
+        else:
+            out.append((label, False, "VERDICT=%s（rc=%d）" % (verdict or "无", r.returncode)))
+    return out
+
+
 def run_checks():
     """返回 [(id, ok, detail)]。纯函数式：每次自带临时沙箱，可反复调用。"""
     out = []
@@ -523,6 +580,8 @@ def run_checks():
         gh_cli_export(out)
         gi_pose_guard(out)
         gj_reproducible_obj(out)
+        # ---------------- F 工厂门（四条产线的机械门） ----------------
+        out.extend(_factory_gates())
     finally:
         shutil.rmtree(d, ignore_errors=True)
     return out
@@ -625,10 +684,17 @@ def main(argv=None) -> int:
     checks = run_checks()
     bad = [i for i, o, _ in checks if not o]
     for i, o, detail in checks:
-        print("%s  %s%s" % ("[PASS]" if o else "[FAIL]", i,
-                            ("  ← " + str(detail)) if not o else ""))
+        #: ⚠ SKIP 必须与 PASS **在观感上分得开**：原来 SKIP 也印 `[PASS]`，
+        #: 汇总说"跳过 3"、明细却三行 PASS —— 自相矛盾，等于把 SKIP 说成了通过。
+        _d = str(detail)
+        tag = "[SKIP]" if (_d.startswith("SKIP")) else ("[PASS]" if o else "[FAIL]")
+        print("%s  %s%s" % (tag, i, ("  ← " + _d) if (not o or _d.startswith("SKIP")) else ""))
+    skips = [i for i, o, d in checks if o and str(d).startswith("SKIP")]
     print("-" * 72)
-    print("通过 %d / 失败 %d" % (len(checks) - len(bad), len(bad)))
+    print("通过 %d / 失败 %d / 跳过 %d（跳过=跑不起来，**不计入通过**）"
+          % (len(checks) - len(bad) - len(skips), len(bad), len(skips)))
+    if skips:
+        print("  跳过：%s" % "；".join(skips))
 
     if not mutate:
         print("VERDICT=" + ("PASS" if not bad else "FAIL"))
