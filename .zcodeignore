@@ -1,0 +1,71 @@
+# 运行时与虚拟环境
+venv/
+.venv/
+env/
+__pycache__/
+*.pyc
+*.pyo
+*.egg-info/
+build/
+dist/
+node_modules/
+
+# 模型与资产（体积大，按需下载）
+models/
+weights/
+assets/baked/
+*.pt
+*.pth
+*.onnx
+*.safetensors
+*.ckpt
+*.bin
+*.gguf
+
+# 数据（记忆真源与本地数据一律不入库）
+data/
+*.db
+*.sqlite
+*.sqlite3
+*.wal
+
+# 凭据与环境（绝不入库）
+.env
+.env.*
+*.key
+*.token
+secrets/
+
+# 日志与临时
+*.log
+*.tmp
+tmp/
+_tmp/
+
+# ===== ↑ 以上同步自 .gitignore（「从 .gitignore 同步」只重写以上部分）=====
+.git/
+.hg/
+.svn/
+bower_components/
+jspm_packages/
+site-packages/
+coverage/
+htmlcov/
+lcov-report/
+cmakefiles/
+cmake-build-*/
+bazel-*/
+pods/
+deriveddata/
+storybook-static/
+playwright-report/
+test-results/
+allure-results/
+allure-report/
+cdk.out/
+*.dist-info/
+eggs/
+pip-wheel-metadata/
+wheels/
+# ----- ↑ 以上为 ZCode 默认排除规则（自定义规则请写在本行下方，不会被同步/恢复改动）-----
+# 自定义规则写在下方（本行提示可删除）
