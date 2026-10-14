@@ -1,0 +1,102 @@
+{
+ "baseline": {
+  "message": null,
+  "outcome": "pass"
+ },
+ "module_sha256_after": "59cde8f925fac077764acbba713c1de13432a22c6f8904d7fbe290019a93f2e7",
+ "module_sha256_before": "59cde8f925fac077764acbba713c1de13432a22c6f8904d7fbe290019a93f2e7",
+ "module_unchanged": true,
+ "mutant_root": "<tmp>\\ops_fix1_mutants_54ztwb3s",
+ "mutations": [
+  {
+   "expected_pattern": "形状不同的前缀不得命中",
+   "expected_pattern_matched": true,
+   "message": "形状不同的前缀不得命中",
+   "name": "M1",
+   "outcome": "assertion_error",
+   "point_unique_in_source": true,
+   "title": "补全：匹配分数下限失效（候选一律命中）",
+   "turns_red": true
+  },
+  {
+   "expected_pattern": "补全首帧 tick 必须接在前缀末 tick 之后",
+   "expected_pattern_matched": true,
+   "message": "补全首帧 tick 必须接在前缀末 tick 之后",
+   "name": "M2",
+   "outcome": "assertion_error",
+   "point_unique_in_source": true,
+   "title": "补全：接续 tick 不加该采样的 dt",
+   "turns_red": true
+  },
+  {
+   "expected_pattern": "偏移差超容差的连接点必须判为不连续",
+   "expected_pattern_matched": true,
+   "message": "偏移差超容差的连接点必须判为不连续",
+   "name": "M3",
+   "outcome": "assertion_error",
+   "point_unique_in_source": true,
+   "title": "重组：连接点判据恒真",
+   "turns_red": true
+  },
+  {
+   "expected_pattern": "后段 ref 必须锚定到前段末帧 ref",
+   "expected_pattern_matched": true,
+   "message": "后段 ref 必须锚定到前段末帧 ref",
+   "name": "M4",
+   "outcome": "assertion_error",
+   "point_unique_in_source": true,
+   "title": "重组：后段不锚定前段末帧 ref",
+   "turns_red": true
+  },
+  {
+   "expected_pattern": "重组帧必须只带新绑定的角色名",
+   "expected_pattern_matched": true,
+   "message": "重组帧必须只带新绑定的角色名",
+   "name": "M5",
+   "outcome": "assertion_error",
+   "point_unique_in_source": true,
+   "title": "重组：角色重绑定失效（沿用前段原角色名）",
+   "turns_red": true
+  },
+  {
+   "expected_pattern": "候选必须按匹配分数降序给出",
+   "expected_pattern_matched": true,
+   "message": "候选必须按匹配分数降序给出",
+   "name": "M6",
+   "outcome": "assertion_error",
+   "point_unique_in_source": true,
+   "title": "补全：候选排序不再按匹配分数降序",
+   "turns_red": true
+  },
+  {
+   "expected_pattern": "移动 ref 的补全尾部必须逐帧还原记录的后续帧",
+   "expected_pattern_matched": true,
+   "message": "移动 ref 的补全尾部必须逐帧还原记录的后续帧",
+   "name": "M7",
+   "outcome": "assertion_error",
+   "point_unique_in_source": true,
+   "title": "补全：尾部平移退回“首条未观测采样放到观测末位置”",
+   "turns_red": true
+  },
+  {
+   "expected_pattern": "elapsed tick 不同的记录不得命中",
+   "expected_pattern_matched": true,
+   "message": "elapsed tick 不同的记录不得命中",
+   "name": "M8",
+   "outcome": "assertion_error",
+   "point_unique_in_source": true,
+   "title": "补全：命中帧不再要求 elapsed tick 相同",
+   "turns_red": true
+  },
+  {
+   "expected_pattern": "同名角色的重组必须被拒绝",
+   "expected_pattern_matched": true,
+   "message": "同名角色的重组必须被拒绝",
+   "name": "M9",
+   "outcome": "assertion_error",
+   "point_unique_in_source": true,
+   "title": "重组：同名角色校验失效",
+   "turns_red": true
+  }
+ ]
+}

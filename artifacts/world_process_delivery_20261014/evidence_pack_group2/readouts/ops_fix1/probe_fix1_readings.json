@@ -1,0 +1,334 @@
+{
+ "A1_moving_ref_restore": {
+  "actor_equal": true,
+  "candidate": {
+   "geometry": {
+    "hit_frames": 6,
+    "score": 1.0
+   },
+   "hit_frames": 6,
+   "match_score": 1.0,
+   "matched": true,
+   "matched_samples": 6,
+   "max_frame_error": 0.0,
+   "mean_frame_error": 0.0,
+   "reason": "",
+   "source": {
+    "actor": "walker",
+    "index": 0,
+    "kind": "relative_trajectory",
+    "ref": "leader",
+    "samples": 12,
+    "ticks": [
+     1,
+     12
+    ]
+   },
+   "tail_samples": 6,
+   "timing": {
+    "deltas": [
+     0,
+     0,
+     0,
+     0,
+     0,
+     0
+    ],
+    "hit_frames": 6,
+    "matched": true,
+    "max_abs_delta_ticks": 0,
+    "score": 1.0
+   }
+  },
+  "frames_ticks": [
+   7,
+   8,
+   9,
+   10,
+   11,
+   12
+  ],
+  "generated_ref_x": [
+   16.0,
+   17.0,
+   18.0,
+   19.0,
+   20.0,
+   21.0
+  ],
+  "match_matched_record_index": 5,
+  "match_matched_record_tick": 6,
+  "match_translation": [
+   0.0,
+   0.0,
+   0.0
+  ],
+  "observed_ref_x": [
+   16.0,
+   17.0,
+   18.0,
+   19.0,
+   20.0,
+   21.0
+  ],
+  "old_anchor_first_ref_x": 15.0,
+  "old_anchor_translation": [
+   -1.0,
+   0.0,
+   0.0
+  ],
+  "prefix_samples": 6,
+  "prefix_ticks": [
+   1,
+   6
+  ],
+  "ref_equal": true,
+  "seam": {
+   "actor_gap": 0.75,
+   "first_tick": 7,
+   "matched_record_index": 5,
+   "matched_record_tick": 6,
+   "prefix_tick": 6,
+   "ref_anchor": [
+    15.0,
+    1.0,
+    10.0
+   ],
+   "step": 1
+  },
+  "truth_first_ref_x": 16.0
+ },
+ "A2_scene_shift": {
+  "actor_equal": true,
+  "ref_equal": true,
+  "translation": [
+   100.0,
+   5.0,
+   -30.0
+  ]
+ },
+ "B1_dt_mismatch": {
+  "candidate_default": {
+   "geometry": {
+    "hit_frames": 6,
+    "score": 1.0
+   },
+   "hit_frames": 1,
+   "match_score": 0.166667,
+   "matched": false,
+   "matched_samples": 6,
+   "max_frame_error": 0.0,
+   "mean_frame_error": 0.0,
+   "reason": "采样节奏不匹配：elapsed tick 有 5/6 帧与记录不同",
+   "source": {
+    "actor": "walker",
+    "index": 0,
+    "kind": "relative_trajectory",
+    "ref": "leader",
+    "samples": 12,
+    "ticks": [
+     1,
+     12
+    ]
+   },
+   "tail_samples": 6,
+   "timing": {
+    "deltas": [
+     0,
+     3,
+     6,
+     9,
+     12,
+     15
+    ],
+    "hit_frames": 1,
+    "matched": false,
+    "max_abs_delta_ticks": 15,
+    "score": 0.166667
+   }
+  },
+  "candidate_loose_score": 0.166667,
+  "frames_default_empty": true,
+  "match_default_is_none": true,
+  "match_loose_is_none": true,
+  "prefix_samples": 6,
+  "prefix_ticks": [
+   1,
+   21
+  ]
+ },
+ "B2_same_dt_tick_shift": {
+  "observed_shift_ticks": [
+   107,
+   108,
+   109,
+   110,
+   111,
+   112
+  ],
+  "observed_shift_timing": {
+   "deltas": [
+    0,
+    0,
+    0,
+    0,
+    0,
+    0
+   ],
+   "hit_frames": 6,
+   "matched": true,
+   "max_abs_delta_ticks": 0,
+   "score": 1.0
+  },
+  "record_shift_frames_ticks": [
+   7,
+   8,
+   9,
+   10,
+   11,
+   12
+  ],
+  "record_shift_source_ticks": [
+   501,
+   512
+  ],
+  "record_shift_tick_offset": -500
+ },
+ "C1_irregular_dt_and_gaps": {
+  "candidate_matched": true,
+  "candidate_timing": {
+   "deltas": [
+    0,
+    0,
+    0,
+    0,
+    0,
+    0
+   ],
+   "hit_frames": 6,
+   "matched": true,
+   "max_abs_delta_ticks": 0,
+   "score": 1.0
+  },
+  "frames_ticks": [
+   8,
+   9,
+   10,
+   12,
+   13,
+   14,
+   15,
+   16,
+   17,
+   18
+  ],
+  "miss_against_uniform_record": {
+   "geometry": {
+    "hit_frames": 6,
+    "score": 1.0
+   },
+   "hit_frames": 3,
+   "match_score": 0.5,
+   "matched": false,
+   "matched_samples": 6,
+   "max_frame_error": 0.1,
+   "mean_frame_error": 0.05,
+   "reason": "采样节奏不匹配：elapsed tick 有 3/6 帧与记录不同",
+   "source": {
+    "actor": "walker",
+    "index": 0,
+    "kind": "relative_trajectory",
+    "ref": "leader",
+    "samples": 18,
+    "ticks": [
+     1,
+     18
+    ]
+   },
+   "tail_samples": 12,
+   "timing": {
+    "deltas": [
+     0,
+     0,
+     0,
+     1,
+     1,
+     1
+    ],
+    "hit_frames": 3,
+    "matched": false,
+    "max_abs_delta_ticks": 1,
+    "score": 0.5
+   }
+  },
+  "prefix_samples": 6,
+  "prefix_ticks": [
+   1,
+   7
+  ],
+  "record_dts": [
+   0,
+   1,
+   1,
+   2,
+   1,
+   1,
+   1,
+   1,
+   1,
+   2,
+   1,
+   1,
+   1,
+   1,
+   1,
+   1
+  ],
+  "record_samples": 16,
+  "short_prefix_reason": "对比帧数 2 少于下限 3"
+ },
+ "D1_joint_vertical": {
+  "actor_gap": 0.0,
+  "actor_y_gap": 50.0,
+  "continuous": true,
+  "joint_tol": 0.5,
+  "offset_end_first": [
+   2.0,
+   0.0
+  ],
+  "offset_start_second": [
+   2.0,
+   0.0
+  ],
+  "on": "ref",
+  "ref": [
+   10.0,
+   1.0,
+   5.0
+  ],
+  "ref_gap": 0.0,
+  "ref_y_gap": 0.0,
+  "tick": 5
+ },
+ "E1_same_named_roles": {
+  "complete": {
+   "message": "actor 与 ref 不得同名：帧里的 entities 会互相覆写",
+   "raised": true,
+   "type": "ValueError"
+  },
+  "compose_inherited": {
+   "message": "actor 与 ref 不得同名：帧里的 entities 会互相覆写",
+   "raised": true,
+   "type": "ValueError"
+  },
+  "compose_roles": {
+   "message": "actor 与 ref 不得同名：帧里的 entities 会互相覆写",
+   "raised": true,
+   "type": "ValueError"
+  }
+ },
+ "F1_hashes": {
+  "process_ops.py": "59cde8f925fac077764acbba713c1de13432a22c6f8904d7fbe290019a93f2e7",
+  "tests/test_process_ops.py": "88990b118a2aa361a630259c01d01cd24a2b77ff6489179f0712df034e01437f"
+ }
+}

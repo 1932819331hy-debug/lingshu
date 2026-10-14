@@ -1,0 +1,312 @@
+{
+  "candidates": {
+    "match_score": 1.0,
+    "match_source": {
+      "actor": "leader",
+      "index": 1,
+      "kind": "relative_trajectory",
+      "ref": "walker",
+      "samples": 12,
+      "ticks": [
+        1,
+        12
+      ]
+    },
+    "ok": true,
+    "order": [
+      {
+        "geometry": 1.0,
+        "index": 1,
+        "match_score": 1.0,
+        "matched": true,
+        "reason": "",
+        "timing": 1.0
+      },
+      {
+        "geometry": 0.166667,
+        "index": 0,
+        "match_score": 0.166667,
+        "matched": false,
+        "reason": "匹配分数 0.167 低于下限 1.000",
+        "timing": 1.0
+      }
+    ],
+    "records_argument_unchanged": true
+  },
+  "compose": {
+    "actor_gap_independent": 2.5,
+    "actor_y_gap_independent": 50.0,
+    "actor_y_gap_is_relative_offset_diff": true,
+    "continuous_covers_horizontal_only": true,
+    "frame_count": 10,
+    "inputs_unchanged": true,
+    "joint": {
+      "actor_gap": 2.5,
+      "actor_y_gap": 50.0,
+      "continuous": false,
+      "joint_tol": 0.5,
+      "offset_end_first": [
+        2.5,
+        0.0
+      ],
+      "offset_start_second": [
+        5.0,
+        0.0
+      ],
+      "on": "ref",
+      "ref": [
+        15.0,
+        0.0,
+        5.0
+      ],
+      "ref_gap": 0.0,
+      "ref_y_gap": 0.0,
+      "tick": 6
+    },
+    "joint_ok": true,
+    "no_compat_claim": true,
+    "ok": true,
+    "old_roles_absent": true,
+    "ref_anchor_is_first_frame_of_head": true,
+    "ref_gap_independent": 0.0,
+    "ref_y_gap_independent": 0.0,
+    "ref_y_gap_is_zero_by_anchor": true,
+    "relation_claim_keys": [],
+    "relations": {
+      "actor": "hero",
+      "first": {
+        "end_phase": "leave",
+        "roles": {},
+        "start_phase": "approach",
+        "type": "approach_stay_leave"
+      },
+      "ref": "mark",
+      "roles_rebound": true,
+      "same_type": true,
+      "second": {
+        "end_phase": "leave",
+        "roles": {},
+        "start_phase": "approach",
+        "type": "approach_stay_leave"
+      },
+      "shared_actor": true,
+      "shared_ref": true
+    },
+    "relations_keys": [
+      "actor",
+      "first",
+      "ref",
+      "roles_rebound",
+      "same_type",
+      "second",
+      "shared_actor",
+      "shared_ref"
+    ],
+    "relations_text_ok": true,
+    "roles": [
+      "hero",
+      "mark"
+    ],
+    "seg1_end_tick": 6,
+    "seg2_start_tick": 7,
+    "segments": 2,
+    "three_segments_unsupported": "compose_processes() takes 2 positional arguments but 3 were given",
+    "tick_gap_ok": true,
+    "ticks": [
+      1,
+      10
+    ]
+  },
+  "nonuniform_dt": {
+    "flat_frames_empty": true,
+    "flat_geometry": 1.0,
+    "flat_match_none": true,
+    "flat_reason": "采样节奏不匹配：elapsed tick 有 3/6 帧与记录不同",
+    "flat_timing": {
+      "deltas": [
+        0,
+        0,
+        0,
+        1,
+        1,
+        1
+      ],
+      "hit_frames": 3,
+      "matched": false,
+      "max_abs_delta_ticks": 1,
+      "score": 0.5
+    },
+    "frames_ok": true,
+    "frames_why": "",
+    "matched_samples": 6,
+    "no_interpolation": true,
+    "ok": true,
+    "prefix_ticks": [
+      1,
+      2,
+      3,
+      5,
+      6,
+      7
+    ],
+    "step": 1,
+    "ticks": [
+      8,
+      18
+    ],
+    "timing": {
+      "deltas": [
+        0,
+        0,
+        0,
+        0,
+        0,
+        0
+      ],
+      "hit_frames": 6,
+      "matched": true,
+      "max_abs_delta_ticks": 0,
+      "score": 1.0
+    },
+    "timing_distinguishes": true,
+    "want_first_tick": 8
+  },
+  "same_name": {
+    "complete": "actor 与 ref 不得同名：帧里的 entities 会互相覆写",
+    "compose_implicit": "actor 与 ref 不得同名：帧里的 entities 会互相覆写",
+    "compose_roles": "actor 与 ref 不得同名：帧里的 entities 会互相覆写",
+    "core_facade": {
+      "type": "returned",
+      "value": {
+        "error": "actor 与 ref 不得同名：帧里的 entities 会互相覆写",
+        "status": "error"
+      }
+    },
+    "normal_complete_matched": true,
+    "normal_compose_frames": true,
+    "normal_compose_roles": [
+      "hero",
+      "mark"
+    ],
+    "ok": true
+  },
+  "source_sha256": {
+    "process_ops.py": "59cde8f925fac077764acbba713c1de13432a22c6f8904d7fbe290019a93f2e7"
+  },
+  "tail_restore": {
+    "first_frame": {
+      "leader": [
+        18.75,
+        0.0,
+        0.0
+      ],
+      "walker": [
+        15.0,
+        0.0,
+        0.0
+      ]
+    },
+    "frame_count": 7,
+    "frames_ok": true,
+    "frames_why": "",
+    "matched_samples": 5,
+    "ok": true,
+    "old_anchor_differs": true,
+    "old_anchor_translation": [
+      -1.0,
+      0.0,
+      0.0
+    ],
+    "record_unchanged": true,
+    "seam": {
+      "actor_gap": 0.75,
+      "first_tick": 6,
+      "matched_record_index": 4,
+      "matched_record_tick": 5,
+      "prefix_tick": 5,
+      "ref_anchor": [
+        14.0,
+        0.0,
+        0.0
+      ],
+      "step": 1
+    },
+    "tail_covers_record_tail": true,
+    "ticks": [
+      6,
+      12
+    ],
+    "translation": [
+      0.0,
+      0.0,
+      0.0
+    ],
+    "translation_ok": true,
+    "want_count": 7,
+    "want_first": {
+      "actor": [
+        18.75,
+        0.0,
+        0.0
+      ],
+      "ref": [
+        15.0,
+        0.0,
+        0.0
+      ],
+      "tick": 6
+    },
+    "want_ticks": [
+      6,
+      12
+    ],
+    "want_translation": [
+      0.0,
+      0.0,
+      0.0
+    ]
+  },
+  "timing_gate": {
+    "frames": [],
+    "geometry": {
+      "hit_frames": 6,
+      "score": 1.0
+    },
+    "match": null,
+    "match_score": 0.166667,
+    "matched": false,
+    "ok": true,
+    "reason": "采样节奏不匹配：elapsed tick 有 5/6 帧与记录不同",
+    "relaxed_score_unchanged": true,
+    "relaxed_timing_matched": false,
+    "timing": {
+      "deltas": [
+        0,
+        3,
+        6,
+        9,
+        12,
+        15
+      ],
+      "hit_frames": 1,
+      "matched": false,
+      "max_abs_delta_ticks": 15,
+      "score": 0.166667
+    }
+  },
+  "whole_translation": {
+    "frames_ok": true,
+    "frames_why": "",
+    "ok": true,
+    "ticks": [
+      7,
+      12
+    ],
+    "translation": [
+      100.0,
+      5.0,
+      -30.0
+    ],
+    "translation_ok": true
+  }
+}

@@ -15,13 +15,14 @@
    标出推算位置。
 4. 事件回声与过程补全、过程重组（第 2 组）：一个按固定节奏停一步、转向 90° 的场景
    出事件回声读数，并画一张事件时序图（实施线 + 延迟模型预测的落点标记 + 两模型
-   读数）；接近→停留→离开场景的补全出「观测末帧 / 补全末帧」对照图；两段记录重组
-   出「前段终点 / 连接点 / 后段终点」对照图。
+   读数）；接近→停留→离开场景的补全出“观测末帧 / 补全末帧”对照图；两段记录重组
+   出“前段终点 / 连接点 / 后段终点”对照图。补全与重组各再出一段逐帧动画
+   （completion.gif / composition.gif），帧上标 tick、来源与分段。
 
 机器读数写 readings.json：过程结果、memory_id、每张图的实体（eid ↔ 类别 ↔ 颜色 ↔
 逐 tick 位置）、组模型、遮蔽推算的推算值与真实值对照、事件回声读数、补全与重组的
-连接点读数、相机参数（各组画面各一台）。图上实体与读数一一对应（同一份 entities
-既进渲染也进 JSON）。
+连接点读数、两段动画的逐帧 tick / 来源 / 分段与同源帧清单索引、相机参数（各组画面
+各一台）。图上实体与读数一一对应（同一份 entities 既进渲染也进 JSON）。
 
 用法（仓根）：
     .venv/Scripts/python.exe -X utf8 -B tools/demo_world_process.py \
@@ -249,6 +250,46 @@ def save_gif(images, path, duration=180):
     """逐帧 GIF（首帧以外的帧作为 append_images）。"""
     first, rest = images[0], images[1:]
     first.save(path, save_all=True, append_images=rest, duration=duration, loop=0)
+
+
+#: 动画帧说明带的高度：label 的标签只占顶部 16 px，比较两帧时可裁掉整条带。
+FRAME_TITLE_HEIGHT = 16
+
+
+def frame_caption(tick, source, segment):
+    """一帧的说明：tick、来源（observed / generated）与所属分段。默认字体无中文字形，故用 ASCII。"""
+    return "tick %d | %s | %s" % (tick, source, segment)
+
+
+def build_animation(name, camera_name, camera, entries, size):
+    """按固定相机把带说明的帧序列写成 GIF，返回逐帧读数。
+
+    entries 的每一项是 {"tick", "source", "segment", "entities", "list", "index"}。
+    渲染用的 entities 与 list/index 指向的帧清单是同一条目：图与读数共用一份坐标，
+    读数不另抄一份实体位置。camera_name 指向 report["camera"] 里的六参数读数。
+    """
+    images, objects = [], []
+    for entry in entries:
+        image, drawn = render_frame(camera, entry["entities"], size)
+        images.append(label(image, frame_caption(entry["tick"], entry["source"],
+                                                entry["segment"])))
+        objects.extend(drawn)
+    path = "%s.gif" % name
+    save_gif(images, os.path.join(OUT_DIR, path))
+    identity, seen = [], set()
+    for obj in sorted(objects, key=lambda o: o.eid):
+        if obj.eid in seen:
+            continue
+        seen.add(obj.eid)
+        identity.append({"eid": obj.eid, "category": obj.category,
+                         "color": list(obj.color), "shape": obj.shape})
+    return {"gif": path, "camera": camera_name, "size": [size[0], size[1]],
+            "title_height": FRAME_TITLE_HEIGHT,
+            "frame_count": len(entries),
+            "frames": [{"index": i, "tick": e["tick"], "source": e["source"],
+                        "segment": e["segment"], "list": e["list"],
+                        "list_index": e["index"]} for i, e in enumerate(entries)],
+            "objects": identity}
 
 
 def readings(objects):
@@ -582,10 +623,32 @@ def main(argv=None):
                  ["observed tick %d" % approach_history()[COMPLETION_PREFIX_TICKS - 1]["tick"],
                   "completion tick %d" % completion["ticks"][1]]
                  ).save(os.path.join(OUT_DIR, "completion.png"))
+    # 补全动画：观测前缀逐帧接上 core 返回的补全尾部逐帧。观测帧取观测输入本身，
+    # 生成帧取 completion["frames"]；两边都不写回实际观测历史。
+    observed_list = [{"tick": r["tick"], "source": "observed", "entities": r["entities"]}
+                     for r in approach_history()[:COMPLETION_PREFIX_TICKS]]
+    generated_list = [{"tick": f["tick"], "source": f["source"], "entities": f["entities"]}
+                      for f in completion["frames"]]
+    completion_gif_camera = camera_for(
+        [[p for p in f["entities"].values()] for f in observed_list + generated_list])
+    completion_entries = (
+        [{"tick": f["tick"], "source": f["source"], "segment": "prefix",
+          "entities": f["entities"], "list": "observed", "index": i}
+         for i, f in enumerate(observed_list)]
+        + [{"tick": f["tick"], "source": f["source"], "segment": "tail",
+            "entities": f["entities"], "list": "generated", "index": i}
+           for i, f in enumerate(generated_list)])
+    completion_animation = build_animation("completion", "completion_gif",
+                                           completion_gif_camera, completion_entries,
+                                           gif_size)
     print("过程补全：命中来源下标 %d、匹配分数 %.3f、补全 tick %s、不命中反例 match=%s"
           % (completion["match"]["source"]["index"], completion["match"]["match_score"],
              completion["ticks"], missed["completion"]["match"]))
     print("补全对照图：completion.png")
+    print("补全动画：completion.gif（%d 帧 = 观测 %d + 生成 %d）"
+          % (completion_animation["frame_count"], len(observed_list),
+             len(generated_list)))
+    report["camera"]["completion_gif"] = camera_readings(completion_gif_camera)
     report["completion"] = {
         "prefix_ticks": COMPLETION_PREFIX_TICKS,
         "match": completion["match"], "seam": completion["seam"],
@@ -594,6 +657,8 @@ def main(argv=None):
                  "frames": missed["completion"]["frames"],
                  "candidates": missed["completion"]["candidates"]},
         "image": "completion.png",
+        "frame_lists": {"observed": observed_list, "generated": generated_list},
+        "animation": completion_animation,
         "objects_in_observed_frame": readings(observed_objects),
         "objects_in_completed_frame": readings(completed_objects)}
 
@@ -619,17 +684,47 @@ def main(argv=None):
                   "joint t%d" % (composition["joint"]["tick"] + composition["transform"]["tick_gap"]),
                   "seg2 end t%d" % composition["ticks"][1]]
                  ).save(os.path.join(OUT_DIR, "composition.png"))
+    # 重组动画：第一过程逐帧接上第二过程逐帧，接点帧单独标出。两段帧都取 core
+    # 返回的 segments[*]["frames"]，脚本不自己拼轨迹。
+    joint_tick = composition["joint"]["tick"] + composition["transform"]["tick_gap"]
+    segment_lists = {
+        "segment_1": [{"tick": f["tick"], "source": f["source"],
+                       "entities": f["entities"]}
+                      for f in composition["segments"][0]["frames"]],
+        "segment_2": [{"tick": f["tick"], "source": f["source"],
+                       "entities": f["entities"]}
+                      for f in composition["segments"][1]["frames"]]}
+    composition_gif_camera = camera_for(
+        [[p for p in f["entities"].values()]
+         for entries in segment_lists.values() for f in entries])
+    composition_entries = (
+        [{"tick": f["tick"], "source": f["source"], "segment": "seg1",
+          "entities": f["entities"], "list": "segment_1", "index": i}
+         for i, f in enumerate(segment_lists["segment_1"])]
+        + [{"tick": f["tick"], "source": f["source"],
+            "segment": "joint" if f["tick"] == joint_tick else "seg2",
+            "entities": f["entities"], "list": "segment_2", "index": i}
+           for i, f in enumerate(segment_lists["segment_2"])])
+    composition_animation = build_animation("composition", "composition_gif",
+                                            composition_gif_camera,
+                                            composition_entries, gif_size)
     print("过程重组：ref_gap=%.6f、actor_gap=%.6f、连续=%s、tick %s"
           % (composition["joint"]["ref_gap"], composition["joint"]["actor_gap"],
              composition["joint"]["continuous"], composition["ticks"]))
     print("重组对照图：composition.png")
+    print("重组动画：composition.gif（%d 帧 = 第一过程 %d + 第二过程 %d，接点 tick %d）"
+          % (composition_animation["frame_count"],
+             len(segment_lists["segment_1"]), len(segment_lists["segment_2"]),
+             joint_tick))
     report["composition"] = {
         "joint": composition["joint"], "relations": composition["relations"],
         "transform": composition["transform"], "ticks": composition["ticks"],
         "image": "composition.png",
+        "frame_lists": segment_lists, "animation": composition_animation,
         "objects_in_panels": readings([obj for _, objects in joint_panels for obj in objects])}
     report["camera"]["echo"] = camera_readings(completion_camera)
     report["camera"]["joint"] = camera_readings(joint_camera)
+    report["camera"]["composition_gif"] = camera_readings(composition_gif_camera)
     echo_engine.close()
 
     path = os.path.join(OUT_DIR, "readings.json")

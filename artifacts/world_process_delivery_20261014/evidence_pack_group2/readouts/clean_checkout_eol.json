@@ -1,0 +1,327 @@
+{
+  "checks": {
+    "both_eol_runs_pass": true,
+    "crlf_source_actually_crlf": true,
+    "crlf_source_differs_from_repo": true,
+    "repo_files_unchanged": true
+  },
+  "expected_passed": 42,
+  "kind": "clean_copy_eol_reproducibility_check",
+  "passed": true,
+  "python": "<repo>\\.venv\\Scripts\\python.exe",
+  "repo": "<repo>",
+  "repo_files_unchanged": {
+    "lingshu/world/process_ops.py": true,
+    "lingshu/world/world_process.py": true,
+    "tests/test_event_echo.py": true
+  },
+  "repo_sha256": {
+    "lingshu/world/process_ops.py": "59cde8f925fac077764acbba713c1de13432a22c6f8904d7fbe290019a93f2e7",
+    "lingshu/world/world_process.py": "950f3d9669ffaf5cc9ee63c71e3f55cc21ebba00ede6d70649454cacf8a74659",
+    "tests/test_event_echo.py": "caf2a2c46e4b80547f75146fea6c0a55b176f0f537d8f50b16fe7617ec5f5477"
+  },
+  "runs": [
+    {
+      "checks": {
+        "crlf_cases_6": true,
+        "failed_0": true,
+        "module_from_copy": true,
+        "mutant_copies_6": true,
+        "mutation_cases_6": true,
+        "passed_42": true,
+        "returncode_0": true,
+        "skipped_0": true
+      },
+      "command": [
+        "<repo>\\.venv\\Scripts\\python.exe",
+        "-X",
+        "utf8",
+        "-B",
+        "-m",
+        "pytest",
+        "tests/test_event_echo.py",
+        "-v",
+        "-p",
+        "no:cacheprovider",
+        "-p",
+        "check_clean_copy"
+      ],
+      "copy_removed": true,
+      "copy_root": "<tmp>\\echo_eol_lf_ghwd4n_8",
+      "crlf_rewrite": null,
+      "eol": "lf",
+      "module_check": {
+        "configure": {
+          "copy_root": "<tmp>\\echo_eol_lf_ghwd4n_8",
+          "meta_path_before": [
+            "AssertionRewritingHook",
+            "_Finder",
+            "BuiltinImporter",
+            "FrozenImporter",
+            "PathFinder",
+            "_EditableFinder"
+          ],
+          "mutant_count": 0,
+          "mutants": {},
+          "removed_editable_finders": [
+            "__editable___lingshu_0_0_1_finder"
+          ],
+          "removed_sys_path": [],
+          "stage": "configure",
+          "world_process_file": "<tmp>\\echo_eol_lf_ghwd4n_8\\lingshu\\world\\world_process.py",
+          "world_process_sha256": "950f3d9669ffaf5cc9ee63c71e3f55cc21ebba00ede6d70649454cacf8a74659"
+        },
+        "sessionfinish": {
+          "copy_root": "<tmp>\\echo_eol_lf_ghwd4n_8",
+          "mutant_count": 6,
+          "mutants": {
+            "echo_mutant_wp_m1_no_eid": {
+              "path": "<tmp>\\pytest-of-Zs\\pytest-277\\echo_mutants0\\wp_m1_no_eid.py",
+              "sha256": "fd331016fed3815a394e5d36c18ecfc99940c22c0cb9bfbac050e4aa338ff858"
+            },
+            "echo_mutant_wp_m2_adjacent": {
+              "path": "<tmp>\\pytest-of-Zs\\pytest-277\\echo_mutants0\\wp_m2_adjacent.py",
+              "sha256": "f3cd87de0d37d5966635ee7c591b12d468503f306a09db205f520ae01be3fff2"
+            },
+            "echo_mutant_wp_m3_count_split": {
+              "path": "<tmp>\\pytest-of-Zs\\pytest-277\\echo_mutants0\\wp_m3_count_split.py",
+              "sha256": "7837875645f913e4c80a0ab7219adb72bc24e050281edc21a8a80f0eb7d2fcd4"
+            },
+            "echo_mutant_wp_m4_split_reversed": {
+              "path": "<tmp>\\pytest-of-Zs\\pytest-277\\echo_mutants0\\wp_m4_split_reversed.py",
+              "sha256": "9e1c08f364f83afda100c45c40d820c168338e8575673378ae53188486ef0f5d"
+            },
+            "echo_mutant_wp_m5_next_event_scoring": {
+              "path": "<tmp>\\pytest-of-Zs\\pytest-277\\echo_mutants0\\wp_m5_next_event_scoring.py",
+              "sha256": "23560529d817e613b18fd6e12887b6142a5e8cd1a4f39e8b89cec4dca40c7453"
+            },
+            "echo_mutant_wp_m6_coverage_scored": {
+              "path": "<tmp>\\pytest-of-Zs\\pytest-277\\echo_mutants0\\wp_m6_coverage_scored.py",
+              "sha256": "3497122b768d14692d4137550e20a6aa382050f1b6886e38305abe15acde700b"
+            }
+          },
+          "stage": "sessionfinish",
+          "world_process_file": "<tmp>\\echo_eol_lf_ghwd4n_8\\lingshu\\world\\world_process.py",
+          "world_process_sha256": "950f3d9669ffaf5cc9ee63c71e3f55cc21ebba00ede6d70649454cacf8a74659"
+        }
+      },
+      "passed": true,
+      "pytest": {
+        "counts": {
+          "error": 0,
+          "failed": 0,
+          "passed": 42,
+          "skipped": 0
+        },
+        "crlf_cases": [
+          {
+            "name": "wp_m1_no_eid",
+            "outcome": "PASSED"
+          },
+          {
+            "name": "wp_m2_adjacent",
+            "outcome": "PASSED"
+          },
+          {
+            "name": "wp_m3_count_split",
+            "outcome": "PASSED"
+          },
+          {
+            "name": "wp_m4_split_reversed",
+            "outcome": "PASSED"
+          },
+          {
+            "name": "wp_m5_next_event_scoring",
+            "outcome": "PASSED"
+          },
+          {
+            "name": "wp_m6_coverage_scored",
+            "outcome": "PASSED"
+          }
+        ],
+        "mutation_cases": [
+          {
+            "name": "test_mutation_dropping_eid_in_hit_rule_turns_new_assertion_red",
+            "outcome": "PASSED"
+          },
+          {
+            "name": "test_mutation_adjacent_pairing_breaks_insertion_invariance",
+            "outcome": "PASSED"
+          },
+          {
+            "name": "test_mutation_count_split_breaks_tick_boundary",
+            "outcome": "PASSED"
+          },
+          {
+            "name": "test_mutation_split_reversed_changes_dev_holdout_counts",
+            "outcome": "PASSED"
+          },
+          {
+            "name": "test_mutation_next_event_scoring_breaks_signature_response",
+            "outcome": "PASSED"
+          },
+          {
+            "name": "test_mutation_coverage_scored_formula_turns_red",
+            "outcome": "PASSED"
+          }
+        ]
+      },
+      "returncode": 0,
+      "tag": "lf"
+    },
+    {
+      "checks": {
+        "crlf_cases_6": true,
+        "failed_0": true,
+        "module_from_copy": true,
+        "mutant_copies_6": true,
+        "mutation_cases_6": true,
+        "passed_42": true,
+        "returncode_0": true,
+        "skipped_0": true
+      },
+      "command": [
+        "<repo>\\.venv\\Scripts\\python.exe",
+        "-X",
+        "utf8",
+        "-B",
+        "-m",
+        "pytest",
+        "tests/test_event_echo.py",
+        "-v",
+        "-p",
+        "no:cacheprovider",
+        "-p",
+        "check_clean_copy"
+      ],
+      "copy_removed": true,
+      "copy_root": "<tmp>\\echo_eol_crlf_axe8avn5",
+      "crlf_rewrite": {
+        "crlf_bytes": 1048,
+        "crlf_sha256": "ad08e14e0c3798fc561771f30db856d549c2bec8b9326e7d03fff786d41fc196",
+        "has_crlf": true,
+        "lf_sha256": "950f3d9669ffaf5cc9ee63c71e3f55cc21ebba00ede6d70649454cacf8a74659",
+        "path": "<tmp>\\echo_eol_crlf_axe8avn5\\lingshu\\world\\world_process.py"
+      },
+      "eol": "crlf",
+      "module_check": {
+        "configure": {
+          "copy_root": "<tmp>\\echo_eol_crlf_axe8avn5",
+          "meta_path_before": [
+            "AssertionRewritingHook",
+            "_Finder",
+            "BuiltinImporter",
+            "FrozenImporter",
+            "PathFinder",
+            "_EditableFinder"
+          ],
+          "mutant_count": 0,
+          "mutants": {},
+          "removed_editable_finders": [
+            "__editable___lingshu_0_0_1_finder"
+          ],
+          "removed_sys_path": [],
+          "stage": "configure",
+          "world_process_file": "<tmp>\\echo_eol_crlf_axe8avn5\\lingshu\\world\\world_process.py",
+          "world_process_sha256": "ad08e14e0c3798fc561771f30db856d549c2bec8b9326e7d03fff786d41fc196"
+        },
+        "sessionfinish": {
+          "copy_root": "<tmp>\\echo_eol_crlf_axe8avn5",
+          "mutant_count": 6,
+          "mutants": {
+            "echo_mutant_wp_m1_no_eid": {
+              "path": "<tmp>\\pytest-of-Zs\\pytest-278\\echo_mutants0\\wp_m1_no_eid.py",
+              "sha256": "fd331016fed3815a394e5d36c18ecfc99940c22c0cb9bfbac050e4aa338ff858"
+            },
+            "echo_mutant_wp_m2_adjacent": {
+              "path": "<tmp>\\pytest-of-Zs\\pytest-278\\echo_mutants0\\wp_m2_adjacent.py",
+              "sha256": "f3cd87de0d37d5966635ee7c591b12d468503f306a09db205f520ae01be3fff2"
+            },
+            "echo_mutant_wp_m3_count_split": {
+              "path": "<tmp>\\pytest-of-Zs\\pytest-278\\echo_mutants0\\wp_m3_count_split.py",
+              "sha256": "7837875645f913e4c80a0ab7219adb72bc24e050281edc21a8a80f0eb7d2fcd4"
+            },
+            "echo_mutant_wp_m4_split_reversed": {
+              "path": "<tmp>\\pytest-of-Zs\\pytest-278\\echo_mutants0\\wp_m4_split_reversed.py",
+              "sha256": "9e1c08f364f83afda100c45c40d820c168338e8575673378ae53188486ef0f5d"
+            },
+            "echo_mutant_wp_m5_next_event_scoring": {
+              "path": "<tmp>\\pytest-of-Zs\\pytest-278\\echo_mutants0\\wp_m5_next_event_scoring.py",
+              "sha256": "23560529d817e613b18fd6e12887b6142a5e8cd1a4f39e8b89cec4dca40c7453"
+            },
+            "echo_mutant_wp_m6_coverage_scored": {
+              "path": "<tmp>\\pytest-of-Zs\\pytest-278\\echo_mutants0\\wp_m6_coverage_scored.py",
+              "sha256": "3497122b768d14692d4137550e20a6aa382050f1b6886e38305abe15acde700b"
+            }
+          },
+          "stage": "sessionfinish",
+          "world_process_file": "<tmp>\\echo_eol_crlf_axe8avn5\\lingshu\\world\\world_process.py",
+          "world_process_sha256": "ad08e14e0c3798fc561771f30db856d549c2bec8b9326e7d03fff786d41fc196"
+        }
+      },
+      "passed": true,
+      "pytest": {
+        "counts": {
+          "error": 0,
+          "failed": 0,
+          "passed": 42,
+          "skipped": 0
+        },
+        "crlf_cases": [
+          {
+            "name": "wp_m1_no_eid",
+            "outcome": "PASSED"
+          },
+          {
+            "name": "wp_m2_adjacent",
+            "outcome": "PASSED"
+          },
+          {
+            "name": "wp_m3_count_split",
+            "outcome": "PASSED"
+          },
+          {
+            "name": "wp_m4_split_reversed",
+            "outcome": "PASSED"
+          },
+          {
+            "name": "wp_m5_next_event_scoring",
+            "outcome": "PASSED"
+          },
+          {
+            "name": "wp_m6_coverage_scored",
+            "outcome": "PASSED"
+          }
+        ],
+        "mutation_cases": [
+          {
+            "name": "test_mutation_dropping_eid_in_hit_rule_turns_new_assertion_red",
+            "outcome": "PASSED"
+          },
+          {
+            "name": "test_mutation_adjacent_pairing_breaks_insertion_invariance",
+            "outcome": "PASSED"
+          },
+          {
+            "name": "test_mutation_count_split_breaks_tick_boundary",
+            "outcome": "PASSED"
+          },
+          {
+            "name": "test_mutation_split_reversed_changes_dev_holdout_counts",
+            "outcome": "PASSED"
+          },
+          {
+            "name": "test_mutation_next_event_scoring_breaks_signature_response",
+            "outcome": "PASSED"
+          },
+          {
+            "name": "test_mutation_coverage_scored_formula_turns_red",
+            "outcome": "PASSED"
+          }
+        ]
+      },
+      "returncode": 0,
+      "tag": "crlf"
+    }
+  ]
+}

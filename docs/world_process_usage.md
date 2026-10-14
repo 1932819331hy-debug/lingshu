@@ -14,7 +14,7 @@
 | 过程补全 · 过程重组 | lingshu/world/process_ops.py |
 | 显式注册 | lingshu/world/__init__.py · register_world_process |
 | core 门面 | lingshu/core/core.py · SpacetimeMemoryEngine.world_process |
-| 单测 | tests/test_world_process.py · tests/test_motion_groups.py · tests/test_event_echo.py · tests/test_process_ops.py · tests/test_world_process_core.py |
+| 单测 | tests/test_world_process.py · tests/test_motion_groups.py · tests/test_event_echo.py · tests/test_process_ops.py · tests/test_world_process_core.py · tests/test_world_process_demo.py |
 | 演示 | tools/demo_world_process.py |
 
 三个 world 模块是**本仓原生开发**（非 AEIS 导出件），来源标注见
@@ -79,16 +79,16 @@ match_score 是几何与时序的**联合**命中率：同一帧的几何与时�
 不做重采样、时间缩放与插值，判据要求对比帧的 elapsed tick 逐帧相等；绝对 tick 不进
 生成时间轴，两端整体平移不改变命中结果。
 
-补全轨迹由 transfer_demonstration 生成：平移量 = 观测末帧 ref − 已匹配记录末帧 ref，
-首帧 tick 接在前缀末 tick 之后，后续按记录的 dt 逐帧还原。**不命中不算失败**：
+补全轨迹由 transfer_demonstration 生成：平移量是观测末帧 ref 减记录已匹配末帧 ref
+所得平移，首帧 tick 接在前缀末 tick 之后，后续按记录的 dt 逐帧还原。**不命中不算失败**：
 match 为 None、frames 为空列表，候选列表仍逐条给出来源、几何读数 geometry、时序读数
 timing 与匹配分数。actor 与 ref 同名时模块抛 ValueError。
 
 compose_processes 首版只连接 2 个过程，不做多路串联。连接点取参照物：后段的 ref
 锚定到前段末帧的 ref 位置，两段的 actor 衔接距离写进 joint.actor_gap，判据是
 joint_tol。**连接点不达标时照常生成新轨迹**，joint.continuous 记 False。
-joint.continuous 只按水平 x/z 判定；joint.ref_y_gap 与 joint.actor_y_gap 是连接点
-两端的原始高度差，只作读数，不参与判定。本能力只给几何衔接读数，**不宣称两段动作
+joint.continuous 只按水平 x/z 判定；joint.ref_y_gap 是锚定后的残差，joint.actor_y_gap
+是连接点两 actor 的高度差。两个读数都不参与判定。本能力只给几何衔接读数，**不宣称两段动作
 在可执行性上兼容**。roles 解析后 actor 与 ref 同名（含省略 roles 时沿用前段角色名）
 时模块抛 ValueError。
 
@@ -294,8 +294,8 @@ got["composition"]["frames"]       # 两段帧，tick 相接（间隔 = tick_gap
 照常生成新轨迹，joint.continuous 记 False，判据与读数都在结果里。记录没有过程标注时
 relations.same_type 为 None，表示未知，不猜。
 
-joint.continuous 只看水平 x/z；joint.ref_y_gap 与 joint.actor_y_gap 是连接点两端的
-原始高度差，只作读数，高度差再大也不改 continuous。本能力给的是几何衔接读数，
+joint.continuous 只看水平 x/z；joint.ref_y_gap 是锚定后的残差，joint.actor_y_gap 是
+连接点两 actor 的高度差。两个读数都不参与判定，高度差再大也不改 continuous。本能力给的是几何衔接读数，
 **不表示两段动作在可执行性上兼容**。
 
 同名角色是非法输入：roles 解析后 actor 与 ref 同名，或省略 roles 而前段记录本身同名，
@@ -320,7 +320,8 @@ joint.continuous 只看水平 x/z；joint.ref_y_gap 与 joint.actor_y_gap 是连
 4. 事件回声场景（每 13 步一轮，第 3 步停一步、第 8 步左转 90°，共 8 轮）出事件
    时序图与两模型读数；
 5. 接近→停留→离开场景出“观测末帧 / 补全末帧”对照图，两段记录出“前段终点 /
-   连接点 / 后段终点”对照图。
+   连接点 / 后段终点”对照图；两项各再出一段逐帧动画（completion.gif、composition.gif），
+   帧上标 tick、来源与分段。
 
 ### 输出文件
 
@@ -336,13 +337,20 @@ joint.continuous 只看水平 x/z；joint.ref_y_gap 与 joint.actor_y_gap 是连
 | groups.gif | 组场景全过程动画 |
 | echo_timeline.png | 事件时序图：实线按事件类型分色，红色标记是延迟模型在留出段的预测落点 |
 | completion.png | 过程补全对照：观测前缀末帧与补全轨迹末帧（同一台相机） |
+| completion.gif | 过程补全动画：观测前缀逐帧接生成补全尾部，逐帧标 tick、来源与分段 |
 | composition.png | 过程重组对照：前段终点、连接点与后段终点（同一台相机） |
+| composition.gif | 过程重组动画：第一过程逐帧接第二过程逐帧，接点帧单独标出 |
 | readings.json | 机器读数 |
 | world_process.db · motion_groups.db | 两次演示写入的既有 SQLite store |
 
 三张对照图与三张组画面都用 World3D 的既有渲染路径（World3D.render）出图；对照图
 三张共用一台相机，GIF 另用一台，避免运动出画。GIF 由 PIL 把同一相机的帧按序保存，
 不新增动画模块（world_generator 的 video 动作从文字生成帧，与本演示的帧来源不同）。
+
+两段新动画也逐帧走同一条渲染路径，相机取各自全轨迹的并集，运动不出画。帧上说明带标
+tick、来源与分段：来源 observed 是观测前缀，generated 是 core 返回的生成帧
+（completion.frames 与 composition.segments[*].frames）。生成帧只进画面与读数，
+不写回实际观测历史。
 
 ### 机器读数
 
@@ -355,10 +363,14 @@ readings.json 的键：
 - groups：成组窗口与全窗口的组模型，以及组画面的实体位置；
 - masked_prediction：被遮蔽实体、推算值、真实值、误差、可见成员清单；
 - echo：事件回声读数（事件流、切分、延迟关联、两模型命中数与偏差）与事件时序图；
-- completion：补全命中的来源与匹配分数、接缝读数、候选列表，以及不命中反例的读数；
-- composition：连接点读数（ref_gap、actor_gap、continuous）、过程关系与两段 tick；
+- completion：补全命中的来源与匹配分数、接缝读数、候选列表、不命中反例的读数，以及
+  动画节（frame_lists 的 observed / generated 清单给逐帧 tick、来源与实体位置，
+  animation 给 GIF 路径、相机名、帧数与逐帧 list + list_index 同源索引）；
+- composition：连接点读数（ref_gap、actor_gap、continuous）、过程关系、两段 tick，以及
+  动画节（frame_lists 的 segment_1 / segment_2 清单，animation 给 GIF 路径、相机名、
+  帧数与逐帧 segment + 同源索引）；
 - camera：panel（对照图）、gif、group（组画面）、echo（补全对照图）、joint（重组
-  对照图）五台相机的六参数。
+  对照图）、completion_gif 与 composition_gif（两段动画）七台相机的六参数。
 
 图上实体与读数一一对应：进渲染的 entities 就是同一份读数里的 entities，颜色取自
 World3D 的类别先验（例如 landmark 用 tree 的绿色，m_c 用 fox 的橙色）。图上标签是
@@ -382,8 +394,8 @@ ASCII（默认字体无中文字形），中文说明只在读数与本文档里
   一项；min_consistency 默认 0.7 只在固定构造上校准过，不保证随机序列不出现偶然候选；
 - 过程补全不命中不算错误：match 为 None、frames 为空列表，候选列表仍逐条给出读数；
 - 过程重组首版只连 2 段：接口与判据都不接受 3 段以上的串联；连接点不达标照常出轨迹，
-  joint.continuous 记 False；joint.continuous 只覆盖水平面，ref_y_gap 与 actor_y_gap
-  只是读数，不构成动作可执行性兼容的结论；
+  joint.continuous 记 False；joint.continuous 只覆盖水平面，ref_y_gap 是锚定后的残差、
+  actor_y_gap 是连接点两 actor 的高度差，两个都只是读数，不构成动作可执行性兼容的结论；
 - 过程补全的匹配只比相对首帧的 elapsed tick：不做重采样、时间缩放与插值，采样节奏不同
   的记录不命中；平移量取单点差，观测末帧或记录末帧带噪声时误差会整段平移尾部；
 - 同名角色是 complete 与 compose 的非法输入：模块抛 ValueError，门面转成 error dict；
@@ -399,6 +411,7 @@ ASCII（默认字体无中文字形），中文说明只在读数与本文档里
 .venv/Scripts/python.exe -X utf8 -B -m pytest tests/test_event_echo.py -q -p no:cacheprovider
 .venv/Scripts/python.exe -X utf8 -B -m pytest tests/test_process_ops.py -q -p no:cacheprovider
 .venv/Scripts/python.exe -X utf8 -B -m pytest tests/test_world_process_core.py -q -p no:cacheprovider
+.venv/Scripts/python.exe -X utf8 -B -m pytest tests/test_world_process_demo.py -q -p no:cacheprovider
 .venv/Scripts/python.exe -X utf8 -B tools/demo_world_process.py --out-dir artifacts/world_process_demo
 .venv/Scripts/python.exe -X utf8 -B tools/import_direction_lint.py --json
 ```

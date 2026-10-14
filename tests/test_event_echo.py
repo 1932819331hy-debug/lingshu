@@ -28,7 +28,10 @@
   F 隔离变异：6 份副本各自只做定点替换并核对替换计数，每份都让对应语义断言变红——
     M1 命中判据去掉 eid、M2 退化成相邻事件配对、M3 切分去掉同 tick 组回退、
     M4 颠倒切分方向、M5 响应退化成全流下一事件、M6 coverage 用 scored 除事件数。
-    副本在 group2_echo_fix2/mutation_work/，由 make_mutants.py 从仓库源码生成。
+    副本由本件的 MUTANT_EDITS 定点替换表在 pytest 会话临时目录里现生成，
+    源码取自 MODULE_PATH 的现行内容；本件不读 artifacts，也不写源码文件。
+    CRLF 回归：临时复制里写 CRLF 的 world_process.py，6 个变异在 LF 与 CRLF 两种
+    落盘下生成同一份副本、给出同一读数。
 
 运行（仓根）：
     .venv/Scripts/python.exe -X utf8 -B -m pytest tests/test_event_echo.py -q -p no:cacheprovider
@@ -56,8 +59,6 @@ from lingshu.world.world_process import (ProcessThresholds,        # noqa: E402
                                          motion_events)
 
 MODULE_PATH = os.path.join(REPO, "lingshu", "world", "world_process.py")
-WORK_DIR = os.path.join(REPO, "artifacts", "world_process_delivery_20261014",
-                        "group2_echo_fix2", "mutation_work")
 
 
 # ================= 夹具：按事件计划造轨迹 =================
@@ -306,7 +307,7 @@ def test_split_boundary_at_group_head_middle_and_tail():
     shared = seq([("aa", 10, "stop"), ("aa", 20, "stop"), ("aa", 30, "stop"),
                   ("bb", 30, "stop"), ("cc", 30, "turn"), ("aa", 40, "stop")])
     # 组首：边界正好落在 tick 30 组的首条上（前一条 tick 20），不向前退。
-    # 旧实现会因为后一条同为 tick 30 再多退一组，把 dev 压到 1 条。
+    # 旧实现把后一条同为 tick 30 的事件也算进该组，多退一组，dev 条数被压到 1。
     at_head = echo_split(shared, 0.65)
     assert at_head["dev_events"] == 2 and at_head["holdout_events"] == 4
     assert at_head["dev_last_tick"] == 20 and at_head["boundary_tick"] == 30
@@ -451,7 +452,7 @@ def test_wrong_event_type_on_same_tick_is_not_a_hit():
     assert (out["lag_readings"][0]["predicted_tick"],
             out["lag_readings"][0]["predicted_eid"],
             out["lag_readings"][0]["predicted_event"]) == (105, "x", "turn")
-    # 105 上确有一条事件，但它是 stop；固定目标签名是 (x, turn)，真实响应在 110。
+    # tick 105 上确有一条事件，但 event 字段是 stop；固定目标签名是 (x, turn)，真实响应在 110。
     assert {(e["tick"], e["event"]) for e in holdout
             if e["tick"] == 105} == {(105, "stop")}
     assert (out["lag_readings"][0]["actual_tick"],
@@ -477,12 +478,12 @@ def test_source_event_itself_is_not_a_response():
                    ("x", 110, "stop"), ("x", 120, "stop"), ("x", 130, "stop")])
     out = evaluate_event_echo(dev, holdout)
     # 无延迟模型的预测是同一 tick 上的目标签名 (x, stop)：源事件自己不算响应，
-    # 所以真实响应是 110 的停，预测 tick 100 与它不符，这一条不能白拿。
+    # 所以真实响应是 tick 110 的 stop，预测 tick 100 与 actual_tick 不符，这一条不算命中。
     base = out["no_delay_readings"][0]
     assert base["predicted_tick"] == 100 and base["predicted_event"] == "stop"
     assert base["actual_tick"] == 110 and base["hit"] is False
     assert out["no_delay_model"]["hits"] == 0
-    # 延迟模型预测停@110：固定目标签名 (x, stop) 在 100 之后最早的一条就是它。
+    # 延迟模型预测 stop@110：固定目标签名 (x, stop) 在 tick 100 之后最早的一条是 tick 110。
     row = out["lag_readings"][0]
     assert (row["tick"], row["predicted_tick"], row["predicted_event"]) == \
         (100, 110, "stop")
@@ -574,7 +575,7 @@ def test_prediction_beyond_window_is_marked_and_counted():
         (100, 110, "beyond_window"), (101, 111, "beyond_window")]
     assert all(r["scored"] is False for r in rows)
     assert all(r["abs_tick_error"] is None for r in rows)
-    # 行 0 的流里其实还有下一条事件（101），但它不是预测的目标位置：偏差仍为 None，
+    # 行 0 的流里还有下一条事件（tick 101），但 tick 101 不是预测位置：偏差仍为 None，
     # 且单独计数，不混成 abs_error=None 的普通 miss。
     assert rows[0]["actual_tick"] == 101
     assert model["prediction_beyond_window"] == 2
@@ -621,14 +622,14 @@ def test_consistency_mixes_target_choice_and_lag_concentration():
     # lag_consistency 只看后者，只作原始读数。
     assert turn["consistency"] < 0.7 <= turn["lag_consistency"]
     assert turn["consistency"] != turn["lag_consistency"]
-    # 同一源签名到它自己：目标唯一，两个读数的差别只剩响应覆盖率。
+    # 同一源签名指向自身：目标唯一，两个读数的差别只剩响应覆盖率。
     main = assoc_of(assoc, "x", "stop", "x", "stop")
     assert main["lag_counts"] == {10: 4} and main["count"] == 4
     assert main["consistency"] == pytest.approx(4 / 5)
     assert main["lag_consistency"] == pytest.approx(1.0)
     assert main["consistency"] < main["lag_consistency"]
     # 默认门槛与支持度没为凑随机空输出而改动：(y, turn) 这条按 0.4 被剔除，
-    # (x, stop) 到它自己按 0.8 保留。
+    # (x, stop) 指向自身按 0.8 保留。
     sig = inspect.signature(echo_lag_associations)
     assert sig.parameters["min_consistency"].default == 0.7
     assert sig.parameters["min_support"].default == 2
@@ -734,7 +735,7 @@ def test_irregular_sequence_default_support_has_no_stop_turn_association():
     assert len(counts) == 5 and len(earliest) == 12
     assert max(counts.values()) / len(earliest) == pytest.approx(3 / 12, abs=1e-6)
     assert 3 / 12 < 0.7
-    # min_support 高于样本总数也不该成为通过手段：默认门槛已把它排除在外。
+    # min_support 高于样本总数也不该成为通过手段：默认门槛已排除这条关联。
     assert echo_lag_associations(events, min_support=len(events) + 1) == []
     # wanderer 的转向到停止确实每次相隔 3 tick，这一条按新口径保留。
     kept = assoc_of(loose, "wanderer", "turn", "wanderer", "stop")
@@ -743,7 +744,7 @@ def test_irregular_sequence_default_support_has_no_stop_turn_association():
 
 
 def test_independent_sequences_do_not_pass_default_gate():
-    """固定 seed 的独立序列在默认门槛下不出非空关联；读数由本件复算，不宣称显著性。"""
+    """固定 seed 的独立序列在默认门槛下不出非空关联；3 个 seed 的读数由本件复算，不做统计检验。"""
     seeds = (1000, 1001, 1002)
     for seed in seeds:
         events = independent_events(seed)
@@ -808,7 +809,7 @@ def test_prediction_and_evaluation_share_one_scoring_rule():
     assert direct["predicted_eid"] == row["predicted_eid"] == "x"
     assert direct["predicted_event"] == row["predicted_event"] == "turn"
     assert direct["hit"] is row["hit"] is False
-    # 真实响应是 110 的转（105 上是停，签名不符），偏差按它算。
+    # 真实响应是 tick 110 的 turn（tick 105 上是 stop，签名不符），偏差按 tick 110 算。
     assert (direct["actual_tick"], direct["actual_eid"],
             direct["actual_event"]) == (110, "x", "turn")
     assert (row["actual_tick"], row["actual_eid"], row["actual_event"]) == \
@@ -982,16 +983,117 @@ def test_module_stays_read_only():
 
 # ================= F 组：隔离变异 =================
 
+# 6 份副本的定点替换表：键 = 副本名，值 = [(源码原文, 替换文本), ...]。
+# 锚点与产物目录里 make_mutants.py 的一致；映射逻辑随本件携带，不读任何 artifacts。
+_ECHO_SIG_FILTER = '    return (str(item["eid"]), str(item["event"])) == target'
+_ECHO_HIT_COMPARE = ('    hit = bool(actual_key is not None and predicted_key is not None\n'
+                     '               and actual_key == predicted_key)')
+_ECHO_PAIR_LOOP = ('            first[target] = lag\n'
+                   '        for target in sorted(first):')
+_ECHO_RETREAT = ('    while 0 < index < total and _echo_inside_tick_group(stream, index):\n'
+                 '        index -= 1')
+_ECHO_SPLIT_INDEX = '    index = total - holdout_count'
+_ECHO_COVERAGE = '            "coverage": round(predictions / total, 6) if total else 0.0,'
+
+MUTANT_EDITS = {
+    # M1 命中判据去掉 eid，且响应只按 event 筛。
+    "wp_m1_no_eid": [
+        (_ECHO_SIG_FILTER, '    return str(item["event"]) == target[1]'),
+        (_ECHO_HIT_COMPARE,
+         '    hit = bool(actual_key is not None and predicted_key is not None\n'
+         '               and actual_key[0] == predicted_key[0]\n'
+         '               and actual_key[2] == predicted_key[2])')],
+    # M2 配对退化成只看相邻下一条事件。
+    "wp_m2_adjacent": [
+        (_ECHO_PAIR_LOOP,
+         '            first[target] = lag\n'
+         '            break\n'
+         '        for target in sorted(first):')],
+    # M3 切分去掉同 tick 组回退，按条数硬切。
+    "wp_m3_count_split": [
+        (_ECHO_RETREAT, '    # 变异：去掉同 tick 组回退，边界按条数硬切。')],
+    # M4 颠倒切分方向：下标取留出条数本身。
+    "wp_m4_split_reversed": [
+        (_ECHO_SPLIT_INDEX, '    index = holdout_count')],
+    # M5 响应退化成全流严格晚于源事件的第一条事件。
+    "wp_m5_next_event_scoring": [
+        (_ECHO_SIG_FILTER, '    return True')],
+    # M6 coverage 换成 scored 除事件数。
+    "wp_m6_coverage_scored": [
+        (_ECHO_COVERAGE,
+         '            "coverage": round(len(scored) / total, 6) if total else 0.0,')],
+}
+
+
+def mutant_edits_of(name):
+    """取变异名的替换表；名字未登记时抛错。"""
+    if name not in MUTANT_EDITS:
+        raise AssertionError("未登记的变异名：%s；已登记：%s"
+                             % (name, sorted(MUTANT_EDITS)))
+    return MUTANT_EDITS[name]
+
+
+def normalized_source(source):
+    """把 CRLF 与单独 CR 统一换成 LF：干净 Windows 检出的源码与 LF 源码等价。"""
+    return source.replace("\r\n", "\n").replace("\r", "\n")
+
+
+def mutant_source(name, source):
+    """按 MUTANT_EDITS 生成一份副本源码。
+
+    入口先统一换行，锚点命中计数与“副本与源码相同”的相等比较都以统一后的源码为准。
+    变异名未登记、锚点命中次数不是 1、替换后与源码相同时都抛错，不留半成品。
+    """
+    source = normalized_source(source)
+    body = source
+    for old, new in mutant_edits_of(name):
+        hits = body.count(old)
+        if hits != 1:
+            raise AssertionError("锚点命中次数不是 1：%s 命中 %d 次" % (name, hits))
+        body = body.replace(old, new)
+    if body == source:
+        raise AssertionError("副本与源码相同：%s" % name)
+    return body
+
+
+_MUTANT_DIR = []
+
+
+@pytest.fixture(scope="session", autouse=True)
+def mutant_work_dir(tmp_path_factory):
+    """会话级临时目录：6 份副本都在这里现生成，会话结束由 pytest 清理。"""
+    if not _MUTANT_DIR:
+        _MUTANT_DIR.append(str(tmp_path_factory.mktemp("echo_mutants")))
+    return _MUTANT_DIR[0]
+
+
+_MUTANT_MODULES = {}
+
+
 def load_mutant(name):
-    """把隔离副本当独立模块加载；副本不存在时跳过（证据目录由本组提交）。"""
-    path = os.path.join(WORK_DIR, name + ".py")
-    if not os.path.exists(path):
-        pytest.skip("隔离副本缺失：%s" % path)
+    """把隔离副本当独立模块加载；副本从 MODULE_PATH 的现行源码现生成。
+
+    只读 MODULE_PATH 这一个源码文件，源码文件从不写入；副本落 pytest 会话临时目录。
+    newline="" 保留源码换行，CRLF 检出交给 mutant_source 统一换行。
+    同一会话内每个名字只生成并加载一次，替换计数与副本内容都在生成时核对。
+    """
+    if name in _MUTANT_MODULES:
+        return _MUTANT_MODULES[name]
+    mutant_edits_of(name)       # 未登记的变异名在这里失败，不落空文件
+    if not _MUTANT_DIR:
+        raise AssertionError("会话夹具 mutant_work_dir 未就绪：副本目录缺失")
+    with open(MODULE_PATH, "r", encoding="utf-8", newline="") as fh:
+        source = fh.read()
+    body = mutant_source(name, source)
+    path = os.path.join(_MUTANT_DIR[0], name + ".py")
+    with open(path, "w", encoding="utf-8", newline="") as fh:
+        fh.write(body)
     spec = importlib.util.spec_from_file_location("echo_mutant_" + name, path)
     module = importlib.util.module_from_spec(spec)
     # dataclass 解析字符串注解时要能在 sys.modules 里找到本模块，否则加载失败。
     sys.modules[spec.name] = module
     spec.loader.exec_module(module)
+    _MUTANT_MODULES[name] = module
     return module
 
 
@@ -1136,6 +1238,67 @@ def test_mutation_coverage_scored_formula_turns_red():
     assert broken["coverage"] == pytest.approx(broken["scored"] / broken["events"])
     assert broken["coverage"] == pytest.approx(5 / 6)
     assert broken["coverage"] != ok["coverage"]
+
+
+CRLF_MUTANTS = sorted(MUTANT_EDITS)
+
+
+def crlf_copy_source(tmp_path):
+    """把现行源码写成临时复制里的 CRLF 文件，再按 file 读回三种文本。
+
+    返回 (主仓原始字节, 归一后的 LF 文本, 复制里读回的 CRLF 文本, 复制文件路径)。
+    """
+    with open(MODULE_PATH, "rb") as fh:
+        raw = fh.read()
+    lf_text = raw.decode("utf-8").replace("\r\n", "\n")
+    copy_path = os.path.join(str(tmp_path), "world_process.py")
+    with open(copy_path, "wb") as fh:
+        fh.write(lf_text.replace("\n", "\r\n").encode("utf-8"))
+    with open(copy_path, "r", encoding="utf-8", newline="") as fh:
+        crlf_text = fh.read()
+    return raw, lf_text, crlf_text, copy_path
+
+
+def echo_probe_snapshot(module):
+    """在固定输入上取一次读数；两份副本的读数逐字比对用这个快照。"""
+    dev = seq([("x", 2, "stop"), ("x", 7, "turn"), ("x", 12, "stop"),
+               ("x", 17, "turn"), ("x", 22, "stop"), ("x", 27, "turn")])
+    holdout = seq([("x", 100, "stop"), ("x", 105, "turn"), ("x", 108, "stop"),
+                   ("w", 112, "turn"), ("y", 115, "turn")])
+    return json.dumps({"readings": module.evaluate_event_echo(dev, holdout),
+                       "split": module.echo_split(holdout, 0.4)},
+                      sort_keys=True, ensure_ascii=False)
+
+
+@pytest.mark.parametrize("name", CRLF_MUTANTS)
+def test_mutant_from_crlf_copy_matches_lf_copy_and_reads_only_copy(name, tmp_path):
+    """CRLF 检出：临时复制里的 CRLF 源码与 LF 源码生成同一份副本、同一读数。"""
+    raw, lf_text, crlf_text, copy_path = crlf_copy_source(tmp_path)
+    with open(copy_path, "rb") as fh:
+        assert b"\r\n" in fh.read()
+    assert "\r\n" in crlf_text and "\r\n" not in lf_text
+    lf_body = mutant_source(name, lf_text)
+    crlf_body = mutant_source(name, crlf_text)
+    # 入口统一换行后两种落盘的替换计数都唯一，副本逐字相同且不含 CR。
+    assert crlf_body == lf_body
+    assert "\r" not in crlf_body and crlf_body != lf_text
+    # 副本由本测试写进临时复制目录再执行；加载路径不在主仓源码上。
+    path = os.path.join(str(tmp_path), name + ".py")
+    with open(path, "w", encoding="utf-8", newline="") as fh:
+        fh.write(crlf_body)
+    spec = importlib.util.spec_from_file_location("echo_crlf_" + name, path)
+    module = importlib.util.module_from_spec(spec)
+    sys.modules[spec.name] = module
+    spec.loader.exec_module(module)
+    assert os.path.realpath(module.__file__) == os.path.realpath(path)
+    assert os.path.realpath(module.__file__) != os.path.realpath(MODULE_PATH)
+    # 与本会话由现行源码生成的同名变异副本比对读数。
+    reference = load_mutant(name)
+    assert os.path.realpath(reference.__file__) != os.path.realpath(MODULE_PATH)
+    assert echo_probe_snapshot(module) == echo_probe_snapshot(reference)
+    # 生产源文件在本条测试前后逐字节相同。
+    with open(MODULE_PATH, "rb") as fh:
+        assert fh.read() == raw
 
 
 if __name__ == "__main__":

@@ -1,0 +1,673 @@
+{
+  "actual_tuple": {
+    "a": {
+      "abs_tick_error": 0,
+      "actual_eid": "x",
+      "actual_event": "stop",
+      "actual_tick": 105,
+      "end_state": "hit",
+      "hit": true,
+      "predicted_eid": "x",
+      "predicted_event": "stop",
+      "predicted_tick": 105,
+      "tick": 100
+    },
+    "actual_next_ignored": true,
+    "actual_triple_in_stream": true,
+    "ok": true,
+    "same_response_object": true
+  },
+  "cross_entity": {
+    "assoc_row": {
+      "consistency": 1.0,
+      "count": 4,
+      "lag": 5,
+      "lag_consistency": 1.0,
+      "lag_counts": {
+        "5": 4
+      },
+      "source_eid": "alpha",
+      "source_event": "stop",
+      "sources_total": 4,
+      "sources_with_pair": 4,
+      "target_eid": "beta",
+      "target_event": "turn",
+      "triggers": 4
+    },
+    "independent": {
+      "consistency": 1.0,
+      "count": 4,
+      "lag_consistency": 1.0,
+      "main_lag": 5,
+      "pair_total": 4,
+      "sources_total": 4,
+      "with_response_sources": 4
+    },
+    "ok": true
+  },
+  "models_and_coverage": {
+    "beyond_ok": true,
+    "beyond_rows": 2,
+    "detail": [
+      {
+        "abs_tick_error": 0,
+        "actual_eid": "x",
+        "actual_event": "stop",
+        "actual_tick": 105,
+        "end_state": "hit",
+        "hit": true,
+        "predicted_tick": 105,
+        "tick": 100
+      },
+      {
+        "abs_tick_error": 5,
+        "actual_eid": "x",
+        "actual_event": "stop",
+        "actual_tick": 115,
+        "end_state": "missed",
+        "hit": false,
+        "predicted_tick": 110,
+        "tick": 105
+      },
+      {
+        "abs_tick_error": null,
+        "actual_eid": null,
+        "actual_event": null,
+        "actual_tick": null,
+        "end_state": "no_prediction",
+        "hit": false,
+        "predicted_tick": null,
+        "tick": 110
+      },
+      {
+        "abs_tick_error": 0,
+        "actual_eid": "x",
+        "actual_event": "stop",
+        "actual_tick": 120,
+        "end_state": "hit",
+        "hit": true,
+        "predicted_tick": 120,
+        "tick": 115
+      },
+      {
+        "abs_tick_error": null,
+        "actual_eid": "x",
+        "actual_event": "stop",
+        "actual_tick": 122,
+        "end_state": "beyond_window",
+        "hit": false,
+        "predicted_tick": 125,
+        "tick": 120
+      },
+      {
+        "abs_tick_error": null,
+        "actual_eid": null,
+        "actual_event": null,
+        "actual_tick": null,
+        "end_state": "beyond_window",
+        "hit": false,
+        "predicted_tick": 127,
+        "tick": 122
+      }
+    ],
+    "holdout_events": 6,
+    "missed_ok": true,
+    "missed_rows": 1,
+    "models": {
+      "lag_model": {
+        "coverage": 0.833333,
+        "coverage_ok": true,
+        "events": 6,
+        "hits": 2,
+        "mae": 1.666667,
+        "misses": 4,
+        "no_prediction": 1,
+        "ok": true,
+        "partition_ok": true,
+        "prediction_beyond_window": 2,
+        "prediction_count_ok": true,
+        "predictions": 5,
+        "scored": 3,
+        "scored_rate": 0.5,
+        "unscored": 3
+      },
+      "no_delay_model": {
+        "coverage": 0.833333,
+        "coverage_ok": true,
+        "events": 6,
+        "hits": 0,
+        "mae": 5.5,
+        "misses": 6,
+        "no_prediction": 1,
+        "ok": true,
+        "partition_ok": true,
+        "prediction_beyond_window": 0,
+        "prediction_count_ok": true,
+        "predictions": 5,
+        "scored": 5,
+        "scored_rate": 0.833333,
+        "unscored": 1
+      }
+    },
+    "no_prediction_ok": true,
+    "no_prediction_rows": 1,
+    "ok": true,
+    "same_trigger_and_target": true
+  },
+  "negative_hits": {
+    "ok": true,
+    "positive_control": {
+      "hits": 4,
+      "ok": true,
+      "predictions": 5
+    },
+    "same_tick_self": {
+      "lag_model": {
+        "abs_tick_errors": [],
+        "coverage": 0.0,
+        "events": 2,
+        "hit_rate": 0.0,
+        "hits": 0,
+        "mean_abs_tick_error": null,
+        "misses": 2,
+        "no_prediction": 2,
+        "prediction_beyond_window": 0,
+        "predictions": 0,
+        "scored": 0,
+        "scored_rate": 0.0,
+        "unresolved_window_end": 0,
+        "unscored": 2
+      },
+      "ok": true
+    },
+    "self_source": {
+      "hits": 0,
+      "ok": true,
+      "predictions": 0
+    },
+    "wrong_entity": {
+      "all_rows": [
+        {
+          "actual_tick": 110,
+          "end_state": "missed",
+          "hit": false,
+          "predicted_tick": 105,
+          "tick": 100
+        },
+        {
+          "actual_tick": null,
+          "end_state": "no_prediction",
+          "hit": false,
+          "predicted_tick": null,
+          "tick": 105
+        },
+        {
+          "actual_tick": null,
+          "end_state": "beyond_window",
+          "hit": false,
+          "predicted_tick": 115,
+          "tick": 110
+        }
+      ],
+      "ok": true,
+      "row0": {
+        "actual_eid": "x",
+        "actual_event": "stop",
+        "actual_tick": 110,
+        "end_state": "missed",
+        "hit": false,
+        "predicted_eid": "x",
+        "predicted_event": "stop",
+        "predicted_tick": 105,
+        "tick": 100
+      }
+    },
+    "wrong_type": {
+      "ok": true,
+      "row0": {
+        "abs_tick_error": 5,
+        "actual_eid": "x",
+        "actual_event": "stop",
+        "actual_tick": 110,
+        "end_state": "missed",
+        "hit": false,
+        "predicted_eid": "x",
+        "predicted_event": "stop",
+        "predicted_tick": 105,
+        "tick": 100
+      }
+    }
+  },
+  "seed_calibration": {
+    "assoc_at_0": 300,
+    "assoc_at_0.7": 0,
+    "max_consistency_at_0": 0.666667,
+    "note": "只复现门槛量级，不作统计检验，不保证随机序列不出现偶然候选",
+    "seeds": [
+      1000,
+      1299
+    ],
+    "trials": 300
+  },
+  "source_sha256": {
+    "core.py": "5fc2ad929702c9b8a2087e755faa2835354ce974f09c0bffe1c46de02403be82",
+    "git_head": "71b6c00",
+    "process_ops.py": "59cde8f925fac077764acbba713c1de13432a22c6f8904d7fbe290019a93f2e7",
+    "world_process.py": "950f3d9669ffaf5cc9ee63c71e3f55cc21ebba00ede6d70649454cacf8a74659"
+  },
+  "split_sweep_n20": {
+    "bad": [],
+    "pass": true,
+    "rows": [
+      {
+        "boundary_after_dev": false,
+        "f": 0.0,
+        "got": {
+          "boundary_tick": null,
+          "dev_events": 20,
+          "dev_last_tick": 97,
+          "events": 20,
+          "holdout_events": 0,
+          "holdout_first_tick": null
+        },
+        "ok": true,
+        "want": {
+          "boundary_tick": null,
+          "dev_events": 20,
+          "dev_last_tick": 97,
+          "events": 20,
+          "holdout_events": 0,
+          "holdout_first_tick": null
+        }
+      },
+      {
+        "boundary_after_dev": true,
+        "f": 0.1,
+        "got": {
+          "boundary_tick": 92,
+          "dev_events": 18,
+          "dev_last_tick": 87,
+          "events": 20,
+          "holdout_events": 2,
+          "holdout_first_tick": 92
+        },
+        "ok": true,
+        "want": {
+          "boundary_tick": 92,
+          "dev_events": 18,
+          "dev_last_tick": 87,
+          "events": 20,
+          "holdout_events": 2,
+          "holdout_first_tick": 92
+        }
+      },
+      {
+        "boundary_after_dev": true,
+        "f": 0.3,
+        "got": {
+          "boundary_tick": 72,
+          "dev_events": 14,
+          "dev_last_tick": 67,
+          "events": 20,
+          "holdout_events": 6,
+          "holdout_first_tick": 72
+        },
+        "ok": true,
+        "want": {
+          "boundary_tick": 72,
+          "dev_events": 14,
+          "dev_last_tick": 67,
+          "events": 20,
+          "holdout_events": 6,
+          "holdout_first_tick": 72
+        }
+      },
+      {
+        "boundary_after_dev": true,
+        "f": 0.5,
+        "got": {
+          "boundary_tick": 52,
+          "dev_events": 10,
+          "dev_last_tick": 47,
+          "events": 20,
+          "holdout_events": 10,
+          "holdout_first_tick": 52
+        },
+        "ok": true,
+        "want": {
+          "boundary_tick": 52,
+          "dev_events": 10,
+          "dev_last_tick": 47,
+          "events": 20,
+          "holdout_events": 10,
+          "holdout_first_tick": 52
+        }
+      },
+      {
+        "boundary_after_dev": true,
+        "f": 0.7,
+        "got": {
+          "boundary_tick": 32,
+          "dev_events": 6,
+          "dev_last_tick": 27,
+          "events": 20,
+          "holdout_events": 14,
+          "holdout_first_tick": 32
+        },
+        "ok": true,
+        "want": {
+          "boundary_tick": 32,
+          "dev_events": 6,
+          "dev_last_tick": 27,
+          "events": 20,
+          "holdout_events": 14,
+          "holdout_first_tick": 32
+        }
+      },
+      {
+        "boundary_after_dev": false,
+        "f": 0.99,
+        "got": {
+          "boundary_tick": 2,
+          "dev_events": 0,
+          "dev_last_tick": null,
+          "events": 20,
+          "holdout_events": 20,
+          "holdout_first_tick": 2
+        },
+        "ok": true,
+        "want": {
+          "boundary_tick": 2,
+          "dev_events": 0,
+          "dev_last_tick": null,
+          "events": 20,
+          "holdout_events": 20,
+          "holdout_first_tick": 2
+        }
+      },
+      {
+        "boundary_after_dev": false,
+        "f": 1.0,
+        "got": {
+          "boundary_tick": 2,
+          "dev_events": 0,
+          "dev_last_tick": null,
+          "events": 20,
+          "holdout_events": 20,
+          "holdout_first_tick": 2
+        },
+        "ok": true,
+        "want": {
+          "boundary_tick": 2,
+          "dev_events": 0,
+          "dev_last_tick": null,
+          "events": 20,
+          "holdout_events": 20,
+          "holdout_first_tick": 2
+        }
+      }
+    ]
+  },
+  "split_tick_groups": {
+    "cases": {
+      "f0": {
+        "dev_events": 6,
+        "dev_ticks": [
+          10,
+          20,
+          30,
+          40
+        ],
+        "events": 6,
+        "holdout_events": 0,
+        "holdout_ticks": [],
+        "ok": true,
+        "overlap_ticks": [],
+        "partition_ok": true,
+        "same_tick_grouped": true
+      },
+      "f1": {
+        "dev_events": 0,
+        "dev_ticks": [],
+        "events": 6,
+        "holdout_events": 6,
+        "holdout_ticks": [
+          10,
+          20,
+          30,
+          40
+        ],
+        "ok": true,
+        "overlap_ticks": [],
+        "partition_ok": true,
+        "same_tick_grouped": true
+      },
+      "组中_0.50": {
+        "dev_events": 2,
+        "dev_ticks": [
+          10,
+          20
+        ],
+        "events": 6,
+        "holdout_events": 4,
+        "holdout_ticks": [
+          30,
+          40
+        ],
+        "ok": true,
+        "overlap_ticks": [],
+        "partition_ok": true,
+        "same_tick_grouped": true
+      },
+      "组末_0.50": {
+        "dev_events": 1,
+        "dev_ticks": [
+          10
+        ],
+        "events": 6,
+        "holdout_events": 5,
+        "holdout_ticks": [
+          20,
+          30,
+          40
+        ],
+        "ok": true,
+        "overlap_ticks": [],
+        "partition_ok": true,
+        "same_tick_grouped": true
+      },
+      "组首_0.65": {
+        "dev_events": 2,
+        "dev_ticks": [
+          10,
+          20
+        ],
+        "events": 6,
+        "holdout_events": 4,
+        "holdout_ticks": [
+          30,
+          40
+        ],
+        "ok": true,
+        "overlap_ticks": [],
+        "partition_ok": true,
+        "same_tick_grouped": true
+      }
+    },
+    "pass": true
+  },
+  "two_formulas": {
+    "has_distinct_pair": true,
+    "ok": true,
+    "rows": [
+      {
+        "consistency": 0.8,
+        "count": 4,
+        "formula_a_ok": true,
+        "formula_b_ok": true,
+        "lag": 10,
+        "lag_consistency": 1.0,
+        "lag_counts": {
+          "10": 4
+        },
+        "target_eid": "x",
+        "target_event": "stop",
+        "triggers": 5
+      },
+      {
+        "consistency": 1.0,
+        "count": 1,
+        "formula_a_ok": true,
+        "formula_b_ok": true,
+        "lag": 9,
+        "lag_consistency": 1.0,
+        "lag_counts": {
+          "9": 1
+        },
+        "target_eid": "x",
+        "target_event": "stop",
+        "triggers": 1
+      },
+      {
+        "consistency": 1.0,
+        "count": 1,
+        "formula_a_ok": true,
+        "formula_b_ok": true,
+        "lag": 9,
+        "lag_consistency": 1.0,
+        "lag_counts": {
+          "9": 1
+        },
+        "target_eid": "x",
+        "target_event": "stop",
+        "triggers": 1
+      },
+      {
+        "consistency": 0.2,
+        "count": 1,
+        "formula_a_ok": true,
+        "formula_b_ok": true,
+        "lag": 1,
+        "lag_consistency": 0.5,
+        "lag_counts": {
+          "1": 1,
+          "11": 1
+        },
+        "target_eid": "y",
+        "target_event": "stop",
+        "triggers": 5
+      },
+      {
+        "consistency": 0.4,
+        "count": 2,
+        "formula_a_ok": true,
+        "formula_b_ok": true,
+        "lag": 1,
+        "lag_consistency": 0.666667,
+        "lag_counts": {
+          "1": 2,
+          "11": 1
+        },
+        "target_eid": "z",
+        "target_event": "stop",
+        "triggers": 5
+      },
+      {
+        "consistency": 1.0,
+        "count": 1,
+        "formula_a_ok": true,
+        "formula_b_ok": true,
+        "lag": 10,
+        "lag_consistency": 1.0,
+        "lag_counts": {
+          "10": 1
+        },
+        "target_eid": "z",
+        "target_event": "stop",
+        "triggers": 1
+      },
+      {
+        "consistency": 0.4,
+        "count": 2,
+        "formula_a_ok": true,
+        "formula_b_ok": true,
+        "lag": 1,
+        "lag_consistency": 0.666667,
+        "lag_counts": {
+          "1": 2,
+          "11": 1
+        },
+        "target_eid": "y",
+        "target_event": "turn",
+        "triggers": 5
+      },
+      {
+        "consistency": 1.0,
+        "count": 1,
+        "formula_a_ok": true,
+        "formula_b_ok": true,
+        "lag": 10,
+        "lag_consistency": 1.0,
+        "lag_counts": {
+          "10": 1
+        },
+        "target_eid": "y",
+        "target_event": "turn",
+        "triggers": 1
+      },
+      {
+        "consistency": 1.0,
+        "count": 2,
+        "formula_a_ok": true,
+        "formula_b_ok": true,
+        "lag": 9,
+        "lag_consistency": 1.0,
+        "lag_counts": {
+          "9": 2
+        },
+        "target_eid": "x",
+        "target_event": "stop",
+        "triggers": 2
+      },
+      {
+        "consistency": 0.5,
+        "count": 1,
+        "formula_a_ok": true,
+        "formula_b_ok": true,
+        "lag": 10,
+        "lag_consistency": 1.0,
+        "lag_counts": {
+          "10": 1
+        },
+        "target_eid": "y",
+        "target_event": "stop",
+        "triggers": 2
+      },
+      {
+        "consistency": 0.5,
+        "count": 1,
+        "formula_a_ok": true,
+        "formula_b_ok": true,
+        "lag": 10,
+        "lag_consistency": 1.0,
+        "lag_counts": {
+          "10": 1
+        },
+        "target_eid": "z",
+        "target_event": "stop",
+        "triggers": 2
+      }
+    ]
+  },
+  "unrelated_invariance": {
+    "clean_assoc": 1,
+    "clean_hits": 4,
+    "clean_mae": 0.0,
+    "common_rows": 5,
+    "diffs": [],
+    "noisy_assoc_note": "无关实体在留出段插入，不参与开发段学习",
+    "noisy_hits": 4,
+    "noisy_mae": 0.0,
+    "ok": true
+  }
+}

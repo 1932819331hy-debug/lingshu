@@ -1,0 +1,172 @@
+{
+  "all_isolated": true,
+  "checks": [
+    {
+      "isolated": true,
+      "mutant": "wp_m1_no_eid",
+      "mutant_readings": {
+        "actual_eid": "x",
+        "actual_tick": 105,
+        "hit": true,
+        "predicted_tick": 105
+      },
+      "mutant_target_holds": false,
+      "note": "命中判据去掉 eid",
+      "repo_readings": {
+        "actual_eid": null,
+        "actual_tick": null,
+        "hit": false,
+        "predicted_tick": 105
+      },
+      "repo_target_holds": true
+    },
+    {
+      "isolated": true,
+      "mutant": "wp_m2_adjacent",
+      "mutant_readings": {
+        "base": [
+          10,
+          6
+        ],
+        "noisy": null
+      },
+      "mutant_target_holds": false,
+      "note": "配对退化成相邻事件",
+      "repo_readings": {
+        "base": [
+          10,
+          6
+        ],
+        "noisy": [
+          10,
+          6
+        ]
+      },
+      "repo_target_holds": true
+    },
+    {
+      "isolated": true,
+      "mutant": "wp_m3_count_split",
+      "mutant_readings": {
+        "dev": 3,
+        "dev_last_tick": 30,
+        "dev_tick30": 1,
+        "holdout": 3,
+        "holdout_first_tick": 30,
+        "holdout_tick30": 2
+      },
+      "mutant_target_holds": false,
+      "note": "切分去掉同 tick 组回退",
+      "repo_readings": {
+        "dev": 2,
+        "dev_last_tick": 20,
+        "dev_tick30": 0,
+        "holdout": 4,
+        "holdout_first_tick": 30,
+        "holdout_tick30": 3
+      },
+      "repo_target_holds": true
+    },
+    {
+      "isolated": true,
+      "mutant": "wp_m4_split_reversed",
+      "mutant_readings": {
+        "dev": 6,
+        "holdout": 14,
+        "holdout_ticks": [
+          32,
+          37,
+          42,
+          47,
+          52,
+          57,
+          62,
+          67,
+          72,
+          77,
+          82,
+          87,
+          92,
+          97
+        ],
+        "tail_ticks": [
+          72,
+          77,
+          82,
+          87,
+          92,
+          97
+        ]
+      },
+      "mutant_target_holds": false,
+      "note": "颠倒切分方向",
+      "repo_readings": {
+        "dev": 14,
+        "holdout": 6,
+        "holdout_ticks": [
+          72,
+          77,
+          82,
+          87,
+          92,
+          97
+        ],
+        "tail_ticks": [
+          72,
+          77,
+          82,
+          87,
+          92,
+          97
+        ]
+      },
+      "repo_target_holds": true
+    },
+    {
+      "isolated": true,
+      "mutant": "wp_m5_next_event_scoring",
+      "mutant_readings": {
+        "full": [
+          1,
+          2.0
+        ],
+        "plain": [
+          3,
+          0.0
+        ]
+      },
+      "mutant_target_holds": false,
+      "note": "响应退化成全流下一事件",
+      "repo_readings": {
+        "full": [
+          3,
+          0.0
+        ],
+        "plain": [
+          3,
+          0.0
+        ]
+      },
+      "repo_target_holds": true
+    },
+    {
+      "isolated": true,
+      "mutant": "wp_m6_coverage_scored",
+      "mutant_readings": {
+        "coverage": 0.833333,
+        "events": 6,
+        "predictions": 6,
+        "scored": 5
+      },
+      "mutant_target_holds": false,
+      "note": "coverage 换成 scored 除事件数",
+      "repo_readings": {
+        "coverage": 1.0,
+        "events": 6,
+        "predictions": 6,
+        "scored": 5
+      },
+      "repo_target_holds": true
+    }
+  ]
+}

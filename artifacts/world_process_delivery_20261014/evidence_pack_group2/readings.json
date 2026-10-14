@@ -1,0 +1,2916 @@
+{
+  "camera": {
+    "completion_gif": {
+      "cx": 5.5,
+      "cy": 5.5,
+      "cz": -8,
+      "fov_deg": 48,
+      "pitch": -0.223957,
+      "yaw": 0
+    },
+    "composition_gif": {
+      "cx": 12,
+      "cy": 3,
+      "cz": -2,
+      "fov_deg": 48,
+      "pitch": -0.197396,
+      "yaw": 0
+    },
+    "echo": {
+      "cx": 5.5,
+      "cy": 5.5,
+      "cz": -8,
+      "fov_deg": 48,
+      "pitch": -0.223957,
+      "yaw": 0
+    },
+    "gif": {
+      "cx": 7.5,
+      "cy": 7.5,
+      "cz": -22.36396103067893,
+      "fov_deg": 48,
+      "pitch": -0.230447,
+      "yaw": 0
+    },
+    "group": {
+      "cx": 4.375,
+      "cy": 5.375,
+      "cz": -17.5,
+      "fov_deg": 48,
+      "pitch": -0.223353,
+      "yaw": 0
+    },
+    "joint": {
+      "cx": 11,
+      "cy": 3,
+      "cz": -2,
+      "fov_deg": 48,
+      "pitch": -0.197396,
+      "yaw": 0
+    },
+    "panel": {
+      "cx": 11.1,
+      "cy": 3.9000000000000004,
+      "cz": -2.872792206135788,
+      "fov_deg": 48,
+      "pitch": -0.21227,
+      "yaw": 0
+    }
+  },
+  "compare_image": "compare.png",
+  "completion": {
+    "animation": {
+      "camera": "completion_gif",
+      "frame_count": 12,
+      "frames": [
+        {
+          "index": 0,
+          "list": "observed",
+          "list_index": 0,
+          "segment": "prefix",
+          "source": "observed",
+          "tick": 1
+        },
+        {
+          "index": 1,
+          "list": "observed",
+          "list_index": 1,
+          "segment": "prefix",
+          "source": "observed",
+          "tick": 2
+        },
+        {
+          "index": 2,
+          "list": "observed",
+          "list_index": 2,
+          "segment": "prefix",
+          "source": "observed",
+          "tick": 3
+        },
+        {
+          "index": 3,
+          "list": "observed",
+          "list_index": 3,
+          "segment": "prefix",
+          "source": "observed",
+          "tick": 4
+        },
+        {
+          "index": 4,
+          "list": "observed",
+          "list_index": 4,
+          "segment": "prefix",
+          "source": "observed",
+          "tick": 5
+        },
+        {
+          "index": 5,
+          "list": "observed",
+          "list_index": 5,
+          "segment": "prefix",
+          "source": "observed",
+          "tick": 6
+        },
+        {
+          "index": 6,
+          "list": "generated",
+          "list_index": 0,
+          "segment": "tail",
+          "source": "generated",
+          "tick": 7
+        },
+        {
+          "index": 7,
+          "list": "generated",
+          "list_index": 1,
+          "segment": "tail",
+          "source": "generated",
+          "tick": 8
+        },
+        {
+          "index": 8,
+          "list": "generated",
+          "list_index": 2,
+          "segment": "tail",
+          "source": "generated",
+          "tick": 9
+        },
+        {
+          "index": 9,
+          "list": "generated",
+          "list_index": 3,
+          "segment": "tail",
+          "source": "generated",
+          "tick": 10
+        },
+        {
+          "index": 10,
+          "list": "generated",
+          "list_index": 4,
+          "segment": "tail",
+          "source": "generated",
+          "tick": 11
+        },
+        {
+          "index": 11,
+          "list": "generated",
+          "list_index": 5,
+          "segment": "tail",
+          "source": "generated",
+          "tick": 12
+        }
+      ],
+      "gif": "completion.gif",
+      "objects": [
+        {
+          "category": "tree",
+          "color": [
+            60,
+            140,
+            70
+          ],
+          "eid": "landmark",
+          "shape": "pillar"
+        },
+        {
+          "category": "person",
+          "color": [
+            200,
+            160,
+            140
+          ],
+          "eid": "walker",
+          "shape": "pillar"
+        }
+      ],
+      "size": [
+        480,
+        320
+      ],
+      "title_height": 16
+    },
+    "candidates": [
+      {
+        "geometry": {
+          "hit_frames": 6,
+          "score": 1
+        },
+        "hit_frames": 6,
+        "match_score": 1,
+        "matched": true,
+        "matched_samples": 6,
+        "max_frame_error": 0,
+        "mean_frame_error": 0,
+        "reason": "",
+        "source": {
+          "actor": "walker",
+          "index": 0,
+          "kind": "relative_trajectory",
+          "ref": "landmark",
+          "samples": 12,
+          "ticks": [
+            1,
+            12
+          ]
+        },
+        "tail_samples": 6,
+        "timing": {
+          "deltas": [
+            0,
+            0,
+            0,
+            0,
+            0,
+            0
+          ],
+          "hit_frames": 6,
+          "matched": true,
+          "max_abs_delta_ticks": 0,
+          "score": 1
+        }
+      }
+    ],
+    "frame_lists": {
+      "generated": [
+        {
+          "entities": {
+            "landmark": [
+              10,
+              1,
+              10
+            ],
+            "walker": [
+              8,
+              1,
+              10
+            ]
+          },
+          "source": "generated",
+          "tick": 7
+        },
+        {
+          "entities": {
+            "landmark": [
+              10,
+              1,
+              10
+            ],
+            "walker": [
+              8.1,
+              1,
+              10
+            ]
+          },
+          "source": "generated",
+          "tick": 8
+        },
+        {
+          "entities": {
+            "landmark": [
+              10,
+              1,
+              10
+            ],
+            "walker": [
+              7,
+              1,
+              10
+            ]
+          },
+          "source": "generated",
+          "tick": 9
+        },
+        {
+          "entities": {
+            "landmark": [
+              10,
+              1,
+              10
+            ],
+            "walker": [
+              5,
+              1,
+              10
+            ]
+          },
+          "source": "generated",
+          "tick": 10
+        },
+        {
+          "entities": {
+            "landmark": [
+              10,
+              1,
+              10
+            ],
+            "walker": [
+              3,
+              1,
+              10
+            ]
+          },
+          "source": "generated",
+          "tick": 11
+        },
+        {
+          "entities": {
+            "landmark": [
+              10,
+              1,
+              10
+            ],
+            "walker": [
+              1,
+              1,
+              10
+            ]
+          },
+          "source": "generated",
+          "tick": 12
+        }
+      ],
+      "observed": [
+        {
+          "entities": {
+            "landmark": [
+              10,
+              1,
+              10
+            ],
+            "walker": [
+              4,
+              1,
+              10
+            ]
+          },
+          "source": "observed",
+          "tick": 1
+        },
+        {
+          "entities": {
+            "landmark": [
+              10,
+              1,
+              10
+            ],
+            "walker": [
+              5,
+              1,
+              10
+            ]
+          },
+          "source": "observed",
+          "tick": 2
+        },
+        {
+          "entities": {
+            "landmark": [
+              10,
+              1,
+              10
+            ],
+            "walker": [
+              6,
+              1,
+              10
+            ]
+          },
+          "source": "observed",
+          "tick": 3
+        },
+        {
+          "entities": {
+            "landmark": [
+              10,
+              1,
+              10
+            ],
+            "walker": [
+              7,
+              1,
+              10
+            ]
+          },
+          "source": "observed",
+          "tick": 4
+        },
+        {
+          "entities": {
+            "landmark": [
+              10,
+              1,
+              10
+            ],
+            "walker": [
+              8,
+              1,
+              10
+            ]
+          },
+          "source": "observed",
+          "tick": 5
+        },
+        {
+          "entities": {
+            "landmark": [
+              10,
+              1,
+              10
+            ],
+            "walker": [
+              8.2,
+              1,
+              10
+            ]
+          },
+          "source": "observed",
+          "tick": 6
+        }
+      ]
+    },
+    "image": "completion.png",
+    "match": {
+      "geometry": {
+        "hit_frames": 6,
+        "score": 1
+      },
+      "hit_frames": 6,
+      "match_score": 1,
+      "matched": true,
+      "matched_record_index": 5,
+      "matched_record_tick": 6,
+      "matched_samples": 6,
+      "max_frame_error": 0,
+      "mean_frame_error": 0,
+      "reason": "",
+      "source": {
+        "actor": "walker",
+        "index": 0,
+        "kind": "relative_trajectory",
+        "ref": "landmark",
+        "samples": 12,
+        "ticks": [
+          1,
+          12
+        ]
+      },
+      "step": 1,
+      "tail_samples": 6,
+      "tick_offset": 0,
+      "timing": {
+        "deltas": [
+          0,
+          0,
+          0,
+          0,
+          0,
+          0
+        ],
+        "hit_frames": 6,
+        "matched": true,
+        "max_abs_delta_ticks": 0,
+        "score": 1
+      },
+      "translation": [
+        0,
+        0,
+        0
+      ]
+    },
+    "miss": {
+      "candidates": [
+        {
+          "geometry": {
+            "hit_frames": 0,
+            "score": 0
+          },
+          "hit_frames": 0,
+          "match_score": 0,
+          "matched": false,
+          "matched_samples": 0,
+          "max_frame_error": null,
+          "mean_frame_error": null,
+          "reason": "前缀与记录没有可比采样",
+          "source": {
+            "actor": "walker",
+            "index": 0,
+            "kind": "relative_trajectory",
+            "ref": "landmark",
+            "samples": 12,
+            "ticks": [
+              1,
+              12
+            ]
+          },
+          "tail_samples": 12,
+          "timing": {
+            "deltas": [],
+            "hit_frames": 0,
+            "matched": false,
+            "max_abs_delta_ticks": null,
+            "score": 0
+          }
+        }
+      ],
+      "frames": [],
+      "match": null
+    },
+    "objects_in_completed_frame": [
+      {
+        "category": "tree",
+        "center": [
+          10,
+          1,
+          10
+        ],
+        "color": [
+          60,
+          140,
+          70
+        ],
+        "eid": "landmark",
+        "shape": "pillar"
+      },
+      {
+        "category": "person",
+        "center": [
+          1,
+          1,
+          10
+        ],
+        "color": [
+          200,
+          160,
+          140
+        ],
+        "eid": "walker",
+        "shape": "pillar"
+      }
+    ],
+    "objects_in_observed_frame": [
+      {
+        "category": "tree",
+        "center": [
+          10,
+          1,
+          10
+        ],
+        "color": [
+          60,
+          140,
+          70
+        ],
+        "eid": "landmark",
+        "shape": "pillar"
+      },
+      {
+        "category": "person",
+        "center": [
+          8.2,
+          1,
+          10
+        ],
+        "color": [
+          200,
+          160,
+          140
+        ],
+        "eid": "walker",
+        "shape": "pillar"
+      }
+    ],
+    "prefix_ticks": 6,
+    "seam": {
+      "actor_gap": 0.2,
+      "first_tick": 7,
+      "matched_record_index": 5,
+      "matched_record_tick": 6,
+      "prefix_tick": 6,
+      "ref_anchor": [
+        10,
+        1,
+        10
+      ],
+      "step": 1
+    },
+    "ticks": [
+      7,
+      12
+    ]
+  },
+  "composition": {
+    "animation": {
+      "camera": "composition_gif",
+      "frame_count": 10,
+      "frames": [
+        {
+          "index": 0,
+          "list": "segment_1",
+          "list_index": 0,
+          "segment": "seg1",
+          "source": "generated",
+          "tick": 1
+        },
+        {
+          "index": 1,
+          "list": "segment_1",
+          "list_index": 1,
+          "segment": "seg1",
+          "source": "generated",
+          "tick": 2
+        },
+        {
+          "index": 2,
+          "list": "segment_1",
+          "list_index": 2,
+          "segment": "seg1",
+          "source": "generated",
+          "tick": 3
+        },
+        {
+          "index": 3,
+          "list": "segment_1",
+          "list_index": 3,
+          "segment": "seg1",
+          "source": "generated",
+          "tick": 4
+        },
+        {
+          "index": 4,
+          "list": "segment_1",
+          "list_index": 4,
+          "segment": "seg1",
+          "source": "generated",
+          "tick": 5
+        },
+        {
+          "index": 5,
+          "list": "segment_2",
+          "list_index": 0,
+          "segment": "joint",
+          "source": "generated",
+          "tick": 6
+        },
+        {
+          "index": 6,
+          "list": "segment_2",
+          "list_index": 1,
+          "segment": "seg2",
+          "source": "generated",
+          "tick": 7
+        },
+        {
+          "index": 7,
+          "list": "segment_2",
+          "list_index": 2,
+          "segment": "seg2",
+          "source": "generated",
+          "tick": 8
+        },
+        {
+          "index": 8,
+          "list": "segment_2",
+          "list_index": 3,
+          "segment": "seg2",
+          "source": "generated",
+          "tick": 9
+        },
+        {
+          "index": 9,
+          "list": "segment_2",
+          "list_index": 4,
+          "segment": "seg2",
+          "source": "generated",
+          "tick": 10
+        }
+      ],
+      "gif": "composition.gif",
+      "objects": [
+        {
+          "category": "person",
+          "color": [
+            200,
+            160,
+            140
+          ],
+          "eid": "hero",
+          "shape": "pillar"
+        },
+        {
+          "category": "tree",
+          "color": [
+            60,
+            140,
+            70
+          ],
+          "eid": "mark",
+          "shape": "pillar"
+        }
+      ],
+      "size": [
+        480,
+        320
+      ],
+      "title_height": 16
+    },
+    "frame_lists": {
+      "segment_1": [
+        {
+          "entities": {
+            "hero": [
+              14,
+              1,
+              5
+            ],
+            "mark": [
+              10,
+              1,
+              5
+            ]
+          },
+          "source": "generated",
+          "tick": 1
+        },
+        {
+          "entities": {
+            "hero": [
+              13.5,
+              1,
+              5
+            ],
+            "mark": [
+              10,
+              1,
+              5
+            ]
+          },
+          "source": "generated",
+          "tick": 2
+        },
+        {
+          "entities": {
+            "hero": [
+              13,
+              1,
+              5
+            ],
+            "mark": [
+              10,
+              1,
+              5
+            ]
+          },
+          "source": "generated",
+          "tick": 3
+        },
+        {
+          "entities": {
+            "hero": [
+              12.5,
+              1,
+              5
+            ],
+            "mark": [
+              10,
+              1,
+              5
+            ]
+          },
+          "source": "generated",
+          "tick": 4
+        },
+        {
+          "entities": {
+            "hero": [
+              12,
+              1,
+              5
+            ],
+            "mark": [
+              10,
+              1,
+              5
+            ]
+          },
+          "source": "generated",
+          "tick": 5
+        }
+      ],
+      "segment_2": [
+        {
+          "entities": {
+            "hero": [
+              12,
+              1,
+              5
+            ],
+            "mark": [
+              10,
+              1,
+              5
+            ]
+          },
+          "source": "generated",
+          "tick": 6
+        },
+        {
+          "entities": {
+            "hero": [
+              11.5,
+              1,
+              5.5
+            ],
+            "mark": [
+              10,
+              1,
+              5
+            ]
+          },
+          "source": "generated",
+          "tick": 7
+        },
+        {
+          "entities": {
+            "hero": [
+              11,
+              1,
+              6
+            ],
+            "mark": [
+              10,
+              1,
+              5
+            ]
+          },
+          "source": "generated",
+          "tick": 8
+        },
+        {
+          "entities": {
+            "hero": [
+              10.5,
+              1,
+              6.5
+            ],
+            "mark": [
+              10,
+              1,
+              5
+            ]
+          },
+          "source": "generated",
+          "tick": 9
+        },
+        {
+          "entities": {
+            "hero": [
+              10,
+              1,
+              7
+            ],
+            "mark": [
+              10,
+              1,
+              5
+            ]
+          },
+          "source": "generated",
+          "tick": 10
+        }
+      ]
+    },
+    "image": "composition.png",
+    "joint": {
+      "actor_gap": 0,
+      "actor_y_gap": 0,
+      "continuous": true,
+      "joint_tol": 0.5,
+      "offset_end_first": [
+        2,
+        0
+      ],
+      "offset_start_second": [
+        2,
+        0
+      ],
+      "on": "ref",
+      "ref": [
+        10,
+        1,
+        5
+      ],
+      "ref_gap": 0,
+      "ref_y_gap": 0,
+      "tick": 5
+    },
+    "objects_in_panels": [
+      {
+        "category": "person",
+        "center": [
+          12,
+          1,
+          5
+        ],
+        "color": [
+          200,
+          160,
+          140
+        ],
+        "eid": "hero",
+        "shape": "pillar"
+      },
+      {
+        "category": "person",
+        "center": [
+          12,
+          1,
+          5
+        ],
+        "color": [
+          200,
+          160,
+          140
+        ],
+        "eid": "hero",
+        "shape": "pillar"
+      },
+      {
+        "category": "person",
+        "center": [
+          10,
+          1,
+          7
+        ],
+        "color": [
+          200,
+          160,
+          140
+        ],
+        "eid": "hero",
+        "shape": "pillar"
+      },
+      {
+        "category": "tree",
+        "center": [
+          10,
+          1,
+          5
+        ],
+        "color": [
+          60,
+          140,
+          70
+        ],
+        "eid": "mark",
+        "shape": "pillar"
+      },
+      {
+        "category": "tree",
+        "center": [
+          10,
+          1,
+          5
+        ],
+        "color": [
+          60,
+          140,
+          70
+        ],
+        "eid": "mark",
+        "shape": "pillar"
+      },
+      {
+        "category": "tree",
+        "center": [
+          10,
+          1,
+          5
+        ],
+        "color": [
+          60,
+          140,
+          70
+        ],
+        "eid": "mark",
+        "shape": "pillar"
+      }
+    ],
+    "relations": {
+      "actor": "hero",
+      "first": {
+        "end_phase": null,
+        "roles": {},
+        "start_phase": null,
+        "type": null
+      },
+      "ref": "mark",
+      "roles_rebound": true,
+      "same_type": null,
+      "second": {
+        "end_phase": null,
+        "roles": {},
+        "start_phase": null,
+        "type": null
+      },
+      "shared_actor": true,
+      "shared_ref": true
+    },
+    "ticks": [
+      1,
+      10
+    ],
+    "transform": {
+      "scale": 1,
+      "tick_gap": 1,
+      "translation": [
+        10,
+        0,
+        5
+      ],
+      "yaw": 0
+    }
+  },
+  "echo": {
+    "associations": [
+      {
+        "after": "stop",
+        "before": "turn",
+        "consistency": 1,
+        "count": 5,
+        "lag": 5,
+        "lag_consistency": 1,
+        "lag_counts": {
+          "5": 5
+        },
+        "source_eid": "courier",
+        "source_event": "stop",
+        "sources_total": 6,
+        "sources_with_pair": 5,
+        "target_eid": "courier",
+        "target_event": "turn",
+        "triggers": 5
+      },
+      {
+        "after": "turn",
+        "before": "stop",
+        "consistency": 1,
+        "count": 5,
+        "lag": 8,
+        "lag_consistency": 1,
+        "lag_counts": {
+          "8": 5
+        },
+        "source_eid": "courier",
+        "source_event": "turn",
+        "sources_total": 5,
+        "sources_with_pair": 5,
+        "target_eid": "courier",
+        "target_event": "stop",
+        "triggers": 5
+      }
+    ],
+    "events": [
+      {
+        "dt": 1,
+        "eid": "courier",
+        "event": "stop",
+        "lag_from_prev": 0,
+        "tick": 4
+      },
+      {
+        "dt": 1,
+        "eid": "courier",
+        "event": "turn",
+        "lag_from_prev": 5,
+        "tick": 9
+      },
+      {
+        "dt": 1,
+        "eid": "courier",
+        "event": "stop",
+        "lag_from_prev": 8,
+        "tick": 17
+      },
+      {
+        "dt": 1,
+        "eid": "courier",
+        "event": "turn",
+        "lag_from_prev": 5,
+        "tick": 22
+      },
+      {
+        "dt": 1,
+        "eid": "courier",
+        "event": "stop",
+        "lag_from_prev": 8,
+        "tick": 30
+      },
+      {
+        "dt": 1,
+        "eid": "courier",
+        "event": "turn",
+        "lag_from_prev": 5,
+        "tick": 35
+      },
+      {
+        "dt": 1,
+        "eid": "courier",
+        "event": "stop",
+        "lag_from_prev": 8,
+        "tick": 43
+      },
+      {
+        "dt": 1,
+        "eid": "courier",
+        "event": "turn",
+        "lag_from_prev": 5,
+        "tick": 48
+      },
+      {
+        "dt": 1,
+        "eid": "courier",
+        "event": "stop",
+        "lag_from_prev": 8,
+        "tick": 56
+      },
+      {
+        "dt": 1,
+        "eid": "courier",
+        "event": "turn",
+        "lag_from_prev": 5,
+        "tick": 61
+      },
+      {
+        "dt": 1,
+        "eid": "courier",
+        "event": "stop",
+        "lag_from_prev": 8,
+        "tick": 69
+      },
+      {
+        "dt": 1,
+        "eid": "courier",
+        "event": "turn",
+        "lag_from_prev": 5,
+        "tick": 74
+      },
+      {
+        "dt": 1,
+        "eid": "courier",
+        "event": "stop",
+        "lag_from_prev": 8,
+        "tick": 82
+      },
+      {
+        "dt": 1,
+        "eid": "courier",
+        "event": "turn",
+        "lag_from_prev": 5,
+        "tick": 87
+      },
+      {
+        "dt": 1,
+        "eid": "courier",
+        "event": "stop",
+        "lag_from_prev": 8,
+        "tick": 95
+      },
+      {
+        "dt": 1,
+        "eid": "courier",
+        "event": "turn",
+        "lag_from_prev": 5,
+        "tick": 100
+      }
+    ],
+    "image": "echo_timeline.png",
+    "lag_model": {
+      "abs_tick_errors": [
+        0,
+        0,
+        0,
+        0
+      ],
+      "coverage": 1,
+      "events": 5,
+      "hit_rate": 0.8,
+      "hits": 4,
+      "mean_abs_tick_error": 0,
+      "misses": 1,
+      "no_prediction": 0,
+      "prediction_beyond_window": 1,
+      "predictions": 5,
+      "scored": 4,
+      "scored_rate": 0.8,
+      "unresolved_window_end": 1,
+      "unscored": 1
+    },
+    "no_delay_model": {
+      "abs_tick_errors": [
+        8,
+        5,
+        8,
+        5
+      ],
+      "coverage": 1,
+      "events": 5,
+      "hit_rate": 0,
+      "hits": 0,
+      "mean_abs_tick_error": 6.5,
+      "misses": 5,
+      "no_prediction": 0,
+      "prediction_beyond_window": 0,
+      "predictions": 5,
+      "scored": 5,
+      "scored_rate": 1,
+      "unresolved_window_end": 0,
+      "unscored": 0
+    },
+    "split": {
+      "boundary_tick": 74,
+      "dev_events": 11,
+      "dev_last_tick": 69,
+      "events": 16,
+      "holdout_events": 5,
+      "holdout_first_tick": 74,
+      "same_tick_grouped": true
+    },
+    "thresholds": {
+      "holdout_fraction": 0.3,
+      "max_lag": 12,
+      "min_consistency": 0.7,
+      "min_support": 2,
+      "stop_speed": 0.2,
+      "turn_deg": 45
+    },
+    "timeline": {
+      "associations": [
+        {
+          "after": "stop",
+          "before": "turn",
+          "consistency": 1,
+          "count": 5,
+          "lag": 5,
+          "lag_consistency": 1,
+          "lag_counts": {
+            "5": 5
+          },
+          "source_eid": "courier",
+          "source_event": "stop",
+          "sources_total": 6,
+          "sources_with_pair": 5,
+          "target_eid": "courier",
+          "target_event": "turn",
+          "triggers": 5
+        },
+        {
+          "after": "turn",
+          "before": "stop",
+          "consistency": 1,
+          "count": 5,
+          "lag": 8,
+          "lag_consistency": 1,
+          "lag_counts": {
+            "8": 5
+          },
+          "source_eid": "courier",
+          "source_event": "turn",
+          "sources_total": 5,
+          "sources_with_pair": 5,
+          "target_eid": "courier",
+          "target_event": "stop",
+          "triggers": 5
+        }
+      ],
+      "boundary_tick": 74,
+      "colors": {
+        "stop": [
+          70,
+          140,
+          255
+        ],
+        "turn": [
+          255,
+          170,
+          40
+        ]
+      },
+      "events": 16,
+      "lag_model": {
+        "abs_tick_errors": [
+          0,
+          0,
+          0,
+          0
+        ],
+        "coverage": 1,
+        "events": 5,
+        "hit_rate": 0.8,
+        "hits": 4,
+        "mean_abs_tick_error": 0,
+        "misses": 1,
+        "no_prediction": 0,
+        "prediction_beyond_window": 1,
+        "predictions": 5,
+        "scored": 4,
+        "scored_rate": 0.8,
+        "unresolved_window_end": 1,
+        "unscored": 1
+      },
+      "lag_predictions": [
+        {
+          "abs_tick_error": 0,
+          "actual_eid": "courier",
+          "actual_event": "stop",
+          "actual_tick": 82,
+          "end_state": "hit",
+          "hit": true,
+          "predicted_eid": "courier",
+          "predicted_event": "stop",
+          "predicted_tick": 82,
+          "scored": true,
+          "tick": 74
+        },
+        {
+          "abs_tick_error": 0,
+          "actual_eid": "courier",
+          "actual_event": "turn",
+          "actual_tick": 87,
+          "end_state": "hit",
+          "hit": true,
+          "predicted_eid": "courier",
+          "predicted_event": "turn",
+          "predicted_tick": 87,
+          "scored": true,
+          "tick": 82
+        },
+        {
+          "abs_tick_error": 0,
+          "actual_eid": "courier",
+          "actual_event": "stop",
+          "actual_tick": 95,
+          "end_state": "hit",
+          "hit": true,
+          "predicted_eid": "courier",
+          "predicted_event": "stop",
+          "predicted_tick": 95,
+          "scored": true,
+          "tick": 87
+        },
+        {
+          "abs_tick_error": 0,
+          "actual_eid": "courier",
+          "actual_event": "turn",
+          "actual_tick": 100,
+          "end_state": "hit",
+          "hit": true,
+          "predicted_eid": "courier",
+          "predicted_event": "turn",
+          "predicted_tick": 100,
+          "scored": true,
+          "tick": 95
+        },
+        {
+          "abs_tick_error": null,
+          "actual_eid": null,
+          "actual_event": null,
+          "actual_tick": null,
+          "end_state": "beyond_window",
+          "hit": false,
+          "predicted_eid": "courier",
+          "predicted_event": "stop",
+          "predicted_tick": 108,
+          "scored": false,
+          "tick": 100
+        }
+      ],
+      "no_delay_model": {
+        "abs_tick_errors": [
+          8,
+          5,
+          8,
+          5
+        ],
+        "coverage": 1,
+        "events": 5,
+        "hit_rate": 0,
+        "hits": 0,
+        "mean_abs_tick_error": 6.5,
+        "misses": 5,
+        "no_prediction": 0,
+        "prediction_beyond_window": 0,
+        "predictions": 5,
+        "scored": 5,
+        "scored_rate": 1,
+        "unresolved_window_end": 0,
+        "unscored": 0
+      },
+      "no_delay_predictions": [
+        {
+          "abs_tick_error": 8,
+          "actual_eid": "courier",
+          "actual_event": "stop",
+          "actual_tick": 82,
+          "end_state": "missed",
+          "hit": false,
+          "predicted_eid": "courier",
+          "predicted_event": "stop",
+          "predicted_tick": 74,
+          "scored": true,
+          "tick": 74
+        },
+        {
+          "abs_tick_error": 5,
+          "actual_eid": "courier",
+          "actual_event": "turn",
+          "actual_tick": 87,
+          "end_state": "missed",
+          "hit": false,
+          "predicted_eid": "courier",
+          "predicted_event": "turn",
+          "predicted_tick": 82,
+          "scored": true,
+          "tick": 82
+        },
+        {
+          "abs_tick_error": 8,
+          "actual_eid": "courier",
+          "actual_event": "stop",
+          "actual_tick": 95,
+          "end_state": "missed",
+          "hit": false,
+          "predicted_eid": "courier",
+          "predicted_event": "stop",
+          "predicted_tick": 87,
+          "scored": true,
+          "tick": 87
+        },
+        {
+          "abs_tick_error": 5,
+          "actual_eid": "courier",
+          "actual_event": "turn",
+          "actual_tick": 100,
+          "end_state": "missed",
+          "hit": false,
+          "predicted_eid": "courier",
+          "predicted_event": "turn",
+          "predicted_tick": 95,
+          "scored": true,
+          "tick": 95
+        },
+        {
+          "abs_tick_error": null,
+          "actual_eid": null,
+          "actual_event": null,
+          "actual_tick": null,
+          "end_state": "missed",
+          "hit": false,
+          "predicted_eid": "courier",
+          "predicted_event": "stop",
+          "predicted_tick": 100,
+          "scored": true,
+          "tick": 100
+        }
+      ],
+      "predict_color": [
+        255,
+        60,
+        60
+      ],
+      "split": {
+        "boundary_tick": 74,
+        "dev_events": 11,
+        "dev_last_tick": 69,
+        "events": 16,
+        "holdout_events": 5,
+        "holdout_first_tick": 74,
+        "same_tick_grouped": true
+      },
+      "ticks": [
+        4,
+        9,
+        17,
+        22,
+        30,
+        35,
+        43,
+        48,
+        56,
+        61,
+        69,
+        74,
+        82,
+        87,
+        95,
+        100
+      ]
+    }
+  },
+  "generated_by": "tools/demo_world_process.py",
+  "groups": {
+    "early": {
+      "groups": [
+        {
+          "anchor": "m_a",
+          "displacement": [
+            1.25,
+            0
+          ],
+          "evidence": {
+            "dts": [
+              1,
+              1,
+              1,
+              1,
+              1
+            ],
+            "max_offset_drift": 0,
+            "max_step_drift": 0,
+            "min_samples": 2,
+            "moving_samples": 5,
+            "tol_pos": 0.05
+          },
+          "group_id": "mg_1fff93b0b2a3",
+          "kind": "common_translation",
+          "mechanical_link": false,
+          "members": [
+            "m_a",
+            "m_b",
+            "m_c"
+          ],
+          "offsets": {
+            "m_b": [
+              1,
+              0
+            ],
+            "m_c": [
+              2,
+              0
+            ]
+          },
+          "samples": 5,
+          "speed": [
+            0.25,
+            0
+          ],
+          "speed_magnitude": 0.25,
+          "window": {
+            "end_tick": 6,
+            "frames": 6,
+            "start_tick": 1,
+            "ticks": [
+              1,
+              2,
+              3,
+              4,
+              5,
+              6
+            ]
+          },
+          "y_offsets": {
+            "m_b": 0,
+            "m_c": 0
+          }
+        }
+      ],
+      "kind": "motion_groups",
+      "rejected": [],
+      "ticks": [
+        1,
+        6
+      ],
+      "window": 6
+    },
+    "entities": {
+      "m_a": {
+        "category": "person",
+        "color": [
+          200,
+          160,
+          140
+        ],
+        "positions": [
+          {
+            "pos": [
+              0,
+              1,
+              0
+            ],
+            "tick": 1
+          },
+          {
+            "pos": [
+              0.25,
+              1,
+              0
+            ],
+            "tick": 2
+          },
+          {
+            "pos": [
+              0.5,
+              1,
+              0
+            ],
+            "tick": 3
+          },
+          {
+            "pos": [
+              0.75,
+              1,
+              0
+            ],
+            "tick": 4
+          },
+          {
+            "pos": [
+              1,
+              1,
+              0
+            ],
+            "tick": 5
+          },
+          {
+            "pos": [
+              1.25,
+              1,
+              0
+            ],
+            "tick": 6
+          },
+          {
+            "pos": [
+              1.5,
+              1,
+              0
+            ],
+            "tick": 7
+          },
+          {
+            "pos": [
+              1.75,
+              1,
+              0
+            ],
+            "tick": 8
+          },
+          {
+            "pos": [
+              2,
+              1,
+              0
+            ],
+            "tick": 9
+          },
+          {
+            "pos": [
+              2.25,
+              1,
+              0
+            ],
+            "tick": 10
+          },
+          {
+            "pos": [
+              2.5,
+              1,
+              0
+            ],
+            "tick": 11
+          },
+          {
+            "pos": [
+              2.75,
+              1,
+              0
+            ],
+            "tick": 12
+          }
+        ]
+      },
+      "m_b": {
+        "category": "robot",
+        "color": [
+          150,
+          160,
+          170
+        ],
+        "positions": [
+          {
+            "pos": [
+              1,
+              1,
+              0
+            ],
+            "tick": 1
+          },
+          {
+            "pos": [
+              1.25,
+              1,
+              0
+            ],
+            "tick": 2
+          },
+          {
+            "pos": [
+              1.5,
+              1,
+              0
+            ],
+            "tick": 3
+          },
+          {
+            "pos": [
+              1.75,
+              1,
+              0
+            ],
+            "tick": 4
+          },
+          {
+            "pos": [
+              2,
+              1,
+              0
+            ],
+            "tick": 5
+          },
+          {
+            "pos": [
+              2.25,
+              1,
+              0
+            ],
+            "tick": 6
+          },
+          {
+            "pos": [
+              2.5,
+              1,
+              0
+            ],
+            "tick": 7
+          },
+          {
+            "pos": [
+              2.75,
+              1,
+              0
+            ],
+            "tick": 8
+          },
+          {
+            "pos": [
+              3,
+              1,
+              0
+            ],
+            "tick": 9
+          },
+          {
+            "pos": [
+              3.25,
+              1,
+              0
+            ],
+            "tick": 10
+          },
+          {
+            "pos": [
+              3.5,
+              1,
+              0
+            ],
+            "tick": 11
+          },
+          {
+            "pos": [
+              3.75,
+              1,
+              0
+            ],
+            "tick": 12
+          }
+        ]
+      },
+      "m_c": {
+        "category": "fox",
+        "color": [
+          220,
+          120,
+          60
+        ],
+        "positions": [
+          {
+            "pos": [
+              2,
+              1,
+              0
+            ],
+            "tick": 1
+          },
+          {
+            "pos": [
+              2.25,
+              1,
+              0
+            ],
+            "tick": 2
+          },
+          {
+            "pos": [
+              2.5,
+              1,
+              0
+            ],
+            "tick": 3
+          },
+          {
+            "pos": [
+              2.75,
+              1,
+              0
+            ],
+            "tick": 4
+          },
+          {
+            "pos": [
+              3,
+              1,
+              0
+            ],
+            "tick": 5
+          },
+          {
+            "pos": [
+              3.25,
+              1,
+              0
+            ],
+            "tick": 6
+          },
+          {
+            "pos": [
+              3.5,
+              1,
+              0
+            ],
+            "tick": 7
+          },
+          {
+            "pos": [
+              4.55,
+              1,
+              0
+            ],
+            "tick": 8
+          },
+          {
+            "pos": [
+              5.6,
+              1,
+              0
+            ],
+            "tick": 9
+          },
+          {
+            "pos": [
+              6.65,
+              1,
+              0
+            ],
+            "tick": 10
+          },
+          {
+            "pos": [
+              7.7,
+              1,
+              0
+            ],
+            "tick": 11
+          },
+          {
+            "pos": [
+              8.75,
+              1,
+              0
+            ],
+            "tick": 12
+          }
+        ]
+      }
+    },
+    "images": {
+      "gif": "groups.gif",
+      "hidden": "groups_hidden.png",
+      "leave": "groups_leave.png",
+      "together": "groups_together.png"
+    },
+    "late": {
+      "groups": [
+        {
+          "anchor": "m_a",
+          "displacement": [
+            1.75,
+            0
+          ],
+          "evidence": {
+            "dts": [
+              1,
+              1,
+              1,
+              1,
+              1,
+              1,
+              1
+            ],
+            "max_offset_drift": 0,
+            "max_step_drift": 0,
+            "min_samples": 2,
+            "moving_samples": 7,
+            "tol_pos": 0.05
+          },
+          "group_id": "mg_d6861d9cb660",
+          "kind": "common_translation",
+          "mechanical_link": false,
+          "members": [
+            "m_a",
+            "m_b"
+          ],
+          "offsets": {
+            "m_b": [
+              1,
+              0
+            ]
+          },
+          "samples": 7,
+          "speed": [
+            0.25,
+            0
+          ],
+          "speed_magnitude": 0.25,
+          "window": {
+            "end_tick": 12,
+            "frames": 8,
+            "start_tick": 5,
+            "ticks": [
+              5,
+              6,
+              7,
+              8,
+              9,
+              10,
+              11,
+              12
+            ]
+          },
+          "y_offsets": {
+            "m_b": 0
+          }
+        }
+      ],
+      "kind": "motion_groups",
+      "rejected": [],
+      "ticks": [
+        5,
+        12
+      ],
+      "window": 8
+    },
+    "leave_tick": 7
+  },
+  "masked_prediction": {
+    "abs_error": 0,
+    "actual": [
+      3.25,
+      1,
+      0
+    ],
+    "group_ids": [
+      "mg_1fff93b0b2a3"
+    ],
+    "hidden": "m_c",
+    "objects_in_hidden_frame": [
+      {
+        "category": "person",
+        "center": [
+          1.25,
+          1,
+          0
+        ],
+        "color": [
+          200,
+          160,
+          140
+        ],
+        "eid": "m_a",
+        "shape": "pillar"
+      },
+      {
+        "category": "robot",
+        "center": [
+          2.25,
+          1,
+          0
+        ],
+        "color": [
+          150,
+          160,
+          170
+        ],
+        "eid": "m_b",
+        "shape": "pillar"
+      }
+    ],
+    "predicted": {
+      "actual": false,
+      "anchor": "m_a",
+      "gap": 0,
+      "group_id": "mg_1fff93b0b2a3",
+      "offset": [
+        2,
+        0
+      ],
+      "offset_tick": 6,
+      "pos": [
+        3.25,
+        1,
+        0
+      ],
+      "source": "motion_group",
+      "y_offset": 0
+    },
+    "tick": 6,
+    "unresolved": {}
+  },
+  "memory": {
+    "actor": "walker",
+    "db": "<repo>\\artifacts\\world_process_delivery_20261014\\group2_animation\\demo_out\\world_process.db",
+    "kind": "relative_trajectory",
+    "memory_id": "node_30e0fdb9_1791976915815",
+    "ref": "landmark",
+    "reopened_equal": true,
+    "samples": 12,
+    "ticks": [
+      1,
+      12
+    ]
+  },
+  "out_dir": "<repo>\\artifacts\\world_process_delivery_20261014\\group2_animation\\demo_out",
+  "panels": [
+    {
+      "entities": {
+        "landmark": {
+          "category": "tree",
+          "color": [
+            60,
+            140,
+            70
+          ],
+          "positions": [
+            {
+              "pos": [
+                10,
+                1,
+                10
+              ],
+              "tick": 1
+            },
+            {
+              "pos": [
+                10,
+                1,
+                10
+              ],
+              "tick": 2
+            },
+            {
+              "pos": [
+                10,
+                1,
+                10
+              ],
+              "tick": 3
+            },
+            {
+              "pos": [
+                10,
+                1,
+                10
+              ],
+              "tick": 4
+            },
+            {
+              "pos": [
+                10,
+                1,
+                10
+              ],
+              "tick": 5
+            },
+            {
+              "pos": [
+                10,
+                1,
+                10
+              ],
+              "tick": 6
+            },
+            {
+              "pos": [
+                10,
+                1,
+                10
+              ],
+              "tick": 7
+            },
+            {
+              "pos": [
+                10,
+                1,
+                10
+              ],
+              "tick": 8
+            },
+            {
+              "pos": [
+                10,
+                1,
+                10
+              ],
+              "tick": 9
+            },
+            {
+              "pos": [
+                10,
+                1,
+                10
+              ],
+              "tick": 10
+            },
+            {
+              "pos": [
+                10,
+                1,
+                10
+              ],
+              "tick": 11
+            },
+            {
+              "pos": [
+                10,
+                1,
+                10
+              ],
+              "tick": 12
+            }
+          ]
+        },
+        "walker": {
+          "category": "person",
+          "color": [
+            200,
+            160,
+            140
+          ],
+          "positions": [
+            {
+              "pos": [
+                4,
+                1,
+                10
+              ],
+              "tick": 1
+            },
+            {
+              "pos": [
+                5,
+                1,
+                10
+              ],
+              "tick": 2
+            },
+            {
+              "pos": [
+                6,
+                1,
+                10
+              ],
+              "tick": 3
+            },
+            {
+              "pos": [
+                7,
+                1,
+                10
+              ],
+              "tick": 4
+            },
+            {
+              "pos": [
+                8,
+                1,
+                10
+              ],
+              "tick": 5
+            },
+            {
+              "pos": [
+                8.2,
+                1,
+                10
+              ],
+              "tick": 6
+            },
+            {
+              "pos": [
+                8,
+                1,
+                10
+              ],
+              "tick": 7
+            },
+            {
+              "pos": [
+                8.1,
+                1,
+                10
+              ],
+              "tick": 8
+            },
+            {
+              "pos": [
+                7,
+                1,
+                10
+              ],
+              "tick": 9
+            },
+            {
+              "pos": [
+                5,
+                1,
+                10
+              ],
+              "tick": 10
+            },
+            {
+              "pos": [
+                3,
+                1,
+                10
+              ],
+              "tick": 11
+            },
+            {
+              "pos": [
+                1,
+                1,
+                10
+              ],
+              "tick": 12
+            }
+          ]
+        }
+      },
+      "generated_source": "generated",
+      "gif": "source.gif",
+      "image": "source.png",
+      "name": "source",
+      "objects_in_shown_frame": [
+        {
+          "category": "tree",
+          "center": [
+            10,
+            1,
+            10
+          ],
+          "color": [
+            60,
+            140,
+            70
+          ],
+          "eid": "landmark",
+          "shape": "pillar"
+        },
+        {
+          "category": "person",
+          "center": [
+            8.2,
+            1,
+            10
+          ],
+          "color": [
+            200,
+            160,
+            140
+          ],
+          "eid": "walker",
+          "shape": "pillar"
+        }
+      ],
+      "tick_index_shown": 5,
+      "tick_shown": 6,
+      "ticks": [
+        1,
+        12
+      ],
+      "transform": {
+        "scale": 1,
+        "tick_offset": 0,
+        "translation": [
+          0,
+          0,
+          0
+        ],
+        "yaw": 0
+      }
+    },
+    {
+      "entities": {
+        "landmark": {
+          "category": "tree",
+          "color": [
+            60,
+            140,
+            70
+          ],
+          "positions": [
+            {
+              "pos": [
+                14,
+                1,
+                10
+              ],
+              "tick": 1
+            },
+            {
+              "pos": [
+                14,
+                1,
+                10
+              ],
+              "tick": 2
+            },
+            {
+              "pos": [
+                14,
+                1,
+                10
+              ],
+              "tick": 3
+            },
+            {
+              "pos": [
+                14,
+                1,
+                10
+              ],
+              "tick": 4
+            },
+            {
+              "pos": [
+                14,
+                1,
+                10
+              ],
+              "tick": 5
+            },
+            {
+              "pos": [
+                14,
+                1,
+                10
+              ],
+              "tick": 6
+            },
+            {
+              "pos": [
+                14,
+                1,
+                10
+              ],
+              "tick": 7
+            },
+            {
+              "pos": [
+                14,
+                1,
+                10
+              ],
+              "tick": 8
+            },
+            {
+              "pos": [
+                14,
+                1,
+                10
+              ],
+              "tick": 9
+            },
+            {
+              "pos": [
+                14,
+                1,
+                10
+              ],
+              "tick": 10
+            },
+            {
+              "pos": [
+                14,
+                1,
+                10
+              ],
+              "tick": 11
+            },
+            {
+              "pos": [
+                14,
+                1,
+                10
+              ],
+              "tick": 12
+            }
+          ]
+        },
+        "walker": {
+          "category": "person",
+          "color": [
+            200,
+            160,
+            140
+          ],
+          "positions": [
+            {
+              "pos": [
+                8,
+                1,
+                10
+              ],
+              "tick": 1
+            },
+            {
+              "pos": [
+                9,
+                1,
+                10
+              ],
+              "tick": 2
+            },
+            {
+              "pos": [
+                10,
+                1,
+                10
+              ],
+              "tick": 3
+            },
+            {
+              "pos": [
+                11,
+                1,
+                10
+              ],
+              "tick": 4
+            },
+            {
+              "pos": [
+                12,
+                1,
+                10
+              ],
+              "tick": 5
+            },
+            {
+              "pos": [
+                12.2,
+                1,
+                10
+              ],
+              "tick": 6
+            },
+            {
+              "pos": [
+                12,
+                1,
+                10
+              ],
+              "tick": 7
+            },
+            {
+              "pos": [
+                12.1,
+                1,
+                10
+              ],
+              "tick": 8
+            },
+            {
+              "pos": [
+                11,
+                1,
+                10
+              ],
+              "tick": 9
+            },
+            {
+              "pos": [
+                9,
+                1,
+                10
+              ],
+              "tick": 10
+            },
+            {
+              "pos": [
+                7,
+                1,
+                10
+              ],
+              "tick": 11
+            },
+            {
+              "pos": [
+                5,
+                1,
+                10
+              ],
+              "tick": 12
+            }
+          ]
+        }
+      },
+      "generated_source": "generated",
+      "gif": "translated.gif",
+      "image": "translated.png",
+      "name": "translated",
+      "objects_in_shown_frame": [
+        {
+          "category": "tree",
+          "center": [
+            14,
+            1,
+            10
+          ],
+          "color": [
+            60,
+            140,
+            70
+          ],
+          "eid": "landmark",
+          "shape": "pillar"
+        },
+        {
+          "category": "person",
+          "center": [
+            12.2,
+            1,
+            10
+          ],
+          "color": [
+            200,
+            160,
+            140
+          ],
+          "eid": "walker",
+          "shape": "pillar"
+        }
+      ],
+      "tick_index_shown": 5,
+      "tick_shown": 6,
+      "ticks": [
+        1,
+        12
+      ],
+      "transform": {
+        "scale": 1,
+        "tick_offset": 0,
+        "translation": [
+          4,
+          0,
+          0
+        ],
+        "yaw": 0
+      }
+    },
+    {
+      "entities": {
+        "landmark": {
+          "category": "tree",
+          "color": [
+            60,
+            140,
+            70
+          ],
+          "positions": [
+            {
+              "pos": [
+                14,
+                1,
+                10
+              ],
+              "tick": 1
+            },
+            {
+              "pos": [
+                14,
+                1,
+                10
+              ],
+              "tick": 2
+            },
+            {
+              "pos": [
+                14,
+                1,
+                10
+              ],
+              "tick": 3
+            },
+            {
+              "pos": [
+                14,
+                1,
+                10
+              ],
+              "tick": 4
+            },
+            {
+              "pos": [
+                14,
+                1,
+                10
+              ],
+              "tick": 5
+            },
+            {
+              "pos": [
+                14,
+                1,
+                10
+              ],
+              "tick": 6
+            },
+            {
+              "pos": [
+                14,
+                1,
+                10
+              ],
+              "tick": 7
+            },
+            {
+              "pos": [
+                14,
+                1,
+                10
+              ],
+              "tick": 8
+            },
+            {
+              "pos": [
+                14,
+                1,
+                10
+              ],
+              "tick": 9
+            },
+            {
+              "pos": [
+                14,
+                1,
+                10
+              ],
+              "tick": 10
+            },
+            {
+              "pos": [
+                14,
+                1,
+                10
+              ],
+              "tick": 11
+            },
+            {
+              "pos": [
+                14,
+                1,
+                10
+              ],
+              "tick": 12
+            }
+          ]
+        },
+        "walker": {
+          "category": "person",
+          "color": [
+            200,
+            160,
+            140
+          ],
+          "positions": [
+            {
+              "pos": [
+                5.514719,
+                1,
+                1.514719
+              ],
+              "tick": 1
+            },
+            {
+              "pos": [
+                6.928932,
+                1,
+                2.928932
+              ],
+              "tick": 2
+            },
+            {
+              "pos": [
+                8.343146,
+                1,
+                4.343146
+              ],
+              "tick": 3
+            },
+            {
+              "pos": [
+                9.757359,
+                1,
+                5.757359
+              ],
+              "tick": 4
+            },
+            {
+              "pos": [
+                11.171573,
+                1,
+                7.171573
+              ],
+              "tick": 5
+            },
+            {
+              "pos": [
+                11.454416,
+                1,
+                7.454416
+              ],
+              "tick": 6
+            },
+            {
+              "pos": [
+                11.171573,
+                1,
+                7.171573
+              ],
+              "tick": 7
+            },
+            {
+              "pos": [
+                11.312994,
+                1,
+                7.312994
+              ],
+              "tick": 8
+            },
+            {
+              "pos": [
+                9.757359,
+                1,
+                5.757359
+              ],
+              "tick": 9
+            },
+            {
+              "pos": [
+                6.928932,
+                1,
+                2.928932
+              ],
+              "tick": 10
+            },
+            {
+              "pos": [
+                4.100505,
+                1,
+                0.100505
+              ],
+              "tick": 11
+            },
+            {
+              "pos": [
+                1.272078,
+                1,
+                -2.727922
+              ],
+              "tick": 12
+            }
+          ]
+        }
+      },
+      "generated_source": "generated",
+      "gif": "rotated_scaled.gif",
+      "image": "rotated_scaled.png",
+      "name": "rotated_scaled",
+      "objects_in_shown_frame": [
+        {
+          "category": "tree",
+          "center": [
+            14,
+            1,
+            10
+          ],
+          "color": [
+            60,
+            140,
+            70
+          ],
+          "eid": "landmark",
+          "shape": "pillar"
+        },
+        {
+          "category": "person",
+          "center": [
+            11.454416,
+            1,
+            7.454416
+          ],
+          "color": [
+            200,
+            160,
+            140
+          ],
+          "eid": "walker",
+          "shape": "pillar"
+        }
+      ],
+      "tick_index_shown": 5,
+      "tick_shown": 6,
+      "ticks": [
+        1,
+        12
+      ],
+      "transform": {
+        "scale": 2,
+        "tick_offset": 0,
+        "translation": [
+          4,
+          0,
+          0
+        ],
+        "yaw": -0.7853981633974483
+      }
+    }
+  ],
+  "processes": [
+    {
+      "evidence": {
+        "actor_path": 11.6,
+        "approach_drop": 4.2,
+        "distance_end": 9,
+        "distance_min": 1.8,
+        "distance_start": 6,
+        "leave_rise": 7.2,
+        "stay_band": 0.5,
+        "stay_held_ticks": 3,
+        "stay_move": 0.5,
+        "stay_samples": 4
+      },
+      "phases": [
+        {
+          "phase": "approach",
+          "ticks": [
+            1,
+            6
+          ]
+        },
+        {
+          "phase": "stay",
+          "ticks": [
+            5,
+            8
+          ]
+        },
+        {
+          "phase": "leave",
+          "ticks": [
+            8,
+            12
+          ]
+        }
+      ],
+      "roles": {
+        "actor": "walker",
+        "ref": "landmark"
+      },
+      "samples": 12,
+      "ticks": [
+        1,
+        12
+      ],
+      "type": "approach_stay_leave"
+    }
+  ]
+}

@@ -1,0 +1,93 @@
+{
+  "baseline": {
+    "process_ops.py": {
+      "assert_tail_restore": {
+        "result": "pass"
+      }
+    },
+    "world_process.py": {
+      "assert_coverage_and_self_response": {
+        "result": "pass"
+      },
+      "assert_split_direction": {
+        "result": "pass"
+      },
+      "assert_unrelated_invariance": {
+        "detail": "((100, 'x'), True, False)",
+        "kind": "assertion_error",
+        "result": "fail"
+      }
+    }
+  },
+  "mutants": [
+    {
+      "assert": "assert_split_direction",
+      "baseline": {
+        "result": "pass"
+      },
+      "isolated": true,
+      "mutant": {
+        "detail": "14",
+        "kind": "assertion_error",
+        "result": "fail"
+      },
+      "mutant_sha256": "677839b882093ab51065be71856443e78b9c5e6650f5409edcf9a23dcc204e60",
+      "name": "wp_m1_split_reversed",
+      "replacement_hits": 1,
+      "why": "把留出段改从流首切出（比例语义反转）"
+    },
+    {
+      "assert": "assert_coverage_and_self_response",
+      "baseline": {
+        "result": "pass"
+      },
+      "isolated": true,
+      "mutant": {
+        "detail": "{'events': 6, 'predictions': 6, 'hits': 4, 'misses': 2, 'scored': 4, 'no_prediction': 0, 'unscored': 2, 'prediction_beyond_window': 2, 'unresolved_window_end': 2, 'hit_rate': 0.666667, 'coverage': 0.666667, 'scored_rate': 0.666667, 'mean_abs_tick_error': 0.0, 'abs_tick_errors': [0, 0, 0, 0]}",
+        "kind": "assertion_error",
+        "result": "fail"
+      },
+      "mutant_sha256": "3497122b768d14692d4137550e20a6aa382050f1b6886e38305abe15acde700b",
+      "name": "wp_m2_coverage_scored",
+      "replacement_hits": 1,
+      "why": "coverage 改回 scored ÷ events 的旧口径"
+    },
+    {
+      "assert": "assert_coverage_and_self_response",
+      "baseline": {
+        "result": "pass"
+      },
+      "isolated": true,
+      "mutant": {
+        "detail": "{'tick': 10, 'eid': 'x', 'event': 'stop', 'after': 'stop', 'actual_tick': 10, 'actual_eid': 'x', 'actual_event': 'stop', 'predicted_tick': 10, 'predicted_event': 'stop', 'predicted_eid': 'x', 'lag': 0, 'hit': True, 'scored': True, 'end_state': 'hit', 'abs_tick_error': 0}",
+        "kind": "assertion_error",
+        "result": "fail"
+      },
+      "mutant_sha256": "e5003200d25f0ba76f1d0d8f95a8a0e86fdf551e87c8b5e99a00b1f8e4c9c64d",
+      "name": "wp_m3_no_self_exclusion",
+      "replacement_hits": 1,
+      "why": "真实响应不再排除源事件自身"
+    },
+    {
+      "assert": "assert_tail_restore",
+      "baseline": {
+        "result": "pass"
+      },
+      "isolated": true,
+      "mutant": {
+        "detail": "([-1.0, 0.0, 0.0], [0.0, 0.0, 0.0])",
+        "kind": "assertion_error",
+        "result": "fail"
+      },
+      "mutant_sha256": "713b686688df259a1ca3d9fd897adc7e0177981158c4f590dea8e984ad7a16a8",
+      "name": "po_m3_old_anchor",
+      "replacement_hits": 1,
+      "why": "补全平移锚点改成首条未观测采样的 ref（改前口径）"
+    }
+  ],
+  "source_sha256": {
+    "process_ops.py": "59cde8f925fac077764acbba713c1de13432a22c6f8904d7fbe290019a93f2e7",
+    "world_process.py": "950f3d9669ffaf5cc9ee63c71e3f55cc21ebba00ede6d70649454cacf8a74659"
+  },
+  "source_unchanged": true
+}

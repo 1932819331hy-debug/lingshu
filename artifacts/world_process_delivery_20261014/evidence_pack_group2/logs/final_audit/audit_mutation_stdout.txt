@@ -1,0 +1,5 @@
+wp_m1_split_reversed       baseline=pass mutant=fail isolated=True
+wp_m2_coverage_scored      baseline=pass mutant=fail isolated=True
+wp_m3_no_self_exclusion    baseline=pass mutant=fail isolated=True
+po_m3_old_anchor           baseline=pass mutant=fail isolated=True
+source_unchanged: True

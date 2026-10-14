@@ -1,0 +1,72 @@
+{
+ "construction": {
+  "entities": 3,
+  "events_per_trial": 40,
+  "seed_first": 1000,
+  "seed_last": 1299,
+  "sequence_sha256": "9486c4d7cd17845b2215dbb2c78ebdd9353437fe4946900b6bc6a48404242a77",
+  "tick_range": 400,
+  "trials": 300
+ },
+ "default_gate_min_consistency_07": {
+  "rate": 0.0,
+  "trials_with_association": 0
+ },
+ "irregular_fixture": {
+  "default_gate": [
+   {
+    "after": "turn",
+    "before": "stop",
+    "consistency": 1.0,
+    "count": 10,
+    "lag": 3,
+    "lag_consistency": 1.0
+   }
+  ],
+  "min_support_above_sample_count": []
+ },
+ "loose_gate_min_consistency_0": {
+  "max_consistency_over_trials": 0.666667,
+  "trials_with_association": 300,
+  "trials_with_consistency_ge_07": 0
+ },
+ "note": "以上都是固定构造上的实测读数，不含统计检验，不能据此宣称显著性，也不能保证随机序列不出现偶然候选。门槛与支持度的默认值本轮未改。",
+ "periodic_fixture": {
+  "default_gate": [
+   {
+    "after": "stop",
+    "before": "stop",
+    "consistency": 0.857143,
+    "count": 6,
+    "lag": 10,
+    "lag_consistency": 1.0
+   },
+   {
+    "after": "stop",
+    "before": "turn",
+    "consistency": 1.0,
+    "count": 7,
+    "lag": 5,
+    "lag_consistency": 1.0
+   },
+   {
+    "after": "turn",
+    "before": "stop",
+    "consistency": 1.0,
+    "count": 6,
+    "lag": 5,
+    "lag_consistency": 1.0
+   },
+   {
+    "after": "turn",
+    "before": "turn",
+    "consistency": 1.0,
+    "count": 6,
+    "lag": 10,
+    "lag_consistency": 1.0
+   }
+  ],
+  "dev_events": 14,
+  "holdout_events": 6
+ }
+}
