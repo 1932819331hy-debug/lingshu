@@ -1,8 +1,8 @@
 #!/usr/bin/env python3
 # -*- coding: utf-8 -*-
-"""demo_world_process · 世界过程第 1 组端到端演示（core 接入 · 落库 · 对照渲染）
+"""demo_world_process · 世界过程第 1、2 组端到端演示（core 接入 · 落库 · 对照渲染）
 ============================================================================
-本脚本只做三件事，全部走**已有**通路，不新建渲染器、不新建数据库：
+本脚本做四件事，全部走**已有**通路，不新建渲染器、不新建数据库：
 
 1. 经 core 的 world_model 门面把观测逐 tick 送进 UnifiedWorldModel，再从**当前模型
    的真实 history** 识别过程（时间会意）；示教提取落进既有 store，关引擎后按
@@ -13,10 +13,15 @@
 3. 三成员成组 → 其中一名成员离开：出成组、离开两张画面 + 一段 GIF；把离开的成员
    从本帧可见观测里遮蔽，用组模型（motion_groups）推算其落点，在画面里用红色十字
    标出推算位置。
+4. 事件回声与过程补全、过程重组（第 2 组）：一个按固定节奏停一步、转向 90° 的场景
+   出事件回声读数，并画一张事件时序图（实施线 + 延迟模型预测的落点标记 + 两模型
+   读数）；接近→停留→离开场景的补全出「观测末帧 / 补全末帧」对照图；两段记录重组
+   出「前段终点 / 连接点 / 后段终点」对照图。
 
 机器读数写 readings.json：过程结果、memory_id、每张图的实体（eid ↔ 类别 ↔ 颜色 ↔
-逐 tick 位置）、组模型、遮蔽推算的推算值与真实值对照、相机参数（对照图、GIF 与组画面
-三台）。图上实体与读数一一对应（同一份 entities 既进渲染也进 JSON）。
+逐 tick 位置）、组模型、遮蔽推算的推算值与真实值对照、事件回声读数、补全与重组的
+连接点读数、相机参数（各组画面各一台）。图上实体与读数一一对应（同一份 entities
+既进渲染也进 JSON）。
 
 用法（仓根）：
     .venv/Scripts/python.exe -X utf8 -B tools/demo_world_process.py \
@@ -53,6 +58,11 @@ CATEGORY = {
     "m_a": "person",
     "m_b": "robot",
     "m_c": "fox",
+    "courier": "robot",
+    "rider": "person",
+    "beacon": "tree",
+    "hero": "person",
+    "mark": "tree",
 }
 
 #: 接近→停留→离开的观测位置（输入数据；过程类型由 world 模块判定）
@@ -66,6 +76,28 @@ APPROACH = {
 #: 组场景：三名成员共同平移，m_c 从第 7 tick 起独自横移
 GROUP_N = 12
 GROUP_LEAVE_TICK = 7
+
+# ===== 第 2 组场景数据 =====
+
+#: 事件回声场景：每 13 步一轮，第 3 步原地停一步、第 8 步左转 90°，共 8 轮。
+COURIER_PERIOD = 13
+COURIER_STOP_OFFSET = 3
+COURIER_TURN_OFFSET = 8
+COURIER_CYCLES = 8
+
+#: 过程补全场景：接近→停留→离开前缀 6 tick，记录取同一段全 12 tick。
+COMPLETION_PREFIX_TICKS = 6
+
+#: 过程重组场景：前段 rider 从离 beacon 4.0 走到 2.0，后段从 2.0 接着走到对侧。
+SEGMENT_A = {"beacon": [[0, 1, 0]] * 5,
+             "rider": [[4, 1, 0], [3.5, 1, 0], [3, 1, 0], [2.5, 1, 0], [2, 1, 0]]}
+SEGMENT_B = {"beacon": [[0, 1, 0]] * 5,
+             "rider": [[2, 1, 0], [1.5, 1, 0.5], [1, 1, 1], [0.5, 1, 1.5], [0, 1, 2]]}
+
+#: 事件时序图的颜色：实施线按事件类型分色，预测落点固定用红色标记。
+EVENT_COLORS = {"stop": (70, 140, 255), "turn": (255, 170, 40)}
+PREDICT_COLOR = (255, 60, 60)
+TIMELINE_SIZE = (960, 220)
 
 
 def opened(db_path):
@@ -99,6 +131,42 @@ def group_history(n=GROUP_N, leave_tick=GROUP_LEAVE_TICK):
                                  "m_b": [1.0 + step, 1.0, 0.0],
                                  "m_c": [2.0 + step + away, 1.0, 0.0]}})
     return flat(out)
+
+
+def courier_track():
+    """事件回声场景的轨迹：计划步上原地停一步或左转 90°，其余步直行一步。"""
+    steps = COURIER_CYCLES * COURIER_PERIOD
+    kinds = {}
+    for cycle in range(COURIER_CYCLES):
+        for offset, name in ((COURIER_STOP_OFFSET, "stop"),
+                             (COURIER_TURN_OFFSET, "turn")):
+            step = cycle * COURIER_PERIOD + offset
+            if 1 <= step <= steps:
+                kinds.setdefault(step, []).append(name)
+    dx, dz, x, z = 1.0, 0.0, 0.0, 0.0
+    track = [[0.0, 1.0, 0.0]]
+    for step in range(1, steps + 1):
+        kind = kinds.get(step) or []
+        if kind == ["stop"]:
+            track.append([x, 1.0, z])
+            continue
+        if "turn" in kind:
+            dx, dz = -dz, dx
+        x, z = x + dx, z + dz
+        track.append([x, 1.0, z])
+    return track
+
+
+def courier_history():
+    """事件回声场景的观测历史（eid = courier）。"""
+    return flat([{"tick": i + 1, "entities": {"courier": pos}}
+                 for i, pos in enumerate(courier_track())])
+
+
+def segment_history(tracks):
+    """一段观测历史：tracks = {eid: [[x, y, z], …]}，每 tick 一帧。"""
+    return flat([{"tick": i + 1, "entities": {e: t[i] for e, t in tracks.items()}}
+                 for i in range(len(next(iter(tracks.values()))))])
 
 
 def drive(engine, history):
@@ -191,6 +259,72 @@ def readings(objects):
             for obj in sorted(objects, key=lambda o: o.eid)]
 
 
+def render_event_timeline(report, size=TIMELINE_SIZE):
+    """事件时序图：横轴 = tick，实线按事件类型分色；延迟模型的预测落点用红色标记。
+
+    图只画 report 里的读数（事件流、留出段切分、两模型的命中与偏差），不另算判据。
+    """
+    image = Image.new("RGB", size, (18, 18, 22))
+    draw = ImageDraw.Draw(image)
+    events = report["events"]
+    if not events:
+        return image, {"events": 0, "ticks": []}
+    ticks = [e["tick"] for e in events]
+    t0, t1 = min(ticks), max(ticks)
+    span = max(1, t1 - t0)
+    left, right, top, bottom = 40, size[0] - 20, 40, size[1] - 40
+
+    def x_of(tick):
+        return left + (tick - t0) * (right - left) / span
+
+    split_tick = report["split"]["boundary_tick"]
+    if split_tick is not None:
+        draw.line([(x_of(split_tick), top - 10), (x_of(split_tick), bottom + 10)],
+                  fill=(120, 120, 120), width=1)
+    for event in events:
+        x = x_of(event["tick"])
+        color = EVENT_COLORS.get(event["event"], (200, 200, 200))
+        draw.line([(x, top), (x, bottom)], fill=color, width=2)
+    for row in report["evaluation"]["lag_readings"]:
+        if row["predicted_tick"] is None:
+            continue
+        x, hit = x_of(row["predicted_tick"]), row["hit"]
+        color = PREDICT_COLOR if hit else (140, 90, 90)
+        draw.line([(x - 5, top - 12), (x + 5, top - 12)], fill=color, width=2)
+        draw.line([(x, top - 17), (x, top - 7)], fill=color, width=2)
+    draw.line([(left, bottom), (right, bottom)], fill=(90, 90, 90), width=1)
+    draw.text((left, 10),
+              "events %d | split t%s | lag %d/%d | no-delay %d/%d"
+              % (len(events), split_tick,
+                 report["evaluation"]["lag_model"]["hits"],
+                 report["evaluation"]["lag_model"]["predictions"],
+                 report["evaluation"]["no_delay_model"]["hits"],
+                 report["evaluation"]["no_delay_model"]["predictions"]),
+              fill=(235, 235, 235))
+    draw.text((left, bottom + 12), "tick %d" % t0, fill=(180, 180, 180))
+    draw.text((right - 44, bottom + 12), "tick %d" % t1, fill=(180, 180, 180))
+    def prediction_rows(key):
+        """两模型的逐条原始读数：预测、实际、状态与偏差全部照抄模块返回。"""
+        return [{"tick": r["tick"], "predicted_tick": r["predicted_tick"],
+                 "predicted_eid": r["predicted_eid"],
+                 "predicted_event": r["predicted_event"],
+                 "actual_tick": r["actual_tick"], "actual_eid": r["actual_eid"],
+                 "actual_event": r["actual_event"], "hit": r["hit"],
+                 "scored": r["scored"], "end_state": r["end_state"],
+                 "abs_tick_error": r["abs_tick_error"]}
+                for r in report["evaluation"][key]]
+
+    return image, {"events": len(events), "ticks": ticks, "boundary_tick": split_tick,
+                   "colors": {k: list(v) for k, v in EVENT_COLORS.items()},
+                   "predict_color": list(PREDICT_COLOR),
+                   "split": report["split"],
+                   "associations": report["associations"],
+                   "lag_model": report["evaluation"]["lag_model"],
+                   "no_delay_model": report["evaluation"]["no_delay_model"],
+                   "lag_predictions": prediction_rows("lag_readings"),
+                   "no_delay_predictions": prediction_rows("no_delay_readings")}
+
+
 def positions_of(frames, eid):
     """某一实体在生成帧里的逐 tick 位置（缺帧不出现在读数里）。"""
     return [{"tick": f["tick"], "pos": [round(float(v), 6) for v in f["entities"][eid]]}
@@ -246,7 +380,8 @@ def main(argv=None):
     os.makedirs(OUT_DIR, exist_ok=True)
     png_size = (args.width, args.height)
     gif_size = (int(args.width * 2 / 3), int(args.height * 2 / 3))
-    report = {"generated_by": "tools/demo_world_process.py", "out_dir": OUT_DIR}
+    report = {"generated_by": "tools/demo_world_process.py", "out_dir": OUT_DIR,
+              "camera": {}}
 
     # ---- ① 时间会意：从当前 UnifiedWorldModel 的真实 history 识别 ----
     engine = opened(os.path.join(OUT_DIR, "world_process.db"))
@@ -378,6 +513,124 @@ def main(argv=None):
         "abs_error": error, "unresolved": masked["unresolved"],
         "objects_in_hidden_frame": readings(masked_objects)}
     group_engine.close()
+
+    # ---- ⑤ 事件回声：事件时序图 + 两模型读数 ----
+    echo_engine = opened(os.path.join(OUT_DIR, "world_process.db"))
+    courier = courier_history()
+    drive(echo_engine, courier)
+    echoed = echo_engine.world_process("echo", {})
+    if echoed.get("status") != "ok":
+        raise SystemExit("事件回声失败：%s" % echoed)
+    echo_report = echoed["report"]
+    timeline, timeline_reading = render_event_timeline(echo_report)
+    label(timeline, "event echo: bars = events, red marks = lag predictions")
+    timeline.save(os.path.join(OUT_DIR, "echo_timeline.png"))
+    print("事件回声：事件 %d 条（停止 %d、转向 %d），开发段 %d 条、留出段 %d 条（边界 tick %s）"
+          % (len(echo_report["events"]),
+             sum(1 for e in echo_report["events"] if e["event"] == "stop"),
+             sum(1 for e in echo_report["events"] if e["event"] == "turn"),
+             echo_report["split"]["dev_events"],
+             echo_report["split"]["holdout_events"],
+             echo_report["split"]["boundary_tick"]))
+    for name in ("lag_model", "no_delay_model"):
+        model = echo_report["evaluation"][name]
+        print("  %s：预测 %d、命中 %d、可评分 %d、无预测 %d、超窗未决 %d、"
+              "命中率 %.6f、覆盖率 %.6f、平均绝对偏差 %s"
+              % (name, model["predictions"], model["hits"], model["scored"],
+                 model["no_prediction"], model["prediction_beyond_window"],
+                 model["hit_rate"], model["coverage"],
+                 model["mean_abs_tick_error"]))
+    print("事件时序图：echo_timeline.png")
+    report["echo"] = {
+        "thresholds": echo_report["thresholds"], "split": echo_report["split"],
+        "associations": echo_report["associations"],
+        "lag_model": echo_report["evaluation"]["lag_model"],
+        "no_delay_model": echo_report["evaluation"]["no_delay_model"],
+        "events": echo_report["events"],
+        "image": "echo_timeline.png", "timeline": timeline_reading}
+
+    # ---- ⑥ 过程补全：观测末帧 / 补全末帧对照 + 不命中反例 ----
+    # 记录按本场景的观测历史提取（不取当前模型的 courier 历史，两者实体不同）。
+    record = echo_engine.world_process("extract", {"history": approach_history(),
+                                                   "actor": "walker", "ref": "landmark"})
+    if record.get("status") != "ok":
+        raise SystemExit("示教提取失败：%s" % record)
+    completed = echo_engine.world_process("complete", {
+        "history": approach_history()[:COMPLETION_PREFIX_TICKS], "actor": "walker",
+        "ref": "landmark", "memory_id": record["memory_id"]})
+    if completed.get("status") != "ok":
+        raise SystemExit("过程补全失败：%s" % completed)
+    completion = completed["completion"]
+    if completion["match"] is None:
+        raise SystemExit("过程补全未命中：%s" % completion["candidates"])
+    missed = echo_engine.world_process("complete", {
+        "history": segment_history({"beacon": [[10, 1, 10]] * 6,
+                                    "walker": [[30, 1, 10], [28, 1, 10], [26, 1, 10],
+                                               [24, 1, 10], [22, 1, 10], [20, 1, 10]]}),
+        "actor": "walker", "ref": "landmark", "record": record["record"]})
+    if missed.get("status") != "ok":
+        raise SystemExit("过程补全反例失败：%s" % missed)
+    observed_frame = approach_history()[COMPLETION_PREFIX_TICKS - 1]["entities"]
+    completed_frame = completion["frames"][-1]["entities"]
+    completion_camera = camera_for([[p for p in observed_frame.values()],
+                                    [p for p in completed_frame.values()]])
+    observed_img, observed_objects = render_frame(completion_camera, observed_frame,
+                                                  png_size, None)
+    completed_img, completed_objects = render_frame(completion_camera, completed_frame,
+                                                    png_size, None)
+    side_by_side([observed_img, completed_img],
+                 ["observed tick %d" % approach_history()[COMPLETION_PREFIX_TICKS - 1]["tick"],
+                  "completion tick %d" % completion["ticks"][1]]
+                 ).save(os.path.join(OUT_DIR, "completion.png"))
+    print("过程补全：命中来源下标 %d、匹配分数 %.3f、补全 tick %s、不命中反例 match=%s"
+          % (completion["match"]["source"]["index"], completion["match"]["match_score"],
+             completion["ticks"], missed["completion"]["match"]))
+    print("补全对照图：completion.png")
+    report["completion"] = {
+        "prefix_ticks": COMPLETION_PREFIX_TICKS,
+        "match": completion["match"], "seam": completion["seam"],
+        "ticks": completion["ticks"], "candidates": completion["candidates"],
+        "miss": {"match": missed["completion"]["match"],
+                 "frames": missed["completion"]["frames"],
+                 "candidates": missed["completion"]["candidates"]},
+        "image": "completion.png",
+        "objects_in_observed_frame": readings(observed_objects),
+        "objects_in_completed_frame": readings(completed_objects)}
+
+    # ---- ⑦ 过程重组：前段终点 / 连接点 / 后段终点对照 ----
+    seg_a = echo_engine.world_process("extract", {"history": segment_history(SEGMENT_A),
+                                                  "actor": "rider", "ref": "beacon"})
+    seg_b = echo_engine.world_process("extract", {"history": segment_history(SEGMENT_B),
+                                                  "actor": "rider", "ref": "beacon"})
+    composed = echo_engine.world_process("compose", {
+        "first_id": seg_a["memory_id"], "second_id": seg_b["memory_id"],
+        "roles": {"actor": "hero", "ref": "mark"}, "translation": (10.0, 0.0, 5.0)})
+    if composed.get("status") != "ok":
+        raise SystemExit("过程重组失败：%s" % composed)
+    composition = composed["composition"]
+    joint_views = [composition["segments"][0]["frames"][-1]["entities"],
+                   composition["segments"][1]["frames"][0]["entities"],
+                   composition["segments"][1]["frames"][-1]["entities"]]
+    joint_camera = camera_for([[p for p in entities.values()] for entities in joint_views])
+    joint_panels = [render_frame(joint_camera, entities, png_size, None)
+                    for entities in joint_views]
+    side_by_side([image for image, _ in joint_panels],
+                 ["seg1 end t%d" % composition["joint"]["tick"],
+                  "joint t%d" % (composition["joint"]["tick"] + composition["transform"]["tick_gap"]),
+                  "seg2 end t%d" % composition["ticks"][1]]
+                 ).save(os.path.join(OUT_DIR, "composition.png"))
+    print("过程重组：ref_gap=%.6f、actor_gap=%.6f、连续=%s、tick %s"
+          % (composition["joint"]["ref_gap"], composition["joint"]["actor_gap"],
+             composition["joint"]["continuous"], composition["ticks"]))
+    print("重组对照图：composition.png")
+    report["composition"] = {
+        "joint": composition["joint"], "relations": composition["relations"],
+        "transform": composition["transform"], "ticks": composition["ticks"],
+        "image": "composition.png",
+        "objects_in_panels": readings([obj for _, objects in joint_panels for obj in objects])}
+    report["camera"]["echo"] = camera_readings(completion_camera)
+    report["camera"]["joint"] = camera_readings(joint_camera)
+    echo_engine.close()
 
     path = os.path.join(OUT_DIR, "readings.json")
     with open(path, "w", encoding="utf-8") as fh:

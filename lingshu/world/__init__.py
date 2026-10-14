@@ -1,7 +1,7 @@
 """lingshu.world —— 见本目录 README.md。
 
-本包的 register_world_process 把 world_process 与 motion_groups 两个模块记到引擎实例
-（依赖方向 world → core）。导入本包只带入模块定义：不注册、不改引擎状态。
+本包的 register_world_process 把 world_process、motion_groups 与 process_ops 三个模块
+记到引擎实例（依赖方向 world → core）。导入本包只带入模块定义：不注册、不改引擎状态。
 """
 from __future__ import annotations
 
@@ -9,7 +9,10 @@ __all__ = ["register_world_process"]
 
 
 def register_world_process(engine) -> None:
-    """把 world_process 与 motion_groups 两个模块记到**该引擎实例**。
+    """把 world_process、motion_groups 与 process_ops 记到**该引擎实例**。
+
+    world_process 承载时间会意、示教迁移与事件回声；motion_groups 承载运动组合体；
+    process_ops 承载过程补全与过程重组（第 2 组）。
 
     用法（新建或重开引擎后各调一次）：
 
@@ -24,5 +27,5 @@ def register_world_process(engine) -> None:
     本函数只在传入的实例上写注入槽，不影响其它实例、不产生模块级全局状态；
     可对同一实例重复调用（幂等）。
     """
-    from . import motion_groups, world_process
-    engine.register_world_process(world_process, motion_groups)
+    from . import motion_groups, process_ops, world_process
+    engine.register_world_process(world_process, motion_groups, process_ops)

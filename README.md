@@ -45,16 +45,17 @@
 ## 代码主体
 
 身体侧模块化导出 v0.1 已入仓——**`lingshu` Python 包**（core 存算一体 8 件 ·
-world 世界模型 29 件 · nn 自研神经网络 14 件 · gen 图像生成 7 件）：
+world 世界模型 30 件 · nn 自研神经网络 14 件 · gen 图像生成 7 件）：
 
 ```bash
 pip install -e .             # 轻核：core 纯标准库，零依赖可跑
 pip install -e ".[full]"     # 含 numpy / Pillow（world / nn / gen 的常规路径）
 ```
 
-世界过程第 1 组（时间会意 / 示教迁移 / 运动组合体）已接进 core 与既有记忆通路，
-用法、演示与对照图见 [docs/world_process_usage.md](docs/world_process_usage.md)。
-两件原生模块的指纹登记在同目录导出清单的 `blocks.world.files`（标记 origin，不写 src），
+世界过程第 1 组（时间会意 / 示教迁移 / 运动组合体）与第 2 组（事件回声 / 过程补全 /
+过程重组）已接进 core 与既有记忆通路，用法、演示与对照图见
+[docs/world_process_usage.md](docs/world_process_usage.md)。
+三件原生模块的指纹登记在同目录导出清单的 `blocks.world.files`（标记 origin，不写 src），
 由 [tools/verify_manifest.py](tools/verify_manifest.py) 逐条核验。
 
 **已测版本矩阵**（2026-10-08 实测，供选版参考）：Python 3.12.x · numpy 2.3.5 / 2.4.2 / 2.5.3 ·

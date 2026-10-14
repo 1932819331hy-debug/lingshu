@@ -290,9 +290,14 @@
      "base_sha256": "4e7c7ad0ffcfea85"
     },
     {
+     "file": "process_ops.py",
+     "origin": "lingshu_native_development",
+     "sha256": "59cde8f925fac077"
+    },
+    {
      "file": "world_process.py",
      "origin": "lingshu_native_development",
-     "sha256": "c660faf3f4666ae6"
+     "sha256": "950f3d9669ffaf5c"
     }
    ],
    "private_hits": []
@@ -324,7 +329,7 @@
     {
      "file": "core.py",
      "src": "aeis.core",
-     "sha256": "ed7b3a3ff79416b4",
+     "sha256": "43c9aac15c20b2fb",
      "rewrites": 34,
      "sanitized": 2,
      "patches": 2,
@@ -737,6 +742,30 @@
    "lingshu/core/core.py": "2c8a0f7e65774494"
   },
   "verified_records": "本批模块指纹只登记在 blocks.core.files[core.py] 与 blocks.world.files[world_process.py, motion_groups.py]：verify_manifest.py 逐条核验；本键不重复登记，避免第二份未被核验的指纹。",
+  "unverified_artifacts": [
+   "tests/test_world_process_core.py",
+   "tools/demo_world_process.py",
+   "docs/world_process_usage.md",
+   "README.md",
+   "docs/architecture.md"
+  ]
+ },
+ "world_process_second_batch": {
+  "date": "2026-10-14",
+  "base_commit": "2c2e5d9",
+  "kind": "lingshu_native_development",
+  "origin": "本仓原生开发（非 AEIS 导出件；不伪造上游来源）",
+  "scope": [
+   "事件回声",
+   "过程补全",
+   "过程重组"
+  ],
+  "report": "docs/world_process_usage.md",
+  "previous_sha256": {
+   "lingshu/core/core.py": "ed7b3a3ff79416b4",
+   "lingshu/world/world_process.py": "c660faf3f4666ae6"
+  },
+  "verified_records": "本批模块指纹只登记在 blocks.core.files[core.py] 与 blocks.world.files[process_ops.py, world_process.py]：verify_manifest.py 逐条核验；本键不重复登记，避免第二份未被核验的指纹。",
   "unverified_artifacts": [
    "tests/test_world_process_core.py",
    "tools/demo_world_process.py",

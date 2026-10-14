@@ -22,7 +22,7 @@
     - 断言 5 用 subprocess 的 stdout **字节**比对（不是字符串）来验确定性，
       并额外跑一个**不同 cwd** 的第三次，以及「stdout 不含 CR」的跨平台断言。
     - 断言 9/10 是 `MATCH` 正例（★ 变异哨兵）：把工具里的比对行改成恒 False 后
-      这两条必须变红。真实仓库当前 63 条全 MATCH（登记已同步），但断言 4 只查
+      这两条必须变红。真实仓库当前 64 条全 MATCH（登记已同步），但断言 4 只查
       计数、断言 2/3 不经工具，MATCH 分支的**逐条语义**仍由 9/10 独立锁住。
     - 断言 8 覆盖 strict 负路径（MISMATCH → 3），断言 14 覆盖 strict 正路径
       （全 MATCH → 0），两条合起来锁住 `--strict` 的两个分支。
@@ -31,8 +31,8 @@
       `iter_records` 的记账改回 `continue` 静默跳过、并去掉 `decide_exit` 的
       `entries == 0` 判据 ⇒ 这三条必红（旧实现退 0）。
     - 断言 18-20（原生来源记录）：新模块必须落在工具**实际解析**的 `blocks` 结构
-      里（顶层 `*_batch.files` 这类键工具不解析）；数量断言精确到 63 条
-      （v0.1 = 54 + v0.2 = 9），不是宽松下界。`origin`（原生标记）与 `src`（导出源）
+      里（顶层 `*_batch.files` 这类键工具不解析）；数量断言精确到 64 条
+      （v0.1 = 55 + v0.2 = 9），不是宽松下界。`origin`（原生标记）与 `src`（导出源）
       同时出现时分类为 `both`（来源自相矛盾；工具只上报、不改判定与退出码，
       缺陷由断言 18 的 `both == 0` 判）；写成 `origin` 的记录与导出件**同受**
       sha256 核验（错指纹 ⇒ `--strict` 退 3；文件不在盘 ⇒ 退 1）。
@@ -139,7 +139,7 @@ def test_2_every_registered_sha256_has_frozen_shape():
             assert isinstance(recorded, str), (path.as_posix(), relpath, recorded)
             assert SHA_SHAPE_RE.match(recorded), (path.as_posix(), relpath, recorded)
             checked += 1
-    assert checked == 63, checked
+    assert checked == 64, checked
 
 
 def test_3_every_registered_file_exists_on_disk():
@@ -151,7 +151,7 @@ def test_3_every_registered_file_exists_on_disk():
             checked += 1
             if not (REPO_ROOT / relpath).is_file():
                 missing.append((path.name, relpath))
-    assert checked == 63, checked
+    assert checked == 64, checked
     assert not missing, missing
 
 
@@ -160,13 +160,15 @@ def test_4_tool_exits_zero_on_real_repo():
     assert result.returncode == 0, result.stderr or result.stdout
     payload = json.loads(result.stdout)
     summary = payload["summary"]
-    assert summary["entries"] == 63, summary
+    assert summary["entries"] == 64, summary
     assert summary["missing"] == 0 and summary["malformed"] == 0, summary
     # 登记基准 = **LF 归一后的字节**（工具先 `\r\n`→`\n` 再实算 sha256/bytes）：
     # 登记件是文本、上游真源在 Linux 侧；本机 core.autocrlf=true 落成 CRLF 工作树、
     # CI(Linux) 检出 LF。归一后两种检出实算值相同 ⇒ 此断言在两侧都应为 0（平台无关）。
     # 2026-10-09 登记按 LF 基准重算（20 条 sha256 + 2 条 bytes）；
-    # 2026-10-14 世界过程第 1 组 2 件原生模块入 blocks.world.files ⇒ 63 条全 MATCH。
+    # 2026-10-14 世界过程第 1 组 2 件原生模块入 blocks.world.files ⇒ 63 条全 MATCH；
+    # 同日世界过程第 2 组 process_ops.py 入同一块、world_process.py 与 core.py
+    # 重算指纹 ⇒ 64 条全 MATCH。
     assert summary["mismatch"] == 0, summary
     assert payload["exit_code"] == 0
 
@@ -431,9 +433,10 @@ def test_17_zero_entry_manifest_is_defect_but_valid_one_is_green(tmp_path):
 #: 本仓原生开发标记（origin 字段值）；src 是 AEIS 导出源，两者不得同时出现。
 NATIVE_ORIGIN = "lingshu_native_development"
 
-#: 世界过程第 1 组新增的 2 件原生模块（本仓开发，非 AEIS 导出件）。
+#: 世界过程第 1、2 组新增的 3 件原生模块（本仓开发，非 AEIS 导出件）。
 NATIVE_MODULES = ("lingshu/world/world_process.py",
-                  "lingshu/world/motion_groups.py")
+                  "lingshu/world/motion_groups.py",
+                  "lingshu/world/process_ops.py")
 
 V01 = "docs/intake/body-export-v0.1/_export_manifest.json"
 V02 = "docs/intake/body-export-v0.2/_export_manifest.json"
@@ -447,23 +450,23 @@ def _block_entries(relpath, block):
 
 
 def test_18_native_modules_are_registered_where_the_tool_parses_them():
-    """D3：2 件原生模块必须落在工具**实际解析**的 blocks 结构里，并标为原生来源。
+    """D3：3 件原生模块必须落在工具**实际解析**的 blocks 结构里，并标为原生来源。
 
     三层判据：
-      ① 记录完整性 + 精确计数：v0.1 全清单 54 条（world 块 26 条）、v0.2 9 条，
-         合计**精确 63**（不是宽松下界）；两条新记录必须在 world 块 26 条之内。
-      ② 受工具核验：--json 的 details 里两条都必须 status == MATCH。
+      ① 记录完整性 + 精确计数：v0.1 全清单 55 条（world 块 27 条）、v0.2 9 条，
+         合计**精确 64**（不是宽松下界）；三条新记录必须在 world 块 27 条之内。
+      ② 受工具核验：--json 的 details 里三条都必须 status == MATCH。
       ③ 来源：只写 origin（原生标记）、不写 src（不得伪装 AEIS 导出）；
          全仓 both == 0（无来源自相矛盾的记录）。
     """
     world = _block_entries(V01, "world")
-    assert len(world) == 26, len(world)
+    assert len(world) == 27, len(world)
     v01 = json.loads((REPO_ROOT / V01).read_text(encoding="utf-8"))
     v01_total = sum(len(node["files"]) for node in v01["blocks"].values())
-    assert v01_total == 54, v01_total
+    assert v01_total == 55, v01_total
     v02 = json.loads((REPO_ROOT / V02).read_text(encoding="utf-8"))
     assert len(v02["artifacts"]) + len(v02["tests"]) == 9, sorted(v02.keys())
-    assert v01_total + 9 == 63, v01_total
+    assert v01_total + 9 == 64, v01_total
 
     for path in NATIVE_MODULES:
         entry = world.get(path)
@@ -475,8 +478,8 @@ def test_18_native_modules_are_registered_where_the_tool_parses_them():
     assert result.returncode == 0, result.stdout + result.stderr
     payload = json.loads(result.stdout)
     summary = payload["summary"]
-    assert summary["entries"] == 63, summary
-    assert summary["origins"]["origin-only"] == 2, summary
+    assert summary["entries"] == 64, summary
+    assert summary["origins"]["origin-only"] == 3, summary
     assert summary["origins"]["both"] == 0, summary
 
     details = {d["path"]: d for d in payload["manifests"][0]["details"]}

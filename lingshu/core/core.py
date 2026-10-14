@@ -6638,24 +6638,30 @@ class SpacetimeMemoryEngine:
             return {"status": "ok", "learner": self._wlearner.state()}
         return {"status": "error", "error": f"未知动作 {action}（可用: init/create/entity/path/run/learn/predict/evaluate/curve/masked/model/history/state）"}
 
-    # ============ 世界过程第 1 组：时间会意 / 示教迁移 / 运动组合体 ============
+    # ============ 世界过程：第 1 组（时间会意 / 示教迁移 / 运动组合体）
+    #              + 第 2 组（事件回声 / 过程补全 / 过程重组） ============
 
-    #: world_process 的动作表（未知动作按门面惯例返回 error dict，不落到别处）。
+    #: 世界过程动作表（未知动作按门面惯例返回 error dict，不落到别处）。
     WORLD_PROCESS_ACTIONS = ("recognize", "events", "extract", "transfer", "load",
-                             "groups", "predict_groups")
+                             "groups", "predict_groups",
+                             "echo", "complete", "compose")
 
     #: 世界过程实现的注入槽：core 不导入 world（依赖方向 world → core）。
-    #: 由 lingshu.world.register_world_process(engine) 写入本实例，固定两个
-    #: 模块引用 (world_process, motion_groups)；未注册时为 None，门面返回 error。
+    #: 由 lingshu.world.register_world_process(engine) 写入本实例，固定两个或三个
+    #: 模块引用 (world_process, motion_groups[, process_ops])；未注册时为 None，
+    #: 门面返回 error。process_ops 承载第 2 组的过程补全与过程重组。
     _world_process_impl = None
 
-    def register_world_process(self, world_process, motion_groups) -> None:
-        """把 world_process 与 motion_groups 两个模块记到**本引擎实例**。
+    def register_world_process(self, world_process, motion_groups,
+                               process_ops=None) -> None:
+        """把 world_process、motion_groups 与 process_ops 记到**本引擎实例**。
 
-        由 world 侧注册函数调用；core 只保存这两个引用，不导入 world。
+        由 world 侧注册函数调用；core 只保存引用，不导入 world。
+        第三个参数可省略：省略时第 2 组三动作（echo/complete/compose）返回 error，
+        第 1 组七动作照常可用（兼容早先只注入两个模块的调用方）。
         只作用于本实例：其它引擎保持未注册状态（模块级不放模块引用）。
         """
-        self._world_process_impl = (world_process, motion_groups)
+        self._world_process_impl = (world_process, motion_groups, process_ops)
 
     def _world_process_history(self, p: dict):
         """世界过程门面要用的观测历史：显式 history 优先，否则读**当前已有模型**。
@@ -6711,8 +6717,35 @@ class SpacetimeMemoryEngine:
             return None, got
         return got["record"], None
 
+    def _world_process_records(self, p: dict) -> tuple:
+        """记录序列：record_ids/memory_id 逐个按记忆恢复，每步复用 load 通路。
+
+        返回 (records, None) 或 (None, error dict)。给 memory_id 时取单条记录并放进
+        列表：过程补全与过程重组都按记录序列工作过，单条记录即长度为 1 的序列。
+        """
+        ids = p.get("record_ids")
+        brain = p.get("brain")
+        if ids is None:
+            if p.get("record") is not None or p.get("memory_id") is not None:
+                record, err = self._world_process_record(p)
+                return (None, err) if err is not None else ([record], None)
+            return None, {"status": "error", "error": "需要 record 或 record_ids"}
+        if isinstance(ids, (str, bytes, dict)):
+            return None, {"status": "error",
+                          "error": "record_ids 必须是 memory_id 的序列"}
+        out = []
+        for memory_id in ids:
+            got = self.world_process("load", {"memory_id": str(memory_id),
+                                              "brain": brain})
+            if got.get("status") != "ok":
+                return None, got
+            out.append(got["record"])
+        return out, None
+
     def world_process(self, action: str, params: dict = None) -> dict:
-        """世界过程第 1 组（时间会意 / 示教迁移 / 运动组合体）· 门面：
+        """世界过程第 1、2 组 · 门面：
+
+        第 1 组（时间会意 / 示教迁移 / 运动组合体）：
 
         - recognize: 从观测历史识别过程（params: history 或 source，另可 entities/
           thresholds——thresholds 传 ProcessThresholds 实例）
@@ -6727,14 +6760,35 @@ class SpacetimeMemoryEngine:
         - predict_groups: 遮蔽成员推算（params: hide 遮蔽的 eid 列表 +
           history/source，另可 observed/tick + 组检测参数）
 
+        第 2 组（事件回声 / 过程补全 / 过程重组）：
+
+        - echo:      事件回声报告（params: history/source，另可 max_lag/min_support/
+          min_consistency/holdout_fraction/entities/thresholds）——返回 report，
+          含事件流、开发段与留出段切分、延迟关联与两模型对照；留出段条数按
+          ceil(事件数 × holdout_fraction) 从流尾切出；只认定延迟关联，不作因果结论
+        - complete:  过程补全（params: actor/ref + history/source，记录给 records
+          列表或 record_ids/memory_id，另可 thresholds）——返回 completion，
+          含候选来源与匹配分数；不命中时 match=None、frames=[]
+        - compose:   过程重组（params: first/second 两段记录或 first_id/second_id +
+          memory_id 读记录的路径，另可 roles/translation/yaw/scale/tick_gap/
+          thresholds）——返回 composition，含两段帧与连接点读数
+
+        第 2 组的 complete 与 compose 只在这两处把模块抛出的 ValueError（同名角色、
+        无效 joint 参数、记录没有采样）就地转成 {"status": "error", "error": …}，
+        与其它参数错误的返回形状一致；TypeError 等其它异常照旧上抛，第 1 组七动作
+        的异常契约不变。
+
         history 缺省取**当前已有模型**的观测历史（source 缺省 world_model，
-        world_learner 可选）；组检测参数的缺省与全部判据都在 world 模块，门面只转发。
+        world_learner 可选）；组检测参数与全部判据都在 world 模块，门面只转发调用方
+        显式给出的键，thresholds 对象按模块原样转发。记录按 memory_id 恢复时复用
+        load 通路（本地 store 或脑端）。
         门面只读历史：生成帧只出现在返回值里，**不写进 actual 历史**；读当前模型
         不触发模式重算（预测缓存不变）。
 
         实现来自注入：core 不导入 world，本实例须先经
-        lingshu.world.register_world_process(engine) 注册两个 world 模块；未注册时
-        返回 error 并写明初始化步骤（不自行导入、不静默回退）。
+        lingshu.world.register_world_process(engine) 注册 world 模块；未注册时返回
+        error 并写明初始化步骤（不自行导入、不静默回退）。process_ops 未注入时，
+        第 2 组三动作返回 error 并写明注册方式，第 1 组七动作照常可用。
         """
         p = params or {}
         if action not in self.WORLD_PROCESS_ACTIONS:
@@ -6748,7 +6802,7 @@ class SpacetimeMemoryEngine:
                              "import register_world_process; "
                              "register_world_process(engine)。core 不导入 world，"
                              "每新建或重开引擎都要注册一次"}
-        wp, mg = impl
+        wp, mg, ops = impl
 
         if action == "load":
             memory_id = str(p.get("memory_id") or "")
@@ -6784,6 +6838,51 @@ class SpacetimeMemoryEngine:
                 tick_offset=int(p.get("tick_offset", 0)))
             return {"status": "ok", "transfer": moved}
 
+        # ===== 第 2 组：过程重组（就地处理，不读观测历史）=====
+        # 三动作都经 process_ops 与 world_process 的既有入口；门面只做参数适配与转发，
+        # 不复制判据；结果只出现在返回值里，不写 actual 历史。
+        if action == "compose":
+            if ops is None:
+                return {"status": "error",
+                        "error": "过程补全与过程重组模块未注册。初始化步骤：from "
+                                 "lingshu.world import register_world_process; "
+                                 "register_world_process(engine)。本实例注册时只注入了"
+                                 "前两个模块，第 1 组七动作不受影响；重建引擎时按上述"
+                                 "签名补上 process_ops"}
+            segments = []
+            for label, direct_key, id_key in (("前段", "first", "first_id"),
+                                              ("后段", "second", "second_id")):
+                if p.get(direct_key) is not None:
+                    segments.append(p[direct_key])
+                    continue
+                if not p.get(id_key):
+                    return {"status": "error",
+                            "error": "compose 需要两段记录：first/second 或 "
+                                     "first_id/second_id（缺%s）" % label}
+                record, err = self._world_process_record(
+                    {"memory_id": p[id_key], "brain": p.get("brain")})
+                if err is not None:
+                    return {"status": "error",
+                            "error": "%s记录取不到：%s" % (label, err.get("error", err))}
+                segments.append(record)
+            first, second = segments
+            # 参数键与类型转换留在 try 之外：被捕获的只有模块抛出的 ValueError
+            # （同名角色、无效 joint 参数、记录没有采样），TypeError 等照旧上抛。
+            kwargs = {"roles": p.get("roles"),
+                      "translation": p.get("translation", (0.0, 0.0, 0.0)),
+                      "yaw": float(p.get("yaw", 0.0)),
+                      "scale": float(p.get("scale", 1.0)),
+                      "tick_gap": int(p.get("tick_gap", 1)),
+                      "thresholds": p.get("thresholds")}
+            try:
+                composition = ops.compose_processes(first, second, **kwargs)
+            except ValueError as exc:
+                return {"status": "error", "error": str(exc)}
+            return {"status": "ok", "composition": composition}
+
+
+        # 需要观测历史的动作（recognize/events/extract/echo/complete/groups/
+        # predict_groups）在此统一取值；load/transfer/compose 不读历史，已在上面返回。
         history, err = self._world_process_history(p)
         if err is not None:
             return err
@@ -6828,6 +6927,43 @@ class SpacetimeMemoryEngine:
                 out["brain_memory_id"] = brain_node.id
             return out
 
+        # ===== 第 2 组三动作的模块闸：只拦这三个动作，第 1 组动作（含下方
+        # groups 与 predict_groups）不受影响。=====
+        if ops is None and action in ("echo", "complete"):
+            return {"status": "error",
+                    "error": "过程补全与过程重组模块未注册。初始化步骤：from "
+                             "lingshu.world import register_world_process; "
+                             "register_world_process(engine)。本实例注册时只注入了"
+                             "前两个模块，第 1 组七动作不受影响；重建引擎时按上述"
+                             "签名补上 process_ops"}
+
+        if action == "echo":
+            return {"status": "ok",
+                    "history_len": len(history),
+                    "report": wp.event_echo_report(
+                        history, thresholds=p.get("thresholds"),
+                        max_lag=int(p.get("max_lag", 12)),
+                        min_support=int(p.get("min_support", 2)),
+                        min_consistency=float(p.get("min_consistency", 0.7)),
+                        holdout_fraction=float(p.get("holdout_fraction", 0.3)),
+                        entities=p.get("entities"))}
+
+        if action == "complete":
+            actor, ref = p.get("actor"), p.get("ref")
+            if not actor or not ref:
+                return {"status": "error", "error": "complete 需要 actor 与 ref"}
+            records, err = self._world_process_records(p)
+            if err is not None:
+                return err
+            try:
+                completion = ops.complete_process(
+                    history, str(actor), str(ref), records,
+                    thresholds=p.get("thresholds"))
+            except ValueError as exc:
+                # 只把模块的参数拒绝转成 error dict；TypeError 等照旧上抛。
+                return {"status": "error", "error": str(exc)}
+            return {"status": "ok", "completion": completion}
+
         # 组检测参数的缺省与判据全在 world 模块：门面只转发调用方显式给出的键。
         group_kw = {k: p[k] for k in ("window", "tol_pos", "min_samples", "min_speed")
                     if k in p}
@@ -6836,6 +6972,7 @@ class SpacetimeMemoryEngine:
             return {"status": "ok",
                     "model": mg.detect_motion_groups(history, **group_kw)}
 
+        # action == "predict_groups"（本段之上已处理完全部其它动作）
         hide = [str(e) for e in (p.get("hide") or [])]
         model = mg.detect_motion_groups(history, **group_kw)
         observed = p.get("observed")

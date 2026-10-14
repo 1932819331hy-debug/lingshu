@@ -1,10 +1,10 @@
 # -*- coding: utf-8 -*-
-"""test_world_process_core · 世界过程第 1 组接入 core 与记忆通路（显式注册 · 门面 · 存储 · 组推算）
+"""test_world_process_core · 世界过程接入 core 与记忆通路（显式注册 · 门面 · 存储 · 组推算）
 ====================================================================================
 被测对象：lingshu/core/core.py 的 SpacetimeMemoryEngine.world_process(action, params)
 （接入层）、lingshu/world/__init__.py 的 register_world_process(engine)（注册面），
-以及同一条通路上两个被测模块的真实返回值
-（lingshu/world/world_process.py 与 lingshu/world/motion_groups.py）。
+以及同一条通路上三个被测模块的真实返回值（lingshu/world/world_process.py、
+lingshu/world/motion_groups.py 与 lingshu/world/process_ops.py）。
 
 接入层判据（每条都判“接入真的成立”，不判“模块能跑”——模块自身判据见
 tests/test_world_process.py 与 tests/test_motion_groups.py）：
@@ -21,12 +21,22 @@ tests/test_world_process.py 与 tests/test_motion_groups.py）：
     缺历史来源时返回 error，不凭空创建场景与假观测。
   F 门面契约：未知动作与缺参返回 error dict，不抛异常、不落到别的动作。
   G 显式注册（依赖方向 world → core）：core 纯导入不加载 world；import world 也不
-    自动注册；注册一次后 7 个动作可用；注册只作用于本实例，不泄漏到别的引擎。
+    自动注册；注册一次后 10 个动作可用；注册只作用于本实例，不泄漏到别的引擎。
   H 真实 MCP 往返（脑端）：缺前置 MDCG_BRAIN_PYTHONPATH 时跳过；有前置时记录经
-    BrainEngine 落脑，重建连接后仍按 memory_id 取回同一条记录。
+    BrainEngine 落脑，重建连接后仍按 memory_id 取回同一条记录；脑端也覆盖 complete
+    与 compose 的 memory_id 读记录路径。
+  I 第 2 组三动作（事件回声 / 过程补全 / 过程重组）：返回值逐位等于模块；阈值对象
+    原样转发；本地记忆重开后 complete 与 compose 都能按 memory_id 读同一条记录；
+    只注册两个模块时三动作返回 error、第 1 组七动作照常可用。complete 与 compose 把
+    模块抛出的 ValueError 转成 error dict（同名角色、无效 joint 参数），其余异常照旧上抛。
+
+注：本文件与 tests/test_event_echo.py 各自持有同款“停止→转向”运动构造（本文件的
+courier_history 与 _COURIER_* 常量）。两件独立持有输入数据，不互相导入，因此任一件
+被删改都不影响另一件的收集。
 
 G 组的两条 fresh-process 判据在本文件用子进程现跑（见 _run_probe）：同进程内已装过
 lingshu.world，证明不了“只 import core 不带 world”。
+I 组的“只注入前两个模块”判据同样在本进程里现建实例跑，不依赖任何子进程。
 
 运行（仓根）：
     .venv/Scripts/python.exe -X utf8 -B -m pytest tests/test_world_process_core.py -q -p no:cacheprovider
@@ -46,6 +56,7 @@ sys.path.insert(0, REPO)
 
 from lingshu.core.core import SpacetimeMemoryEngine            # noqa: E402
 from lingshu.world import motion_groups as MG                  # noqa: E402
+from lingshu.world import process_ops as OPS                   # noqa: E402
 from lingshu.world import register_world_process               # noqa: E402
 from lingshu.world import world_process as WP                  # noqa: E402
 from lingshu.world.world_learner import WorldLearner           # noqa: E402
@@ -83,6 +94,81 @@ def group_history(n=12, leave_tick=7):
                                   "m_b": [1.0 + step, 1.0, 0.0],
                                   "m_c": [2.0 + step + away, 1.0, 0.0]}))
     return hist
+
+
+#: 第 2 组事件回声的输入运动：一个实体每 13 步一轮，第 3 步停一步、第 8 步左转
+#: 90°。停止与转向各自相隔 13 步，事件流是 stop→turn 与 turn→stop 交替。
+_COURIER_PERIOD = 13
+_COURIER_STOP_OFFSET = 3
+_COURIER_TURN_OFFSET = 8
+_COURIER_CYCLES = 8
+
+
+def courier_track():
+    """按上述节奏造轨迹：计划步上停一步或左转 90°，其余步直行一步。"""
+    steps = _COURIER_CYCLES * _COURIER_PERIOD
+    kinds = {}
+    for cycle in range(_COURIER_CYCLES):
+        for offset, name in ((_COURIER_STOP_OFFSET, "stop"),
+                             (_COURIER_TURN_OFFSET, "turn")):
+            step = cycle * _COURIER_PERIOD + offset
+            if 1 <= step <= steps:
+                kinds.setdefault(step, []).append(name)
+    dx, dz, x, z = 1.0, 0.0, 0.0, 0.0
+    track = [[0.0, 1.0, 0.0]]
+    for step in range(1, steps + 1):
+        kind = kinds.get(step) or []
+        if kind == ["stop"]:
+            track.append([x, 1.0, z])
+            continue
+        if "turn" in kind:
+            dx, dz = -dz, dx
+        x, z = x + dx, z + dz
+        track.append([x, 1.0, z])
+    return track
+
+
+def courier_history():
+    """事件回声的输入历史：8 轮共 16 条事件（停止 8 条、转向 8 条）。"""
+    return [frame(i + 1, {"courier": pos}) for i, pos in enumerate(courier_track())]
+
+
+#: 事件回声的不规则场景：停止到转向的间隔按 1、2、4 循环，停止到转向的主 lag
+#: 只占该源签名有响应触发的 2/6，所以 min_consistency 一档之差就改变学到的关联。
+_UNEVEN_STEPS = 40
+_UNEVEN_STOP = (3, 8, 14, 22, 26, 32)
+_UNEVEN_TURN = (4, 10, 18, 23, 28, 36)
+
+
+def uneven_track():
+    """按上述步号造轨迹：停的该步位移为 0，转的该步左转 90°，其余步直行一步。"""
+    stops, turns = set(_UNEVEN_STOP), set(_UNEVEN_TURN)
+    dx, dz, x, z = 1.0, 0.0, 0.0, 0.0
+    track = [[0.0, 1.0, 0.0]]
+    for step in range(1, _UNEVEN_STEPS + 1):
+        if step in stops:
+            track.append([x, 1.0, z])
+            continue
+        if step in turns:
+            dx, dz = -dz, dx
+        x, z = x + dx, z + dz
+        track.append([x, 1.0, z])
+    return track
+
+
+def uneven_history():
+    """不规则节奏的事件回声输入历史：6 条停止、6 条转向（eid = courier）。"""
+    return [frame(i + 1, {"courier": pos}) for i, pos in enumerate(uneven_track())]
+
+
+def segment_pair():
+    """过程重组的两段记录来源：前段 rider 从离 beacon 4.0 走到 2.0，后段接着走。"""
+    seg_a = {"beacon": [[0, 1, 0]] * 5,
+             "rider": [[4, 1, 0], [3.5, 1, 0], [3, 1, 0], [2.5, 1, 0], [2, 1, 0]]}
+    seg_b = {"beacon": [[0, 1, 0]] * 5,
+             "rider": [[2, 1, 0], [1.5, 1, 0.5], [1, 1, 1], [0.5, 1, 1.5], [0, 1, 2]]}
+    return ([frame(i + 1, {e: t[i] for e, t in seg_a.items()}) for i in range(5)],
+            [frame(i + 1, {e: t[i] for e, t in seg_b.items()}) for i in range(5)])
 
 
 def drive_world_model(engine, history):
@@ -234,7 +320,7 @@ def test_register_rejects_non_engine(tmp_path):
 
 
 def test_actions_all_route_to_modules_after_register(tmp_path):
-    """注册后 7 个动作全部可用，且返回值与模块在同一输入上逐位相同。"""
+    """注册后 10 个动作全部可用，且返回值与模块在同一输入上逐位相同。"""
     eng = registered(tmp_path, "seven.db")
     try:
         history = approach_history()
@@ -576,6 +662,400 @@ def test_f2_unregistered_engine_returns_error_not_exception(tmp_path):
         eng.close()
 
 
+# ================= I 组：第 2 组三动作（事件回声 · 过程补全 · 过程重组） =================
+
+def test_i1_echo_forwards_report_like_module(tmp_path):
+    """I1：echo 的 report 与模块在同一 history 上的返回值逐位相同（逐位比较，不重实现）。"""
+    eng = registered(tmp_path, "echo.db")
+    try:
+        history = courier_history()
+        got = eng.world_process("echo", {"history": history})
+        assert got["status"] == "ok", got
+        assert got["history_len"] == len(history), got["history_len"]
+        assert got["report"] == WP.event_echo_report(history), got["report"]
+
+        report = got["report"]
+        assert report["kind"] == "event_echo_report"
+        assert [e["tick"] for e in report["events"] if e["event"] == "stop"] == \
+            [4, 17, 30, 43, 56, 69, 82, 95]
+        assert [e["tick"] for e in report["events"] if e["event"] == "turn"] == \
+            [9, 22, 35, 48, 61, 74, 87, 100]
+        # 切分按独立计数核：16 条事件、留出 ceil(16 × 0.3) = 5 条、开发段 11 条。
+        assert report["split"] == {"events": 16, "dev_events": 11,
+                                   "holdout_events": 5, "boundary_tick": 74,
+                                   "dev_last_tick": 69, "holdout_first_tick": 74,
+                                   "same_tick_grouped": True}
+        assert report["split"]["holdout_events"] == 5
+        assert report["split"]["dev_events"] == 16 - 5
+        assert report["split"]["dev_last_tick"] < \
+            report["split"]["holdout_first_tick"]
+        # 无泄漏：留出段就是流的最后 5 条，两段的 (tick, eid, event) 交集为空。
+        keys = [(e["tick"], e["eid"], e["event"]) for e in report["events"]]
+        assert keys == sorted(keys)
+        dev_keys, hold_keys = keys[:11], keys[11:]
+        assert len(hold_keys) == report["split"]["holdout_events"]
+        assert set(dev_keys) & set(hold_keys) == set()
+        # 关联按独立计数核：停到转 lag 5、转到停 lag 8，两条各 5 次、一致性 1.0。
+        assert [(a["after"], a["before"], a["lag"], a["count"], a["consistency"])
+                for a in report["associations"]] == [
+            ("stop", "turn", 5, 5, pytest.approx(1.0)),
+            ("turn", "stop", 8, 5, pytest.approx(1.0))]
+        # 固定例的命中值按实际评分重算：留出 5 条里 4 条命中、末条越过观察尾部。
+        lag = report["evaluation"]["lag_model"]
+        base = report["evaluation"]["no_delay_model"]
+        assert lag["hits"] == 4 and lag["predictions"] == 5
+        assert lag["abs_tick_errors"] == [0, 0, 0, 0]
+        assert lag["mean_abs_tick_error"] == 0.0
+        assert lag["scored"] == 4 and lag["prediction_beyond_window"] == 1
+        assert lag["coverage"] == pytest.approx(1.0)
+        assert base["hits"] == 0 and base["predictions"] == 5
+        assert base["abs_tick_errors"] == [8, 5, 8, 5]
+        assert base["mean_abs_tick_error"] == 6.5
+        assert [(r["tick"], r["predicted_tick"], r["actual_tick"], r["hit"])
+                for r in report["evaluation"]["lag_readings"]] == [
+            (74, 82, 82, True), (82, 87, 87, True), (87, 95, 95, True),
+            (95, 100, 100, True), (100, 108, None, False)]
+        # 命中数不超过留出事件数，也不超过预测数。
+        for model in (lag, base):
+            assert 0 <= model["hits"] <= model["predictions"] <= model["events"]
+            assert model["events"] == report["split"]["holdout_events"]
+            assert model["hits"] <= report["split"]["holdout_events"]
+        assert lag["hit_rate"] > base["hit_rate"]
+    finally:
+        eng.close()
+
+
+def test_i2_echo_forwards_cut_and_thresholds(tmp_path):
+    """I2：echo 的调用参数按模块原样转发——切分比例与阈值对象改一个数就换一档读数。"""
+    eng = registered(tmp_path, "echo_cut.db")
+    try:
+        history = courier_history()
+        cut = eng.world_process("echo", {"history": history, "holdout_fraction": 0.5})
+        assert cut["report"]["split"]["holdout_events"] == 8, cut["report"]["split"]
+        assert cut["report"] == WP.event_echo_report(history, holdout_fraction=0.5), cut
+
+        # 换一档转向判据后事件流随之变化：门面不吞参数、不替换阈值对象。
+        # turn_deg 提高 100 度：本例的转向都是 90 度，全部不再判为转向，只剩 8 条停止。
+        strict = WP.ProcessThresholds(turn_deg=100.0)
+        tight = eng.world_process("echo", {"history": history, "thresholds": strict})
+        assert [e["event"] for e in tight["report"]["events"]] == ["stop"] * 8, \
+            tight["report"]["events"]
+        assert tight["report"]["thresholds"]["turn_deg"] == 100.0, tight["report"]
+        assert tight["report"] == WP.event_echo_report(history, thresholds=strict), tight
+
+        narrowed = eng.world_process("echo", {"history": history, "max_lag": 4})
+        assert narrowed["report"]["thresholds"]["max_lag"] == 4, narrowed["report"]
+        assert narrowed["report"]["associations"] == [], narrowed["report"]
+    finally:
+        eng.close()
+
+
+def test_i4_echo_forwards_min_consistency(tmp_path):
+    """I4：min_consistency 经 core 原样转发——改一档就改变学到的关联。"""
+    eng = registered(tmp_path, "echo_minc.db")
+    try:
+        history = uneven_history()
+        default = eng.world_process("echo", {"history": history})
+        assert default["status"] == "ok", default
+        assert default["report"]["thresholds"]["min_consistency"] == 0.7
+        assert default["report"] == WP.event_echo_report(history), default
+        # 默认门槛 0.7：只保留转到停 lag 4 这一条（一致性 1.0）。
+        assert [(a["after"], a["before"], a["lag"], a["count"])
+                for a in default["report"]["associations"]] == [
+            ("turn", "stop", 4, 3)]
+        assert default["report"]["associations"][0]["consistency"] == \
+            pytest.approx(1.0)
+
+        # 放宽到 0.3：停到转 lag 1（一致性 0.5）这一条也进来。
+        loose = eng.world_process("echo", {"history": history,
+                                           "min_consistency": 0.3})
+        assert loose["report"]["thresholds"]["min_consistency"] == 0.3
+        assert loose["report"] == WP.event_echo_report(
+            history, min_consistency=0.3), loose
+        assert [(a["after"], a["before"], a["lag"], a["count"], a["consistency"])
+                for a in loose["report"]["associations"]] == [
+            ("stop", "turn", 1, 2, pytest.approx(0.5)),
+            ("turn", "stop", 4, 3, pytest.approx(1.0))]
+        # 门槛只改变关联，不改变事件流与切分。
+        assert loose["report"]["events"] == default["report"]["events"]
+        assert loose["report"]["split"] == default["report"]["split"]
+        assert loose["report"]["evaluation"]["min_consistency"] == 0.3
+        # 关联多一条，留出段的预测数随之上升：默认 2 条，放宽后 4 条。
+        assert default["report"]["evaluation"]["lag_model"]["predictions"] == 2
+        assert loose["report"]["evaluation"]["lag_model"]["predictions"] == 4
+    finally:
+        eng.close()
+
+
+def test_i3_complete_and_compose_match_modules(tmp_path):
+    """I3：complete 与 compose 的返回值等于模块在同一输入上的返回值（含生成帧来源）。"""
+    eng = registered(tmp_path, "ops.db")
+    try:
+        history = approach_history()
+        record = WP.extract_relative_trajectory(history, "walker", "landmark")
+
+        completed = eng.world_process("complete", {"history": history[:6],
+                                                   "actor": "walker", "ref": "landmark",
+                                                   "record": record})
+        assert completed["status"] == "ok", completed
+        assert completed["completion"] == OPS.complete_process(
+            history[:6], "walker", "landmark", [record]), completed["completion"]
+        completion = completed["completion"]
+        assert completion["match"]["source"]["index"] == 0
+        assert completion["match"]["match_score"] == 1.0
+        assert [f["tick"] for f in completion["frames"]] == [7, 8, 9, 10, 11, 12]
+        assert all(f["source"] == WP.GENERATED for f in completion["frames"])
+
+        first_hist, second_hist = segment_pair()
+        first = WP.extract_relative_trajectory(first_hist, "rider", "beacon")
+        second = WP.extract_relative_trajectory(second_hist, "rider", "beacon")
+        composed = eng.world_process("compose", {
+            "first": first, "second": second,
+            "roles": {"actor": "hero", "ref": "mark"},
+            "translation": (10.0, 0.0, 5.0)})
+        assert composed["status"] == "ok", composed
+        assert composed["composition"] == OPS.compose_processes(
+            first, second, roles={"actor": "hero", "ref": "mark"},
+            translation=(10.0, 0.0, 5.0)), composed["composition"]
+        composition = composed["composition"]
+        assert composition["joint"]["continuous"] is True
+        assert composition["joint"]["ref_gap"] == 0.0
+        assert composition["joint"]["actor_gap"] == 0.0
+        assert composition["ticks"] == [1, 10]
+        assert all(set(f["entities"]) == {"hero", "mark"} for f in composition["frames"])
+    finally:
+        eng.close()
+
+
+def test_i4_ops_thresholds_forwarded_to_module(tmp_path):
+    """I4：thresholds 传 ProcessOpsThresholds 实例，门面按模块原样转发（不转换、不吞）。"""
+    eng = registered(tmp_path, "ops_thresholds.db")
+    try:
+        history = approach_history()
+        record = WP.extract_relative_trajectory(history, "walker", "landmark")
+
+        # 前缀逐帧偏移整体差 0.6：默认容差 0.5 不命中，容差 0.7 命中。
+        shifted = [frame(i + 1, {"landmark": [10, 1, 10],
+                                 "walker": [round(0.6 + px, 6), 1, 10]})
+                   for i, px in enumerate((4.0, 5.0, 6.0, 7.0, 8.0, 8.2))]
+        tight = eng.world_process("complete", {"history": shifted, "actor": "walker",
+                                               "ref": "landmark", "record": record})
+        assert tight["completion"]["match"] is None, tight["completion"]["match"]
+        loose = eng.world_process("complete", {
+            "history": shifted, "actor": "walker", "ref": "landmark",
+            "record": record, "thresholds": OPS.ProcessOpsThresholds(match_tol=0.7)})
+        assert loose["completion"]["match"] is not None, loose["completion"]
+        assert loose["completion"]["thresholds"]["match_tol"] == 0.7
+        assert loose["completion"] == OPS.complete_process(
+            shifted, "walker", "landmark", [record],
+            thresholds=OPS.ProcessOpsThresholds(match_tol=0.7)), loose["completion"]
+
+        first_hist, second_hist = segment_pair()
+        far = [frame(i + 1, {"beacon": [0, 1, 0],
+                             "rider": [6 - i, 1, i * 0.5]}) for i in range(5)]
+        first = WP.extract_relative_trajectory(first_hist, "rider", "beacon")
+        third = WP.extract_relative_trajectory(far, "rider", "beacon")
+        broken = eng.world_process("compose", {"first": first, "second": third,
+                                              "roles": {"actor": "hero", "ref": "mark"},
+                                              "translation": (10.0, 0.0, 5.0)})
+        assert broken["composition"]["joint"]["continuous"] is False, broken["composition"]
+        assert broken["composition"]["joint"]["actor_gap"] == pytest.approx(4.0)
+        assert len(broken["composition"]["frames"]) == 10, "不衔接也要给出两段帧"
+
+        loose_joint = eng.world_process("compose", {
+            "first": first, "second": third, "roles": {"actor": "hero", "ref": "mark"},
+            "translation": (10.0, 0.0, 5.0),
+            "thresholds": OPS.ProcessOpsThresholds(joint_tol=5.0)})
+        assert loose_joint["composition"]["joint"]["continuous"] is True, loose_joint
+        assert loose_joint["composition"]["thresholds"]["joint_tol"] == 5.0
+    finally:
+        eng.close()
+
+
+def test_i5_complete_and_compose_read_records_from_memory(tmp_path):
+    """I5：extract 落库后，complete 与 compose 按 memory_id 读回同一条记录并算出同结果。
+
+    场景：先把两段观测经 extract 落库，再关引擎、用同一个 db 新建引擎重新注册，
+    之后 complete 用 record_ids、compose 用 first_id/second_id 读记录——
+    结果与直接传 record 逐位相同（门面复用 load 通路，不另开读法）。
+    """
+    first_hist, second_hist = segment_pair()
+    prefix_hist = approach_history()[:6]
+    full_hist = approach_history()
+
+    first = registered(tmp_path, "ops_memory.db")
+    try:
+        walker_record = first.world_process("extract", {
+            "history": full_hist, "actor": "walker", "ref": "landmark"})
+        assert walker_record["status"] == "ok", walker_record
+        seg_a = first.world_process("extract", {"history": first_hist, "actor": "rider",
+                                                "ref": "beacon"})
+        seg_b = first.world_process("extract", {"history": second_hist, "actor": "rider",
+                                                "ref": "beacon"})
+        for got in (seg_a, seg_b):
+            assert got["status"] == "ok", got
+    finally:
+        first.close()
+
+    second = registered(tmp_path, "ops_memory.db")
+    try:
+        by_ids = second.world_process("complete", {
+            "history": prefix_hist, "actor": "walker", "ref": "landmark",
+            "record_ids": [walker_record["memory_id"]]})
+        by_record = second.world_process("complete", {
+            "history": prefix_hist, "actor": "walker", "ref": "landmark",
+            "record": walker_record["record"]})
+        assert by_ids["status"] == "ok", by_ids
+        assert by_ids["completion"] == by_record["completion"], by_ids["completion"]
+
+        # 单条 memory_id 也走同一条读记录路径（complete 的记录序列长度 1）。
+        by_single = second.world_process("complete", {
+            "history": prefix_hist, "actor": "walker", "ref": "landmark",
+            "memory_id": walker_record["memory_id"]})
+        assert by_single["completion"] == by_record["completion"], by_single["completion"]
+
+        composed_by_ids = second.world_process("compose", {
+            "first_id": seg_a["memory_id"], "second_id": seg_b["memory_id"],
+            "roles": {"actor": "hero", "ref": "mark"},
+            "translation": (10.0, 0.0, 5.0)})
+        composed_by_records = second.world_process("compose", {
+            "first": seg_a["record"], "second": seg_b["record"],
+            "roles": {"actor": "hero", "ref": "mark"},
+            "translation": (10.0, 0.0, 5.0)})
+        assert composed_by_ids["status"] == "ok", composed_by_ids
+        assert composed_by_ids["composition"] == composed_by_records["composition"], \
+            composed_by_ids["composition"]
+        assert composed_by_ids["composition"]["joint"]["continuous"] is True
+    finally:
+        second.close()
+
+
+def test_i6_group_two_actions_need_registration_and_params(tmp_path):
+    """I6：三动作的 error 契约——未注册、只注册两个模块、缺参、坏参数都不抛异常。"""
+    bare = engine(tmp_path, "bare_ops.db")
+    try:
+        for action in ("echo", "complete", "compose"):
+            got = bare.world_process(action, {})
+            assert got["status"] == "error", (action, got)
+            assert "未注册" in got["error"], got
+            assert "register_world_process(engine)" in got["error"], got
+    finally:
+        bare.close()
+
+    # 只注入前两个模块：第 1 组七动作照常可用，第 2 组三动作各报未注册 process_ops。
+    legacy = engine(tmp_path, "legacy.db")
+    try:
+        legacy.register_world_process(WP, MG)
+        assert legacy.world_process("recognize", {"history": approach_history()})["status"] \
+            == "ok"
+        assert legacy.world_process("load", {"memory_id": "nope"})["status"] == "error"
+        assert legacy.world_process("transfer", {"actor": "a", "ref": "b"})["status"] == "error"
+        assert "recognize" in legacy.WORLD_PROCESS_ACTIONS
+        assert legacy.world_process("recognize", {"history": approach_history()})["status"] \
+            == "ok"
+        assert legacy.world_process("groups", {"history": group_history(n=6),
+                                               "window": 6})["status"] == "ok"
+        for action in ("echo", "complete", "compose"):
+            got = legacy.world_process(action, {"history": approach_history()})
+            assert got["status"] == "error", (action, got)
+            assert "process_ops" in got["error"], got["error"]
+    finally:
+        legacy.close()
+
+    eng = registered(tmp_path, "contract_ops.db")
+    try:
+        history = approach_history()
+        # 缺参：都返回 error dict，不抛异常、不落到别的动作。
+        assert "complete 需要 actor 与 ref" == \
+            eng.world_process("complete", {"history": history, "actor": "walker"})["error"]
+        assert "需要 record 或 record_ids" == \
+            eng.world_process("complete", {"history": history, "actor": "walker",
+                                           "ref": "landmark"})["error"]
+        assert "record_ids 必须是" in \
+            eng.world_process("complete", {"history": history, "actor": "walker",
+                                           "ref": "landmark",
+                                           "record_ids": "node_x"})["error"]
+        empty_compose = eng.world_process("compose", {})
+        assert empty_compose["status"] == "error", empty_compose
+        assert "compose 需要两段记录" in empty_compose["error"], empty_compose
+        half_compose = eng.world_process("compose", {"first": {"samples": [1]}})
+        assert half_compose["status"] == "error", half_compose
+        assert "compose 需要两段记录" in half_compose["error"], half_compose
+        absent = eng.world_process("compose", {"first_id": "node_missing",
+                                               "second_id": "node_missing2"})
+        assert absent["status"] == "error" and "前段" in absent["error"], absent
+        # 未知动作仍报未知动作（不因新动作改口径）。
+        unknown = eng.world_process("nope", {})
+        assert "未知动作" in unknown["error"], unknown
+    finally:
+        eng.close()
+
+
+def test_i7_complete_and_compose_reject_illegal_input_as_error(tmp_path):
+    """I7：两动作把模块的 ValueError 转成 error dict；非 ValueError 照旧上抛。
+
+    判据分三层：① 同名角色与无效 joint 参数（roles 缺键、tick_gap 小于 1、记录没有
+    采样）返回 status=error，error 文案等于模块口径；② 对应合法调用的返回值仍与
+    模块逐位相同；③ AttributeError 与 TypeError 不被吞，仍从门面抛出。
+    """
+    eng = registered(tmp_path, "ops_contract.db")
+    try:
+        history = approach_history()
+        record = WP.extract_relative_trajectory(history, "walker", "landmark")
+        first_hist, second_hist = segment_pair()
+        first = WP.extract_relative_trajectory(first_hist, "rider", "beacon")
+        second = WP.extract_relative_trajectory(second_hist, "rider", "beacon")
+        same_name = "actor 与 ref 不得同名：帧里的 entities 会互相覆写"
+
+        # ① complete：actor 与 ref 同名（模块在生成任何帧之前拒绝）。
+        bad_complete = eng.world_process("complete", {
+            "history": history[:6], "actor": "walker", "ref": "walker",
+            "record": record})
+        assert bad_complete == {"status": "error", "error": same_name}, bad_complete
+
+        # ① compose：roles 显式同名、省略 roles 而前段记录本身同名、roles 缺键、
+        #    tick_gap 小于 1、前段记录没有采样——都返回 error dict，不抛异常。
+        cases = [
+            ({"first": first, "second": second,
+              "roles": {"actor": "hero", "ref": "hero"}}, same_name),
+            ({"first": dict(first, actor="solo", ref="solo"), "second": second},
+             same_name),
+            ({"first": first, "second": second, "roles": {"actor": "hero"}},
+             "roles 必须同时给出 actor 与 ref"),
+            ({"first": first, "second": second, "tick_gap": 0},
+             "tick_gap 必须是不小于 1 的整数"),
+            ({"first": {"actor": "a", "ref": "b", "samples": []}, "second": second},
+             "first 记录没有采样，无法重组"),
+        ]
+        for params, message in cases:
+            bad = eng.world_process("compose", params)
+            assert bad == {"status": "error", "error": message}, (bad, params)
+
+        # ② 合法调用不受影响：返回值与模块在同一输入上的返回值逐位相同。
+        good_complete = eng.world_process("complete", {
+            "history": history[:6], "actor": "walker", "ref": "landmark",
+            "record": record})
+        assert good_complete["status"] == "ok", good_complete
+        assert good_complete["completion"] == OPS.complete_process(
+            history[:6], "walker", "landmark", [record]), good_complete["completion"]
+        good_compose = eng.world_process("compose", {
+            "first": first, "second": second, "roles": {"actor": "hero", "ref": "mark"},
+            "translation": (10.0, 0.0, 5.0)})
+        assert good_compose["status"] == "ok", good_compose
+        assert good_compose["composition"] == OPS.compose_processes(
+            first, second, roles={"actor": "hero", "ref": "mark"},
+            translation=(10.0, 0.0, 5.0)), good_compose["composition"]
+
+        # ③ 只捕获 ValueError：其余异常照旧从门面抛出，不变成 error dict。
+        with pytest.raises(AttributeError):
+            eng.world_process("compose", {"first": [], "second": second})
+        with pytest.raises(TypeError):
+            eng.world_process("compose", {"first": first, "second": second,
+                                          "translation": 5})
+    finally:
+        eng.close()
+
+
 # ================= H 组：真实 MCP 往返（脑端） =================
 
 @pytest.fixture
@@ -601,14 +1081,22 @@ def brain_factory(tmp_path):
 
 
 def test_h1_record_round_trips_through_brain(tmp_path, brain_factory):
-    """H1：记录经 BrainEngine 落脑；重建连接后仍按 memory_id 取回同一条记录。"""
+    """H1：记录经 BrainEngine 落脑；重建连接后仍按 memory_id 读回并做补全与重组。"""
     history = approach_history()
+    first_hist, second_hist = segment_pair()
     eng = registered(tmp_path, "brain.db")
     first = brain_factory()
     try:
         got = eng.world_process("extract", {"history": history, "actor": "walker",
                                             "ref": "landmark", "brain": first})
         assert got["status"] == "ok" and got.get("brain_memory_id"), got
+        # 过程重组的两段记录也落脑：下面按脑端 memory_id 读回来做重组。
+        seg_a = eng.world_process("extract", {"history": first_hist, "actor": "rider",
+                                              "ref": "beacon", "brain": first})
+        seg_b = eng.world_process("extract", {"history": second_hist, "actor": "rider",
+                                              "ref": "beacon", "brain": first})
+        for part in (seg_a, seg_b):
+            assert part["status"] == "ok" and part.get("brain_memory_id"), part
     finally:
         eng.close()
     first.store.client.close()
@@ -625,6 +1113,26 @@ def test_h1_record_round_trips_through_brain(tmp_path, brain_factory):
             "actor": "a2", "ref": "r2", "translation": (2.0, 0.0, 0.0)})
         assert moved["status"] == "ok", moved
         assert moved["transfer"]["frames"][0]["source"] == WP.GENERATED
+
+        # 第 2 组也走脑端读记录路径：过程补全按 memory_id 从脑端取回同一条记录。
+        completed = eng2.world_process("complete", {
+            "history": history[:6], "actor": "walker", "ref": "landmark",
+            "memory_id": got["brain_memory_id"], "brain": second})
+        assert completed["status"] == "ok", completed
+        assert completed["completion"] == OPS.complete_process(
+            history[:6], "walker", "landmark", [got["record"]]), completed["completion"]
+        assert completed["completion"]["match"] is not None, completed["completion"]
+        assert [f["tick"] for f in completed["completion"]["frames"]] == [7, 8, 9, 10, 11, 12]
+        # compose 也走脑端 id 路径：按 first_id/second_id 从脑端读回两段记录，
+        # 结果与直接传 record 逐位相同。
+        composed = eng2.world_process("compose", {
+            "first_id": seg_a["brain_memory_id"], "second_id": seg_b["brain_memory_id"],
+            "brain": second, "roles": {"actor": "hero", "ref": "mark"},
+            "translation": (10.0, 0.0, 5.0)})
+        assert composed["status"] == "ok", composed
+        assert composed["composition"] == OPS.compose_processes(
+            seg_a["record"], seg_b["record"], roles={"actor": "hero", "ref": "mark"},
+            translation=(10.0, 0.0, 5.0)), composed["composition"]
     finally:
         eng2.close()
 

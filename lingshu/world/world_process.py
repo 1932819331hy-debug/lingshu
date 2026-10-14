@@ -1,5 +1,5 @@
 # -*- coding: utf-8 -*-
-"""world_process · 时间会意与示教迁移（世界过程第 1 组）
+"""world_process · 时间会意、示教迁移与事件回声（世界过程第 1、2 组）
 ============================================================================
 输入合同：UnifiedWorldModel 的真实观测 history——
     [{"tick": int, "entities": {eid: [x, y, z]}}, ...]
@@ -34,8 +34,17 @@ ref 位移与 rel 一起缩放、旋转；ref 静止时与只变换 rel 等价�
   · 已声明限制（漏报方向）：参照物在窗口内去回振幅超过 actor 回路半径约 18 倍时，
     合法绕行可能漏报（复审实测翻转点：ref 去回振幅 55.1、actor 回路半径 2.97）。
 
+事件回声从 motion_events 的停止/转向事件学习延迟关联：在 1..max_lag tick 的
+有限延迟范围内按固定签名对 (source_eid, source_event, target_eid, target_event)
+统计 lag，取次数最多、次数相同则 lag 最小的一条。留出段条数取
+ceil(事件数 × holdout_fraction)，从流尾切出，同一 tick 的事件整组进同一段。
+留出段上比较延迟模型（预测 tick = 当前 tick + lag）与无延迟模型（预测 tick =
+当前 tick），两者的触发集合与目标签名相同。命中要求目标 eid、event、tick 三者
+与固定目标签名在源事件之后最早的一条响应全等。关联只表示事件在时间上的先后与
+间隔，不表示因果作用。
+
 运行（仓根）：
-    python -X utf8 -m pytest tests/test_world_process.py -q
+    python -X utf8 -m pytest tests/test_world_process.py tests/test_event_echo.py -q
 """
 from __future__ import annotations
 
@@ -510,3 +519,530 @@ def transfer_demonstration(record: Dict, actor: str, ref: str, *,
                           "tick_offset": int(tick_offset)},
             "ticks": [frames[0]["tick"], frames[-1]["tick"]],
             "frames": frames}
+
+# ================= 事件回声：事件间的延迟关联 =================
+# 事件源复用上文的 motion_events：只取停止与转向两类事件。
+# 本段只学“事件 A 发生后 lag 个 tick 后事件 B 发生”这一时间关联，
+# 关联不代表 A 引起 B，结果字段与注释都不使用因果表述。
+# 配对口径（本版修正）：
+#   · 统计键保留 source 与 target 两侧的 eid 与 event，即四元身份
+#     (source_eid, source_event, target_eid, target_event)；同一事件类型组合下
+#     同实体对与跨实体对分开计数，跨实体的固定签名对仍可学。
+#   · 候选对按事件流位置枚举：对每个源事件取该事件之后 lag 在 1..max_lag 内的每个事件，
+#     同 tick 上的其它事件既是别人的候选，也仍是本源的候选，
+#     所以同 tick 簇不打断同一签名对的相邻事件对。
+#   · 事件流里的位置间隔不参与统计，插入无关事件不改变同一签名对的 lag 计数。
+
+def _echo_stream(events: Sequence[Dict]) -> List[Dict]:
+    """事件流按 (tick, eid, event) 严格升序；只读输入，不改写。"""
+    return sorted(events, key=lambda e: (int(e["tick"]), str(e["eid"]),
+                                         str(e["event"])))
+
+
+def _echo_key(event: Dict) -> Tuple[int, str, str]:
+    """事件身份：tick、eid、event 三者一起。"""
+    return (int(event["tick"]), str(event["eid"]), str(event["event"]))
+
+
+def _echo_rank(assoc: Dict) -> Tuple[int, int, str, str]:
+    """关联排序键：count 降序、lag 升序、target_event 升序、target_eid 升序。"""
+    return (-int(assoc["count"]), int(assoc["lag"]),
+            str(assoc["target_event"]), str(assoc["target_eid"]))
+
+
+def _echo_pick_lag(lags: Dict[int, int]) -> int:
+    """同一签名对多个候选 lag 时取次数最多的一条；次数相同取 lag 最小的一条。"""
+    keys = [int(lag) for lag in lags]
+    return min(keys, key=lambda lag: (-lags[lag], lag))
+
+
+def _echo_source_of(assoc: Dict) -> Tuple[str, str]:
+    """关联键的源侧：eid 与 event。"""
+    return (str(assoc["source_eid"]), str(assoc["source_event"]))
+
+
+def _echo_prediction_of(event: Dict, lag: int,
+                        associations: Sequence[Dict]) -> Optional[Dict]:
+    """按签名对的触发数取一条关联，再给出预测。
+
+    触发集合只由当前源事件（eid + event）与传入的关联决定；本函数不读实际下一事件，
+    也不读留出段的未来事件。返回 {"assoc", "predicted_eid", "predicted_event",
+    "predicted_tick", "lag"}；当前源事件没有可用关联时返回 None。
+    lag 由调用方给出：延迟模型用关联学到的 lag，无延迟模型用 0。
+    """
+    source = (str(event["eid"]), str(event["event"]))
+    ranked = sorted([a for a in associations if _echo_source_of(a) == source],
+                    key=_echo_rank)
+    if not ranked:
+        return None
+    assoc = ranked[0]
+    return {"assoc": assoc,
+            "predicted_eid": str(assoc["target_eid"]),
+            "predicted_event": str(assoc["target_event"]),
+            "predicted_tick": int(event["tick"]) + int(lag),
+            "lag": int(lag)}
+
+
+def _echo_predicted_key(predicted: Optional[Dict]) -> Optional[Tuple[int, str, str]]:
+    """预测的三键身份：预测 tick、目标 eid、目标 event。"""
+    if predicted is None:
+        return None
+    return (int(predicted["predicted_tick"]), str(predicted["predicted_eid"]),
+            str(predicted["predicted_event"]))
+
+
+def _echo_matches_signature(item: Dict, target: Tuple[str, str]) -> bool:
+    """事件是否属于固定目标签名；签名只含 eid 与 event 两侧（tick 不参与筛选）。"""
+    return (str(item["eid"]), str(item["event"])) == target
+
+
+def _echo_response_for(stream: Sequence[Dict], row: Dict,
+                       predicted: Optional[Dict]) -> Optional[Dict]:
+    """固定目标签名在 row 之后最早的一条响应事件；row 自身与排在 row 前面的事件都不算。
+
+    目标签名取预测的 target_eid 与 target_event。无关实体的插入或删除不改变
+    同一目标签名的最早响应：别的实体的事件既不是候选，也不会挤掉候选。
+    事件流按 (tick, eid, event) 严格升序，身份键大于 row 的键即严格在 row 之后，
+    所以源事件自己不会成为自己的响应。
+    本函数只用事件流与预测，不读留出段的实际下一事件，也不读入参 actual_next。
+    """
+    if predicted is None:
+        return None
+    here = _echo_key(row)
+    target = (str(predicted["predicted_eid"]), str(predicted["predicted_event"]))
+    for item in stream:
+        if _echo_key(item) <= here:
+            continue
+        if _echo_matches_signature(item, target):
+            return item
+    return None
+
+
+def _echo_beyond_stream(stream: Sequence[Dict], predicted: Optional[Dict]) -> bool:
+    """预测 tick 是否超出已观察到的事件流尾部。
+
+    观察窗口止于事件流最后一条事件的 tick；预测 tick 大于该 tick 时窗口已经结束，
+    本行属于右侧删失，不给命中也不给偏差，另按 prediction_beyond_window 计数。
+    """
+    if predicted is None or not stream:
+        return False
+    return int(predicted["predicted_tick"]) > int(stream[-1]["tick"])
+
+
+def _echo_score(stream: Sequence[Dict], row: Dict,
+                predicted: Optional[Dict]) -> Dict:
+    """唯一的命中判据：目标 eid、event、tick 三者全部吻合才算命中。
+
+    真实响应取固定目标签名在 row 之后最早的一条事件；row 自身不参与比对，
+    所以“预测落在本事件自己的 tick 上”不会靠本事件顶替成命中。
+    实际三键全部取自同一个响应对象，不混用入参与事件流两处来源。
+    end_state 取四者之一：没有预测记 no_prediction；命中记 hit；
+    预测 tick 超出观察尾部记 beyond_window；其余落空记 missed。
+    scored = end_state 为 hit 或 missed，即判据真正分辨出结果的行。
+    """
+    response = _echo_response_for(stream, row, predicted)
+    predicted_key = _echo_predicted_key(predicted)
+    actual_key = None if response is None else _echo_key(response)
+    beyond = _echo_beyond_stream(stream, predicted)
+    hit = bool(actual_key is not None and predicted_key is not None
+               and actual_key == predicted_key)
+    if predicted is None:
+        end_state = "no_prediction"
+    elif hit:
+        end_state = "hit"
+    elif beyond:
+        end_state = "beyond_window"
+    else:
+        end_state = "missed"
+    return {"response": response, "actual_key": actual_key,
+            "predicted_key": predicted_key, "hit": hit,
+            "beyond_window": bool(beyond), "end_state": end_state}
+
+
+def _echo_row(stream: Sequence[Dict], event: Dict, lag: int,
+              associations: Sequence[Dict]) -> Dict:
+    """一条预测读数：预测、命中、评分状态与偏差都在这里落定。
+
+    actual_tick、actual_eid、actual_event 三个键全部取自同一个实际响应对象，
+    即固定目标签名在源事件之后最早的一条；没有响应时三个键一起为 None。
+    预测超出观察尾部时 end_state 记 beyond_window，偏差为 None 且不参与 MAE。
+    """
+    predicted = _echo_prediction_of(event, lag, associations)
+    scored = _echo_score(stream, event, predicted)
+    response = scored["response"]
+    predicted_tick = None if predicted is None else int(predicted["predicted_tick"])
+    return {"tick": int(event["tick"]),
+            "eid": str(event["eid"]),
+            "event": str(event["event"]),
+            "after": str(event["event"]),
+            "actual_tick": None if response is None else int(response["tick"]),
+            "actual_eid": None if response is None else str(response["eid"]),
+            "actual_event": None if response is None else str(response["event"]),
+            "predicted_tick": predicted_tick,
+            "predicted_event": (None if predicted is None
+                                else str(predicted["predicted_event"])),
+            "predicted_eid": (None if predicted is None
+                              else str(predicted["predicted_eid"])),
+            "lag": None if predicted is None else int(predicted["lag"]),
+            "hit": bool(scored["hit"]),
+            "scored": scored["end_state"] in ("hit", "missed"),
+            "end_state": scored["end_state"],
+            "abs_tick_error": (
+                None if response is None or predicted is None
+                or scored["beyond_window"]
+                else abs(predicted_tick - int(response["tick"])))}
+
+
+def _echo_walk(stream: Sequence[Dict], lag: Optional[int],
+               associations: Sequence[Dict]) -> List[Dict]:
+    """逐条填预测与命中；延迟模型与无延迟模型走同一条路径。
+
+    两个模型的触发集合（有该签名对的源事件）、目标签名与命中判据全部相同，
+    差别只有 lag：lag=None 时用每条关联学到的 lag，lag=0 时预测与当前事件同 tick。
+    """
+    rows: List[Dict] = []
+    for event in stream:
+        predicted = _echo_prediction_of(event, 0, associations)
+        use = 0 if predicted is None else (0 if lag == 0
+                                           else int(predicted["assoc"]["lag"]))
+        rows.append(_echo_row(stream, event, use, associations))
+    return rows
+
+
+def _echo_metrics(rows: Sequence[Dict]) -> Dict:
+    """一个模型的读数：预测、评分、未决尾部三类数量与误差。
+
+    predictions = 给出预测 tick 的行数，no_prediction = 没有预测的行数，
+    两者相加等于 events。scored = 判据真正分辨出结果的行数（命中与落空都算），
+    unscored = 未评分行数，两者相加等于 events。
+    prediction_beyond_window = 预测 tick 超出已观察尾部、判据分辨不出结果的行数，
+    单列计数，不与普通落空混在一起；unresolved_window_end 与该键同值，保留旧键名。
+    三类构成 events 的一个划分：scored + no_prediction + prediction_beyond_window
+    = events。未预测与超窗的事件都不删，计数留在 events 与 misses 里。
+    hit_rate = 命中数 ÷ 事件数；coverage = predictions ÷ 事件数，即给出预测的比例；
+    scored_rate = scored ÷ 事件数。
+    misses = 非命中行数 = events − hits，含无预测、超窗与真实落空三类。
+    偏差只统计判据分辨出结果、且响应落在观察窗口内的预测；
+    超出观察尾部的预测不计入偏差，也不进 scored。
+    """
+    total = len(rows)
+    hits = sum(1 for r in rows if r["hit"])
+    predictions = sum(1 for r in rows if r["predicted_tick"] is not None)
+    scored = [r for r in rows if r["scored"]]
+    beyond = sum(1 for r in rows if r["end_state"] == "beyond_window")
+    errors = [int(r["abs_tick_error"]) for r in rows
+              if r["abs_tick_error"] is not None]
+    return {"events": total,
+            "predictions": predictions,
+            "hits": int(hits),
+            "misses": total - int(hits),
+            "scored": len(scored),
+            "no_prediction": total - predictions,
+            "unscored": total - len(scored),
+            "prediction_beyond_window": beyond,
+            "unresolved_window_end": beyond,
+            "hit_rate": round(int(hits) / total, 6) if total else 0.0,
+            "coverage": round(predictions / total, 6) if total else 0.0,
+            "scored_rate": round(len(scored) / total, 6) if total else 0.0,
+            "mean_abs_tick_error": (round(sum(errors) / len(errors), 6)
+                                    if errors else None),
+            "abs_tick_errors": errors}
+
+
+def event_echo_readings(history: Sequence[Dict], *,
+                        thresholds: Optional[ProcessThresholds] = None,
+                        entities: Optional[Sequence[str]] = None) -> List[Dict]:
+    """把所有实体的停止/转向事件合成一条事件流（复用 motion_events）。
+
+    history 只读；返回按 (tick, eid, event) 排序的新列表，元素形如
+    {"tick", "eid", "event", "dt", "lag_from_prev"}。
+    lag_from_prev = 本事件 tick − 前一事件 tick（同 tick 记 0），按真实 tick 计。
+    省略 entities 时取 history 中出现过的全部实体。
+    同一 tick 可以有多条事件：不同实体各一条，本函数逐条保留。
+    """
+    if entities is None:
+        seen = set()
+        for rec in history:
+            seen.update(rec["entities"])
+        eids = sorted(seen)
+    else:
+        eids = sorted(set(str(e) for e in entities))
+    events: List[Dict] = []
+    for eid in eids:
+        for item in motion_events(history, eid, thresholds=thresholds):
+            events.append({"tick": int(item["tick"]),
+                           "eid": eid,
+                           "event": item["event"],
+                           "dt": item["dt"],
+                           "lag_from_prev": 0})
+    events.sort(key=lambda e: (e["tick"], e["eid"], e["event"]))
+    prev_tick: Optional[int] = None
+    for e in events:
+        e["lag_from_prev"] = 0 if prev_tick is None else e["tick"] - prev_tick
+        prev_tick = e["tick"]
+    return events
+
+
+def echo_lag_associations(events: Sequence[Dict], *,
+                          max_lag: int = 12, min_support: int = 2,
+                          min_consistency: float = 0.7) -> List[Dict]:
+    """从事件流学习固定事件签名对的延迟关联。
+
+    统计口径：签名对 = (source_eid, source_event, target_eid, target_event)。
+    计数口径：对每个源事件，按 (target_eid, target_event) 分桶，每桶只记该桶里
+    最早的一条响应（最接近源事件的那条），桶内更晚的响应不重复计数。
+    事件流里的位置间隔不参与统计，因此插入无关事件不改变同一签名对测到的 lag，
+    同 tick 簇也不打断同一签名对的配对；同一 tick 上的多条事件按整组处理。
+    lag=0（同 tick 的两条事件）不进入延迟统计。
+
+    输出条件（两条都要满足）：
+      · count = 该签名对在主 lag 上的计数 ≥ min_support；
+      · consistency = 主 lag 计数 ÷ 该源签名在 1..max_lag 内有任意响应的触发数
+        ≥ min_consistency。
+
+    consistency 的分子与分母口径：
+      · 分子 count 只数这一个四元签名对在主 lag 上的次数，含目标选择成分；
+      · 分母 sources_with_pair（= triggers）数该源签名（eid + event）在 1..max_lag
+        内至少有一条候选目标的源事件条数，候选不限目标签名，含 lag 集中成分。
+    所以 consistency 同时混合目标覆盖与 lag 集中两个成分，不单独衡量其中任何一项。
+    sources_total 是该源签名在事件流里出现的总条数；响应覆盖率另按
+    sources_with_pair ÷ sources_total 读，不由 consistency 承担。
+    lag_consistency = count ÷ 该签名对全部 lag 计数之和，只作原始读数，
+    不参与门槛，也没有做检验。
+    min_support 过滤绝对次数不足的签名对，min_consistency 过滤主 lag 占比不足的
+    签名对。本段不做统计检验，也不保证随机序列不出现偶然候选。
+
+    返回按 (after, before, target_eid) 排序的新列表，元素：
+    {"after", "before", "source_eid", "source_event", "target_eid", "target_event",
+     "lag", "count", "lag_counts", "triggers", "sources_total", "sources_with_pair",
+     "consistency", "lag_consistency"}。
+    after/before 沿用源与目标的事件类型，供既有调用方读取。
+    无延迟关联的序列返回空列表；关联只表示两个事件在时间上的先后与间隔，不表示因果作用。
+    """
+    stream = _echo_stream(events)
+    lags: Dict[Tuple[str, str, str, str], Dict[int, int]] = {}
+    responded: set = set()
+    for src in stream:
+        src_key = (str(src["eid"]), str(src["event"]))
+        first: Dict[Tuple[str, str], int] = {}
+        for tgt in stream:
+            target = (str(tgt["eid"]), str(tgt["event"]))
+            if target in first:
+                continue            # 同一签名只记最早的一条响应，不重复计数
+            lag = int(tgt["tick"]) - int(src["tick"])
+            if lag < 1:
+                continue
+            if lag > int(max_lag):
+                break               # 事件流按 tick 升序，后面的更远
+            first[target] = lag
+        for target in sorted(first):
+            sig = (src_key[0], src_key[1], target[0], target[1])
+            lags.setdefault(sig, {})
+            lag = first[target]
+            lags[sig][lag] = lags[sig].get(lag, 0) + 1
+            responded.add(_echo_key(src))
+    with_pair: Dict[Tuple[str, str], int] = {}
+    for item in stream:
+        if _echo_key(item) in responded:
+            key = (str(item["eid"]), str(item["event"]))
+            with_pair[key] = with_pair.get(key, 0) + 1
+    sources_total: Dict[Tuple[str, str], int] = {}
+    for e in stream:
+        src_key = (str(e["eid"]), str(e["event"]))
+        sources_total[src_key] = sources_total.get(src_key, 0) + 1
+    out: List[Dict] = []
+    for sig in sorted(lags):
+        lag = _echo_pick_lag(lags[sig])
+        count = lags[sig][lag]
+        triggers = int(with_pair.get((sig[0], sig[1]), 0))
+        if count < int(min_support) or triggers <= 0:
+            continue
+        consistency = round(count / triggers, 6)
+        if consistency < float(min_consistency):
+            continue
+        pair_total = sum(int(v) for v in lags[sig].values())
+        out.append({"after": sig[1], "before": sig[3],
+                    "source_eid": sig[0], "source_event": sig[1],
+                    "target_eid": sig[2], "target_event": sig[3],
+                    "lag": int(lag), "count": int(count),
+                    "lag_counts": {k: lags[sig][k] for k in sorted(lags[sig])},
+                    "triggers": triggers,
+                    "sources_total": int(sources_total.get((sig[0], sig[1]), 0)),
+                    "sources_with_pair": triggers,
+                    "consistency": consistency,
+                    "lag_consistency": round(count / pair_total, 6)})
+    out.sort(key=lambda a: (a["after"], a["before"], a["target_eid"]))
+    return out
+
+
+def _echo_inside_tick_group(stream: Sequence[Dict], index: int) -> bool:
+    """下标 index 处是否落在同一 tick 组的内部。
+
+    只比较 index 与前一条：前一条同 tick 时，index 位于该 tick 组中间，
+    边界必须向前移到该组首。后一条同 tick 只说明 index 在组首或组内，
+    不构成“落在组内部”的判据，因此不得据 index+1 继续多退一组。
+    """
+    return (0 < index < len(stream)
+            and int(stream[index - 1]["tick"]) == int(stream[index]["tick"]))
+
+
+def echo_split(events: Sequence[Dict], holdout_fraction: float = 0.3) -> Dict:
+    """把事件流按 tick 切成开发段与留出段；同一 tick 的事件整组进同一段。
+
+    留出段条数 holdout_count = ceil(事件数 × holdout_fraction)，
+    切分下标 split_index = 事件数 − holdout_count：留出段是流的最后 holdout_count 条。
+    holdout_fraction=0 时留出段为空，=1 时全部进留出段。
+    切分边界落在同一 tick 组内部（前一条与本条同 tick）时，边界向前移到该组首，
+    整组进留出段；因此只要两段都非空，开发段末尾 tick 严格小于留出段首个 tick。
+    同一 tick 组大于按比例算出的留出条数时，留出段条数会多于比例值。
+    两段不重叠，任一条事件只出现在一段里；输入列表不改写。
+    返回 {"events", "holdout_fraction", "holdout_events", "dev_events",
+    "boundary_tick", "dev_last_tick", "holdout_first_tick", "same_tick_grouped",
+    "dev", "holdout"}。
+    """
+    stream = _echo_stream(events)
+    total = len(stream)
+    holdout_count = max(0, min(total, int(math.ceil(total * float(holdout_fraction)))))
+    index = total - holdout_count
+    # 边界落在同 tick 组内部时整组进留出段：向前移到该组首。
+    while 0 < index < total and _echo_inside_tick_group(stream, index):
+        index -= 1
+    dev = stream[:index]
+    holdout = stream[index:]
+    return {"events": total,
+            "holdout_fraction": float(holdout_fraction),
+            "holdout_events": len(holdout),
+            "dev_events": len(dev),
+            "boundary_tick": None if not holdout else int(holdout[0]["tick"]),
+            "dev_last_tick": None if not dev else int(dev[-1]["tick"]),
+            "holdout_first_tick": None if not holdout else int(holdout[0]["tick"]),
+            "same_tick_grouped": True,
+            "dev": dev,
+            "holdout": holdout}
+
+
+def echo_lag_prediction(event: Dict, actual_next: Optional[Dict], *,
+                        associations: Sequence[Dict],
+                        events: Sequence[Dict]) -> Optional[Dict]:
+    """用延迟关联预测 event 之后的下一个事件，并与实际下一事件对照。
+
+    events 是查找响应的事件流（留出段）的唯一来源。预测的目标签名（eid + event）
+    与 lag 只由 associations 与当前源事件决定：目标签名取该源事件签名对里触发数
+    最多的一条关联，预测 tick = 当前 tick + 该关联的 lag。
+    actual_next 只作入参兼容保留：不参与选择关联，也不参与 actual 三键与偏差的
+    计算。actual_tick、actual_eid、actual_event 三个键统一取同一个响应对象，即固定
+    目标签名在 events 里严格晚于本事件的最早一条；本函数不读留出段的未来决定模型。
+
+    命中判据与 evaluate_event_echo 共用 _echo_score：目标 eid、event、tick 三者
+    全部吻合才算命中；本事件自身不能顶替成命中；预测 tick 超出 events 尾部时
+    end_state 记 beyond_window，偏差为 None 且不参与统计。
+    返回 {"tick", "after", "source_eid", "predicted_eid", "predicted_event", "lag",
+    "predicted_tick", "actual_tick", "actual_eid", "actual_event", "hit", "scored",
+    "end_state", "abs_tick_error"}；没有可用关联时返回 None。
+    """
+    predicted = _echo_prediction_of(event, 0, associations)
+    if predicted is None:
+        return None
+    assoc = predicted["assoc"]
+    predicted_tick = int(event["tick"]) + int(assoc["lag"])
+    stream = _echo_stream(events)
+    row = {"tick": int(event["tick"]), "eid": str(event["eid"]),
+           "event": str(event["event"])}
+    scored = _echo_score(stream, row, {"predicted_tick": predicted_tick,
+                                       "predicted_eid": str(assoc["target_eid"]),
+                                       "predicted_event": str(assoc["target_event"])})
+    response = scored["response"]
+    return {"tick": int(event["tick"]),
+            "after": str(event["event"]),
+            "source_eid": str(event["eid"]),
+            "predicted_eid": str(assoc["target_eid"]),
+            "predicted_event": str(assoc["target_event"]),
+            "lag": int(assoc["lag"]),
+            "predicted_tick": predicted_tick,
+            "actual_tick": None if response is None else int(response["tick"]),
+            "actual_eid": None if response is None else str(response["eid"]),
+            "actual_event": None if response is None else str(response["event"]),
+            "hit": bool(scored["hit"]),
+            "scored": scored["end_state"] in ("hit", "missed"),
+            "end_state": scored["end_state"],
+            "abs_tick_error": (None if response is None
+                               or scored["beyond_window"]
+                               else abs(predicted_tick - int(response["tick"])))}
+
+
+def evaluate_event_echo(dev_events: Sequence[Dict],
+                        holdout_events: Sequence[Dict], *,
+                        max_lag: int = 12, min_support: int = 2,
+                        min_consistency: float = 0.7) -> Dict:
+    """在留出片段上比较延迟模型与无延迟模型。
+
+    延迟模型：用开发段学到的关联预测下一个事件，预测 tick = 当前 tick + 关联 lag，
+    目标签名取该关联的 target_eid + target_event。
+    无延迟模型：触发集合、目标签名与命中判据与延迟模型完全相同，只把 lag 记成 0，
+    即预测下一个事件与当前事件同 tick。
+    两个模型共用 _echo_prediction_of 与 _echo_score 这一条路径；评分只在一处。
+    留出段的实际事件不参与关联学习与图对统计，也不参与模型或目标的选择。
+
+    读数含四类数量：predictions / no_prediction / scored / prediction_beyond_window；
+    coverage = predictions ÷ events，scored_rate = scored ÷ events。未预测与超窗的
+    事件都不删，计数留在 events 与 misses 里。
+    两个模型共用同一真实响应对象（固定目标签名在源事件之后最早的一条），
+    所以触发集合、目标签名与偏差口径逐条可比；只有预测 tick 不同，
+    因此 lag 模型的预测可能先越过观察尾部而记 beyond_window。
+    同一输入重复调用返回相同结果，输入列表不改写。
+    """
+    associations = echo_lag_associations(dev_events, max_lag=max_lag,
+                                         min_support=min_support,
+                                         min_consistency=min_consistency)
+    stream = _echo_stream(holdout_events)
+    lag_rows = _echo_walk(stream, None, associations)
+    base_rows = _echo_walk(stream, 0, associations)
+    return {"kind": "event_echo_evaluation",
+            "models": ["lag", "no_delay"],
+            "max_lag": int(max_lag),
+            "min_support": int(min_support),
+            "min_consistency": float(min_consistency),
+            "dev_events": len(dev_events),
+            "holdout_events": len(stream),
+            "associations": associations,
+            "lag_model": _echo_metrics(lag_rows),
+            "no_delay_model": _echo_metrics(base_rows),
+            "lag_readings": lag_rows,
+            "no_delay_readings": base_rows}
+
+
+def event_echo_report(history: Sequence[Dict], *,
+                      thresholds: Optional[ProcessThresholds] = None,
+                      max_lag: int = 12, min_support: int = 2,
+                      holdout_fraction: float = 0.3,
+                      min_consistency: float = 0.7,
+                      entities: Optional[Sequence[str]] = None) -> Dict:
+    """事件回声的完整读数：事件流 + 开发/留出切分 + 两模型对照。
+
+    按 thresholds 取事件流，按 holdout_fraction 与 tick 边界切分，在开发段学延迟
+    关联（min_support 与 min_consistency 两道门槛），在留出段比较延迟模型与无延迟
+    模型。返回 {"kind", "thresholds", "events", "split", "associations", "evaluation"}；
+    core 与演示只读这些键，新增读数挂在 thresholds、split、associations 与 evaluation
+    内部，主要键仍按原名返回。全部读数由延迟关联与事件时间得出，不含因果结论。
+    """
+    th = thresholds or ProcessThresholds()
+    events = event_echo_readings(history, thresholds=thresholds, entities=entities)
+    split = echo_split(events, holdout_fraction)
+    evaluation = evaluate_event_echo(split["dev"], split["holdout"],
+                                     max_lag=max_lag, min_support=min_support,
+                                     min_consistency=min_consistency)
+    return {"kind": "event_echo_report",
+            "thresholds": {"max_lag": int(max_lag), "min_support": int(min_support),
+                           "min_consistency": float(min_consistency),
+                           "holdout_fraction": float(holdout_fraction),
+                           "stop_speed": th.stop_speed, "turn_deg": th.turn_deg},
+            "events": events,
+            "split": {"events": split["events"],
+                      "dev_events": split["dev_events"],
+                      "holdout_events": split["holdout_events"],
+                      "boundary_tick": split["boundary_tick"],
+                      "dev_last_tick": split["dev_last_tick"],
+                      "holdout_first_tick": split["holdout_first_tick"],
+                      "same_tick_grouped": split["same_tick_grouped"]},
+            "associations": evaluation["associations"],
+            "evaluation": evaluation}
