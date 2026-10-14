@@ -76,6 +76,11 @@
      "unresolved_top": []
     },
     {
+     "file": "motion_groups.py",
+     "origin": "lingshu_native_development",
+     "sha256": "c6822da32c1353f4"
+    },
+    {
      "file": "multiview.py",
      "src": "aeis.multiview",
      "sha256": "b32ed5d636f3b6d3",
@@ -283,6 +288,11 @@
      "unresolved_top": [],
      "integration_base_sha256": "d8c018b9645c1c35",
      "base_sha256": "4e7c7ad0ffcfea85"
+    },
+    {
+     "file": "world_process.py",
+     "origin": "lingshu_native_development",
+     "sha256": "c660faf3f4666ae6"
     }
    ],
    "private_hits": []
@@ -314,7 +324,7 @@
     {
      "file": "core.py",
      "src": "aeis.core",
-     "sha256": "2c8a0f7e65774494",
+     "sha256": "0bdf8fd66dc17dc0",
      "rewrites": 34,
      "sanitized": 2,
      "patches": 2,
@@ -692,5 +702,28 @@
    "lingshu/world/seven_layer_loop.py": "5fbc5033eb3f2d42",
    "lingshu/world/world3d.py": "41a18b0b0e93506f"
   }
+ },
+ "world_process_first_batch": {
+  "date": "2026-10-13",
+  "base_commit": "894493b",
+  "kind": "lingshu_native_development",
+  "origin": "本仓原生开发（非 AEIS 导出件；不伪造上游来源）",
+  "scope": [
+   "时间会意",
+   "示教迁移",
+   "运动组合体"
+  ],
+  "report": "docs/world_process_usage.md",
+  "previous_sha256": {
+   "lingshu/core/core.py": "2c8a0f7e65774494"
+  },
+  "verified_records": "本批模块指纹只登记在 blocks.core.files[core.py] 与 blocks.world.files[world_process.py, motion_groups.py]：verify_manifest.py 逐条核验；本键不重复登记，避免第二份未被核验的指纹。",
+  "unverified_artifacts": [
+   "tests/test_world_process_core.py",
+   "tools/demo_world_process.py",
+   "docs/world_process_usage.md",
+   "README.md",
+   "docs/architecture.md"
+  ]
  }
 }

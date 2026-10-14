@@ -1,0 +1,146 @@
+{
+  "module_sha256_before": "c6822da32c1353f4088c2dae50e8b448663f8cdc4209708ee0dd79a89fa104b1",
+  "module_sha256_after": "c6822da32c1353f4088c2dae50e8b448663f8cdc4209708ee0dd79a89fa104b1",
+  "working_tree_unchanged": true,
+  "rows": [
+    {
+      "mutant": "baseline",
+      "exit": 0,
+      "tail": "19 passed in 0.26s"
+    },
+    {
+      "mutant": "M1a",
+      "title": "取消窗口内相对位置稳定判据（历史脚本原文）",
+      "exit": 1,
+      "red": [
+        "test_a13_slow_separation_beyond_tolerance_is_not_a_group",
+        "test_a14_back_and_forth_drift_is_not_a_group",
+        "test_a2_group_recomputed_when_member_moves_independently",
+        "test_a3_different_direction_or_speed_does_not_form_group",
+        "test_a4b_non_transitive_compatibility_is_deterministic_without_rename_claim",
+        "test_b_named_mutations_turn_isolation_red_without_touching_working_tree"
+      ],
+      "expected_test": "test_a13_slow_separation_beyond_tolerance_is_not_a_group",
+      "required": true,
+      "foreign_exceptions": [],
+      "checks": {
+        "非 0 退出码": true,
+        "目标测试变红 test_a13_slow_separation_beyond_tolerance_is_not_a_group": true,
+        "红灯只含目标与隔离用例（信息项）": false,
+        "无导入/语法错误": true,
+        "无 AssertionError 以外的异常类型（隔离用例段除外）": true,
+        "断言消息出现": true
+      },
+      "tail": "6 failed, 13 passed in 0.26s"
+    },
+    {
+      "mutant": "M1b",
+      "title": "容差边界改为闭区间（> 改 >=）",
+      "exit": 1,
+      "red": [
+        "test_b_named_mutations_turn_isolation_red_without_touching_working_tree"
+      ],
+      "expected_test": "test_a13_slow_separation_beyond_tolerance_is_not_a_group",
+      "required": false,
+      "foreign_exceptions": [],
+      "checks": {
+        "非 0 退出码": true,
+        "目标测试变红 test_a13_slow_separation_beyond_tolerance_is_not_a_group": false,
+        "红灯只含目标与隔离用例（信息项）": true,
+        "无导入/语法错误": true,
+        "无 AssertionError 以外的异常类型（隔离用例段除外）": true,
+        "断言消息出现": false
+      },
+      "tail": "1 failed, 18 passed in 0.22s"
+    },
+    {
+      "mutant": "M2",
+      "title": "删组速度（speed 置空表）",
+      "exit": 1,
+      "red": [
+        "test_a12_real_world_model_history_is_accepted_as_is",
+        "test_a13_slow_separation_beyond_tolerance_is_not_a_group",
+        "test_a15_speed_is_net_displacement_over_total_dt",
+        "test_a1_three_entities_in_common_translation_form_one_group",
+        "test_b_named_mutations_turn_isolation_red_without_touching_working_tree"
+      ],
+      "expected_test": "test_a15_speed_is_net_displacement_over_total_dt",
+      "required": true,
+      "foreign_exceptions": [],
+      "checks": {
+        "非 0 退出码": true,
+        "目标测试变红 test_a15_speed_is_net_displacement_over_total_dt": true,
+        "红灯只含目标与隔离用例（信息项）": false,
+        "无导入/语法错误": true,
+        "无 AssertionError 以外的异常类型（隔离用例段除外）": true,
+        "断言消息出现": true
+      },
+      "tail": "5 failed, 14 passed in 0.26s"
+    },
+    {
+      "mutant": "M3",
+      "title": "预测高度拉平到锚点高度",
+      "exit": 1,
+      "red": [
+        "test_a16_occluded_members_keep_their_observed_heights",
+        "test_b_named_mutations_turn_isolation_red_without_touching_working_tree"
+      ],
+      "expected_test": "test_a16_occluded_members_keep_their_observed_heights",
+      "required": true,
+      "foreign_exceptions": [],
+      "checks": {
+        "非 0 退出码": true,
+        "目标测试变红 test_a16_occluded_members_keep_their_observed_heights": true,
+        "红灯只含目标与隔离用例（信息项）": true,
+        "无导入/语法错误": true,
+        "无 AssertionError 以外的异常类型（隔离用例段除外）": true,
+        "断言消息出现": true
+      },
+      "tail": "2 failed, 17 passed in 0.23s"
+    },
+    {
+      "mutant": "M4a",
+      "title": "取消默认锚点、恒取首个可见成员（复审自加，疑为等价变异）",
+      "exit": 0,
+      "red": [],
+      "expected_test": "test_a8_prediction_uses_observed_anchor_and_labels_source",
+      "required": false,
+      "foreign_exceptions": [],
+      "checks": {
+        "非 0 退出码": false,
+        "目标测试变红 test_a8_prediction_uses_observed_anchor_and_labels_source": false,
+        "红灯只含目标与隔离用例（信息项）": false,
+        "无导入/语法错误": false,
+        "无 AssertionError 以外的异常类型（隔离用例段除外）": true
+      },
+      "tail": "19 passed in 0.22s"
+    },
+    {
+      "mutant": "M4b",
+      "title": "组速度分母改为采样区间数（净位移 / 总 dt 的定义被破坏）",
+      "exit": 1,
+      "red": [
+        "test_a15_speed_is_net_displacement_over_total_dt",
+        "test_b_named_mutations_turn_isolation_red_without_touching_working_tree"
+      ],
+      "expected_test": "test_a15_speed_is_net_displacement_over_total_dt",
+      "required": true,
+      "foreign_exceptions": [],
+      "checks": {
+        "非 0 退出码": true,
+        "目标测试变红 test_a15_speed_is_net_displacement_over_total_dt": true,
+        "红灯只含目标与隔离用例（信息项）": true,
+        "无导入/语法错误": true,
+        "无 AssertionError 以外的异常类型（隔离用例段除外）": true,
+        "断言消息出现": true
+      },
+      "tail": "2 failed, 17 passed in 0.23s"
+    },
+    {
+      "mutant": "restored",
+      "exit": 0,
+      "tail": "19 passed in 0.23s"
+    }
+  ],
+  "verdict_fail": []
+}

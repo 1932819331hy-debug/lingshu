@@ -1,6 +1,6 @@
 #!/usr/bin/env python3
 # -*- coding: utf-8 -*-
-"""test_manifest_integrity.py —— 冻结规格 PR-1 文件 B 的断言集（17 条）。
+"""test_manifest_integrity.py —— 冻结规格 PR-1 文件 B 的断言集（20 条）。
 
 用途
     守护 `tools/verify_manifest.py` 与仓库既有 intake 登记（`docs/intake/*/
@@ -22,7 +22,7 @@
     - 断言 5 用 subprocess 的 stdout **字节**比对（不是字符串）来验确定性，
       并额外跑一个**不同 cwd** 的第三次，以及「stdout 不含 CR」的跨平台断言。
     - 断言 9/10 是 `MATCH` 正例（★ 变异哨兵）：把工具里的比对行改成恒 False 后
-      这两条必须变红。真实仓库当前 61 条全 MATCH（登记已同步），但断言 4 只查
+      这两条必须变红。真实仓库当前 63 条全 MATCH（登记已同步），但断言 4 只查
       计数、断言 2/3 不经工具，MATCH 分支的**逐条语义**仍由 9/10 独立锁住。
     - 断言 8 覆盖 strict 负路径（MISMATCH → 3），断言 14 覆盖 strict 正路径
       （全 MATCH → 0），两条合起来锁住 `--strict` 的两个分支。
@@ -30,6 +30,12 @@
       零条目时，工具必须退出 1 而不是静默当「零条目、全通过」。定点变异：把
       `iter_records` 的记账改回 `continue` 静默跳过、并去掉 `decide_exit` 的
       `entries == 0` 判据 ⇒ 这三条必红（旧实现退 0）。
+    - 断言 18-20（原生来源记录）：新模块必须落在工具**实际解析**的 `blocks` 结构
+      里（顶层 `*_batch.files` 这类键工具不解析）；数量断言精确到 63 条
+      （v0.1 = 54 + v0.2 = 9），不是宽松下界。`origin`（原生标记）与 `src`（导出源）
+      同时出现时分类为 `both`（来源自相矛盾；工具只上报、不改判定与退出码，
+      缺陷由断言 18 的 `both == 0` 判）；写成 `origin` 的记录与导出件**同受**
+      sha256 核验（错指纹 ⇒ `--strict` 退 3；文件不在盘 ⇒ 退 1）。
     - fixture 一律用 `write_bytes`：Windows 上文本模式会把 `\\n` 写成 `\\r\\n`，
       实算 sha256 与预期不符会破坏「前缀匹配」正例。
     - 反例仓库只创建 `docs/intake/x/_export_manifest.json` 与所需被登记文件，
@@ -133,7 +139,7 @@ def test_2_every_registered_sha256_has_frozen_shape():
             assert isinstance(recorded, str), (path.as_posix(), relpath, recorded)
             assert SHA_SHAPE_RE.match(recorded), (path.as_posix(), relpath, recorded)
             checked += 1
-    assert checked == 61, checked
+    assert checked == 63, checked
 
 
 def test_3_every_registered_file_exists_on_disk():
@@ -145,7 +151,7 @@ def test_3_every_registered_file_exists_on_disk():
             checked += 1
             if not (REPO_ROOT / relpath).is_file():
                 missing.append((path.name, relpath))
-    assert checked == 61, checked
+    assert checked == 63, checked
     assert not missing, missing
 
 
@@ -154,12 +160,13 @@ def test_4_tool_exits_zero_on_real_repo():
     assert result.returncode == 0, result.stderr or result.stdout
     payload = json.loads(result.stdout)
     summary = payload["summary"]
-    assert summary["entries"] == 61, summary
+    assert summary["entries"] == 63, summary
     assert summary["missing"] == 0 and summary["malformed"] == 0, summary
     # 登记基准 = **LF 归一后的字节**（工具先 `\r\n`→`\n` 再实算 sha256/bytes）：
     # 登记件是文本、上游真源在 Linux 侧；本机 core.autocrlf=true 落成 CRLF 工作树、
     # CI(Linux) 检出 LF。归一后两种检出实算值相同 ⇒ 此断言在两侧都应为 0（平台无关）。
-    # 2026-10-09 登记按 LF 基准重算（20 条 sha256 + 2 条 bytes）；本批后本仓 61 条全 MATCH。
+    # 2026-10-09 登记按 LF 基准重算（20 条 sha256 + 2 条 bytes）；
+    # 2026-10-14 世界过程第 1 组 2 件原生模块入 blocks.world.files ⇒ 63 条全 MATCH。
     assert summary["mismatch"] == 0, summary
     assert payload["exit_code"] == 0
 
@@ -417,6 +424,135 @@ def test_17_zero_entry_manifest_is_defect_but_valid_one_is_green(tmp_path):
     result2 = _run_tool(["--repo-root", str(ok), "--json"])
     assert result2.returncode == 0, result2.stdout + result2.stderr
     assert json.loads(result2.stdout)["summary"]["entries"] == 1
+
+
+# --------------------------------------- 18-20：原生来源记录必须受工具核验（D3）
+
+#: 本仓原生开发标记（origin 字段值）；src 是 AEIS 导出源，两者不得同时出现。
+NATIVE_ORIGIN = "lingshu_native_development"
+
+#: 世界过程第 1 组新增的 2 件原生模块（本仓开发，非 AEIS 导出件）。
+NATIVE_MODULES = ("lingshu/world/world_process.py",
+                  "lingshu/world/motion_groups.py")
+
+V01 = "docs/intake/body-export-v0.1/_export_manifest.json"
+V02 = "docs/intake/body-export-v0.2/_export_manifest.json"
+
+
+def _block_entries(relpath, block):
+    """取 blocks.<block>.files 的原始条目，键为工具解析后的仓内相对路径。"""
+    payload = json.loads((REPO_ROOT / relpath).read_text(encoding="utf-8"))
+    node = payload["blocks"][block]
+    return {"lingshu/%s/%s" % (block, item["file"]): item for item in node["files"]}
+
+
+def test_18_native_modules_are_registered_where_the_tool_parses_them():
+    """D3：2 件原生模块必须落在工具**实际解析**的 blocks 结构里，并标为原生来源。
+
+    三层判据：
+      ① 记录完整性 + 精确计数：v0.1 全清单 54 条（world 块 26 条）、v0.2 9 条，
+         合计**精确 63**（不是宽松下界）；两条新记录必须在 world 块 26 条之内。
+      ② 受工具核验：--json 的 details 里两条都必须 status == MATCH。
+      ③ 来源：只写 origin（原生标记）、不写 src（不得伪装 AEIS 导出）；
+         全仓 both == 0（无来源自相矛盾的记录）。
+    """
+    world = _block_entries(V01, "world")
+    assert len(world) == 26, len(world)
+    v01 = json.loads((REPO_ROOT / V01).read_text(encoding="utf-8"))
+    v01_total = sum(len(node["files"]) for node in v01["blocks"].values())
+    assert v01_total == 54, v01_total
+    v02 = json.loads((REPO_ROOT / V02).read_text(encoding="utf-8"))
+    assert len(v02["artifacts"]) + len(v02["tests"]) == 9, sorted(v02.keys())
+    assert v01_total + 9 == 63, v01_total
+
+    for path in NATIVE_MODULES:
+        entry = world.get(path)
+        assert entry is not None, (path, sorted(world))
+        assert entry.get("origin") == NATIVE_ORIGIN, entry
+        assert not entry.get("src"), entry
+
+    result = _run_tool(["--json", "--strict"])
+    assert result.returncode == 0, result.stdout + result.stderr
+    payload = json.loads(result.stdout)
+    summary = payload["summary"]
+    assert summary["entries"] == 63, summary
+    assert summary["origins"]["origin-only"] == 2, summary
+    assert summary["origins"]["both"] == 0, summary
+
+    details = {d["path"]: d for d in payload["manifests"][0]["details"]}
+    for path in NATIVE_MODULES:
+        assert path in details, sorted(details)
+        assert details[path]["status"] == "MATCH", details[path]
+        assert details[path]["origin_class"] == "origin-only", details[path]
+        assert details[path]["declared_origin"] == NATIVE_ORIGIN, details[path]
+
+
+def test_19_origin_and_src_together_are_reported_as_both(tmp_path):
+    """来源分类有判别力：origin 与 src 同时出现 ⇒ 报 both（矛盾的来源）。
+
+    定点变异：把工具的 origin_class 改成「只看 origin」⇒ 本用例必红。
+    分类只作上报：指纹正确时退出码仍为 0——判缺陷由守卫（本用例 + 断言 18 的
+    both == 0）负责，工具不替调用方改判定。
+    """
+    blob = b"hello\n"
+    sha = hashlib.sha256(blob).hexdigest()[:16]
+    native_only = _fake_repo(
+        tmp_path / "native",
+        {"blocks": {"world": {"files": [
+            {"file": "native.py", "origin": NATIVE_ORIGIN, "sha256": sha}]}}},
+        files=[("lingshu/world/native.py", blob)],
+    )
+    result = _run_tool(["--repo-root", str(native_only), "--json"])
+    assert result.returncode == 0, result.stdout + result.stderr
+    payload = json.loads(result.stdout)
+    assert payload["summary"]["origins"]["origin-only"] == 1, payload["summary"]
+    assert payload["summary"]["origins"]["both"] == 0, payload["summary"]
+
+    both = _fake_repo(
+        tmp_path / "both",
+        {"blocks": {"world": {"files": [
+            {"file": "native.py", "origin": NATIVE_ORIGIN, "src": "aeis.native",
+             "sha256": sha}]}}},
+        files=[("lingshu/world/native.py", blob)],
+    )
+    result2 = _run_tool(["--repo-root", str(both), "--json"])
+    assert result2.returncode == 0, result2.stdout + result2.stderr
+    payload2 = json.loads(result2.stdout)
+    assert payload2["summary"]["origins"]["both"] == 1, payload2["summary"]
+    assert payload2["summary"]["origins"]["origin-only"] == 0, payload2["summary"]
+    assert _status_map(payload2) == {"lingshu/world/native.py": ("MATCH", None)}
+
+
+def test_20_native_record_is_sha256_verified_like_an_export(tmp_path):
+    """D3：写成 origin 的记录与导出件**同受** sha256 核验——不是「只登记、不核验」。
+
+    错指纹 ⇒ MISMATCH（--strict 退 3）；文件不在盘 ⇒ MISSING（退 1）。
+    """
+    sha = "0" * 16
+    wrong = _fake_repo(
+        tmp_path / "wrong",
+        {"blocks": {"world": {"files": [
+            {"file": "native.py", "origin": NATIVE_ORIGIN, "sha256": sha}]}}},
+        files=[("lingshu/world/native.py", b"hello\n")],
+    )
+    lenient = _run_tool(["--repo-root", str(wrong), "--json"])
+    assert lenient.returncode == 0, lenient.stdout + lenient.stderr
+    assert json.loads(lenient.stdout)["summary"]["mismatch"] == 1, lenient.stdout
+
+    strict = _run_tool(["--repo-root", str(wrong), "--json", "--strict"])
+    assert strict.returncode == 3, strict.stdout + strict.stderr
+    assert json.loads(strict.stdout)["exit_code"] == 3
+
+    gone = _fake_repo(
+        tmp_path / "gone",
+        {"blocks": {"world": {"files": [
+            {"file": "gone.py", "origin": NATIVE_ORIGIN, "sha256": sha}]}}},
+    )
+    result = _run_tool(["--repo-root", str(gone), "--json"])
+    assert result.returncode == 1, result.stdout + result.stderr
+    payload = json.loads(result.stdout)
+    assert payload["summary"]["missing"] == 1, payload["summary"]
+    assert _status_map(payload) == {"lingshu/world/gone.py": ("MISSING", "missing-file")}
 
 
 if __name__ == "__main__":

@@ -1,0 +1,1436 @@
+{
+ "camera": {
+  "gif": {
+   "cx": 7.5,
+   "cy": 7.5,
+   "cz": -22.36396103067893,
+   "fov_deg": 48.0,
+   "pitch": -0.230447,
+   "yaw": -0.0
+  },
+  "group": {
+   "cx": 4.375,
+   "cy": 5.375,
+   "cz": -17.5,
+   "fov_deg": 48.0,
+   "pitch": -0.223353,
+   "yaw": -0.0
+  },
+  "panel": {
+   "cx": 11.1,
+   "cy": 3.9000000000000004,
+   "cz": -2.872792206135788,
+   "fov_deg": 48.0,
+   "pitch": -0.21227,
+   "yaw": -0.0
+  }
+ },
+ "compare_image": "compare.png",
+ "generated_by": "tools/demo_world_process.py",
+ "groups": {
+  "early": {
+   "groups": [
+    {
+     "anchor": "m_a",
+     "displacement": [
+      1.25,
+      0.0
+     ],
+     "evidence": {
+      "dts": [
+       1.0,
+       1.0,
+       1.0,
+       1.0,
+       1.0
+      ],
+      "max_offset_drift": 0.0,
+      "max_step_drift": 0.0,
+      "min_samples": 2,
+      "moving_samples": 5,
+      "tol_pos": 0.05
+     },
+     "group_id": "mg_1fff93b0b2a3",
+     "kind": "common_translation",
+     "mechanical_link": false,
+     "members": [
+      "m_a",
+      "m_b",
+      "m_c"
+     ],
+     "offsets": {
+      "m_b": [
+       1.0,
+       0.0
+      ],
+      "m_c": [
+       2.0,
+       0.0
+      ]
+     },
+     "samples": 5,
+     "speed": [
+      0.25,
+      0.0
+     ],
+     "speed_magnitude": 0.25,
+     "window": {
+      "end_tick": 6,
+      "frames": 6,
+      "start_tick": 1,
+      "ticks": [
+       1,
+       2,
+       3,
+       4,
+       5,
+       6
+      ]
+     },
+     "y_offsets": {
+      "m_b": 0.0,
+      "m_c": 0.0
+     }
+    }
+   ],
+   "kind": "motion_groups",
+   "rejected": [],
+   "ticks": [
+    1,
+    6
+   ],
+   "window": 6
+  },
+  "entities": {
+   "m_a": {
+    "category": "person",
+    "color": [
+     200,
+     160,
+     140
+    ],
+    "positions": [
+     {
+      "pos": [
+       0.0,
+       1.0,
+       0.0
+      ],
+      "tick": 1
+     },
+     {
+      "pos": [
+       0.25,
+       1.0,
+       0.0
+      ],
+      "tick": 2
+     },
+     {
+      "pos": [
+       0.5,
+       1.0,
+       0.0
+      ],
+      "tick": 3
+     },
+     {
+      "pos": [
+       0.75,
+       1.0,
+       0.0
+      ],
+      "tick": 4
+     },
+     {
+      "pos": [
+       1.0,
+       1.0,
+       0.0
+      ],
+      "tick": 5
+     },
+     {
+      "pos": [
+       1.25,
+       1.0,
+       0.0
+      ],
+      "tick": 6
+     },
+     {
+      "pos": [
+       1.5,
+       1.0,
+       0.0
+      ],
+      "tick": 7
+     },
+     {
+      "pos": [
+       1.75,
+       1.0,
+       0.0
+      ],
+      "tick": 8
+     },
+     {
+      "pos": [
+       2.0,
+       1.0,
+       0.0
+      ],
+      "tick": 9
+     },
+     {
+      "pos": [
+       2.25,
+       1.0,
+       0.0
+      ],
+      "tick": 10
+     },
+     {
+      "pos": [
+       2.5,
+       1.0,
+       0.0
+      ],
+      "tick": 11
+     },
+     {
+      "pos": [
+       2.75,
+       1.0,
+       0.0
+      ],
+      "tick": 12
+     }
+    ]
+   },
+   "m_b": {
+    "category": "robot",
+    "color": [
+     150,
+     160,
+     170
+    ],
+    "positions": [
+     {
+      "pos": [
+       1.0,
+       1.0,
+       0.0
+      ],
+      "tick": 1
+     },
+     {
+      "pos": [
+       1.25,
+       1.0,
+       0.0
+      ],
+      "tick": 2
+     },
+     {
+      "pos": [
+       1.5,
+       1.0,
+       0.0
+      ],
+      "tick": 3
+     },
+     {
+      "pos": [
+       1.75,
+       1.0,
+       0.0
+      ],
+      "tick": 4
+     },
+     {
+      "pos": [
+       2.0,
+       1.0,
+       0.0
+      ],
+      "tick": 5
+     },
+     {
+      "pos": [
+       2.25,
+       1.0,
+       0.0
+      ],
+      "tick": 6
+     },
+     {
+      "pos": [
+       2.5,
+       1.0,
+       0.0
+      ],
+      "tick": 7
+     },
+     {
+      "pos": [
+       2.75,
+       1.0,
+       0.0
+      ],
+      "tick": 8
+     },
+     {
+      "pos": [
+       3.0,
+       1.0,
+       0.0
+      ],
+      "tick": 9
+     },
+     {
+      "pos": [
+       3.25,
+       1.0,
+       0.0
+      ],
+      "tick": 10
+     },
+     {
+      "pos": [
+       3.5,
+       1.0,
+       0.0
+      ],
+      "tick": 11
+     },
+     {
+      "pos": [
+       3.75,
+       1.0,
+       0.0
+      ],
+      "tick": 12
+     }
+    ]
+   },
+   "m_c": {
+    "category": "fox",
+    "color": [
+     220,
+     120,
+     60
+    ],
+    "positions": [
+     {
+      "pos": [
+       2.0,
+       1.0,
+       0.0
+      ],
+      "tick": 1
+     },
+     {
+      "pos": [
+       2.25,
+       1.0,
+       0.0
+      ],
+      "tick": 2
+     },
+     {
+      "pos": [
+       2.5,
+       1.0,
+       0.0
+      ],
+      "tick": 3
+     },
+     {
+      "pos": [
+       2.75,
+       1.0,
+       0.0
+      ],
+      "tick": 4
+     },
+     {
+      "pos": [
+       3.0,
+       1.0,
+       0.0
+      ],
+      "tick": 5
+     },
+     {
+      "pos": [
+       3.25,
+       1.0,
+       0.0
+      ],
+      "tick": 6
+     },
+     {
+      "pos": [
+       3.5,
+       1.0,
+       0.0
+      ],
+      "tick": 7
+     },
+     {
+      "pos": [
+       4.55,
+       1.0,
+       0.0
+      ],
+      "tick": 8
+     },
+     {
+      "pos": [
+       5.6,
+       1.0,
+       0.0
+      ],
+      "tick": 9
+     },
+     {
+      "pos": [
+       6.65,
+       1.0,
+       0.0
+      ],
+      "tick": 10
+     },
+     {
+      "pos": [
+       7.7,
+       1.0,
+       0.0
+      ],
+      "tick": 11
+     },
+     {
+      "pos": [
+       8.75,
+       1.0,
+       0.0
+      ],
+      "tick": 12
+     }
+    ]
+   }
+  },
+  "images": {
+   "gif": "groups.gif",
+   "hidden": "groups_hidden.png",
+   "leave": "groups_leave.png",
+   "together": "groups_together.png"
+  },
+  "late": {
+   "groups": [
+    {
+     "anchor": "m_a",
+     "displacement": [
+      1.75,
+      0.0
+     ],
+     "evidence": {
+      "dts": [
+       1.0,
+       1.0,
+       1.0,
+       1.0,
+       1.0,
+       1.0,
+       1.0
+      ],
+      "max_offset_drift": 0.0,
+      "max_step_drift": 0.0,
+      "min_samples": 2,
+      "moving_samples": 7,
+      "tol_pos": 0.05
+     },
+     "group_id": "mg_d6861d9cb660",
+     "kind": "common_translation",
+     "mechanical_link": false,
+     "members": [
+      "m_a",
+      "m_b"
+     ],
+     "offsets": {
+      "m_b": [
+       1.0,
+       0.0
+      ]
+     },
+     "samples": 7,
+     "speed": [
+      0.25,
+      0.0
+     ],
+     "speed_magnitude": 0.25,
+     "window": {
+      "end_tick": 12,
+      "frames": 8,
+      "start_tick": 5,
+      "ticks": [
+       5,
+       6,
+       7,
+       8,
+       9,
+       10,
+       11,
+       12
+      ]
+     },
+     "y_offsets": {
+      "m_b": 0.0
+     }
+    }
+   ],
+   "kind": "motion_groups",
+   "rejected": [],
+   "ticks": [
+    5,
+    12
+   ],
+   "window": 8
+  },
+  "leave_tick": 7
+ },
+ "masked_prediction": {
+  "abs_error": 0.0,
+  "actual": [
+   3.25,
+   1.0,
+   0.0
+  ],
+  "group_ids": [
+   "mg_1fff93b0b2a3"
+  ],
+  "hidden": "m_c",
+  "objects_in_hidden_frame": [
+   {
+    "category": "person",
+    "center": [
+     1.25,
+     1.0,
+     0.0
+    ],
+    "color": [
+     200,
+     160,
+     140
+    ],
+    "eid": "m_a",
+    "shape": "pillar"
+   },
+   {
+    "category": "robot",
+    "center": [
+     2.25,
+     1.0,
+     0.0
+    ],
+    "color": [
+     150,
+     160,
+     170
+    ],
+    "eid": "m_b",
+    "shape": "pillar"
+   }
+  ],
+  "predicted": {
+   "actual": false,
+   "anchor": "m_a",
+   "gap": 0,
+   "group_id": "mg_1fff93b0b2a3",
+   "offset": [
+    2.0,
+    0.0
+   ],
+   "offset_tick": 6,
+   "pos": [
+    3.25,
+    1.0,
+    0.0
+   ],
+   "source": "motion_group",
+   "y_offset": 0.0
+  },
+  "tick": 6,
+  "unresolved": {}
+ },
+ "memory": {
+  "actor": "walker",
+  "db": "D:\\A-part-of-new-software\\PROJIECT\\lingshu\\artifacts\\world_process_delivery_20261014\\final_demo2\\world_process.db",
+  "kind": "relative_trajectory",
+  "memory_id": "node_5c95eccd_1791945374767",
+  "ref": "landmark",
+  "reopened_equal": true,
+  "samples": 12,
+  "ticks": [
+   1,
+   12
+  ]
+ },
+ "out_dir": "D:\\A-part-of-new-software\\PROJIECT\\lingshu\\artifacts\\world_process_delivery_20261014\\final_demo2",
+ "panels": [
+  {
+   "entities": {
+    "landmark": {
+     "category": "tree",
+     "color": [
+      60,
+      140,
+      70
+     ],
+     "positions": [
+      {
+       "pos": [
+        10.0,
+        1.0,
+        10.0
+       ],
+       "tick": 1
+      },
+      {
+       "pos": [
+        10.0,
+        1.0,
+        10.0
+       ],
+       "tick": 2
+      },
+      {
+       "pos": [
+        10.0,
+        1.0,
+        10.0
+       ],
+       "tick": 3
+      },
+      {
+       "pos": [
+        10.0,
+        1.0,
+        10.0
+       ],
+       "tick": 4
+      },
+      {
+       "pos": [
+        10.0,
+        1.0,
+        10.0
+       ],
+       "tick": 5
+      },
+      {
+       "pos": [
+        10.0,
+        1.0,
+        10.0
+       ],
+       "tick": 6
+      },
+      {
+       "pos": [
+        10.0,
+        1.0,
+        10.0
+       ],
+       "tick": 7
+      },
+      {
+       "pos": [
+        10.0,
+        1.0,
+        10.0
+       ],
+       "tick": 8
+      },
+      {
+       "pos": [
+        10.0,
+        1.0,
+        10.0
+       ],
+       "tick": 9
+      },
+      {
+       "pos": [
+        10.0,
+        1.0,
+        10.0
+       ],
+       "tick": 10
+      },
+      {
+       "pos": [
+        10.0,
+        1.0,
+        10.0
+       ],
+       "tick": 11
+      },
+      {
+       "pos": [
+        10.0,
+        1.0,
+        10.0
+       ],
+       "tick": 12
+      }
+     ]
+    },
+    "walker": {
+     "category": "person",
+     "color": [
+      200,
+      160,
+      140
+     ],
+     "positions": [
+      {
+       "pos": [
+        4.0,
+        1.0,
+        10.0
+       ],
+       "tick": 1
+      },
+      {
+       "pos": [
+        5.0,
+        1.0,
+        10.0
+       ],
+       "tick": 2
+      },
+      {
+       "pos": [
+        6.0,
+        1.0,
+        10.0
+       ],
+       "tick": 3
+      },
+      {
+       "pos": [
+        7.0,
+        1.0,
+        10.0
+       ],
+       "tick": 4
+      },
+      {
+       "pos": [
+        8.0,
+        1.0,
+        10.0
+       ],
+       "tick": 5
+      },
+      {
+       "pos": [
+        8.2,
+        1.0,
+        10.0
+       ],
+       "tick": 6
+      },
+      {
+       "pos": [
+        8.0,
+        1.0,
+        10.0
+       ],
+       "tick": 7
+      },
+      {
+       "pos": [
+        8.1,
+        1.0,
+        10.0
+       ],
+       "tick": 8
+      },
+      {
+       "pos": [
+        7.0,
+        1.0,
+        10.0
+       ],
+       "tick": 9
+      },
+      {
+       "pos": [
+        5.0,
+        1.0,
+        10.0
+       ],
+       "tick": 10
+      },
+      {
+       "pos": [
+        3.0,
+        1.0,
+        10.0
+       ],
+       "tick": 11
+      },
+      {
+       "pos": [
+        1.0,
+        1.0,
+        10.0
+       ],
+       "tick": 12
+      }
+     ]
+    }
+   },
+   "generated_source": "generated",
+   "gif": "source.gif",
+   "image": "source.png",
+   "name": "source",
+   "objects_in_shown_frame": [
+    {
+     "category": "tree",
+     "center": [
+      10.0,
+      1.0,
+      10.0
+     ],
+     "color": [
+      60,
+      140,
+      70
+     ],
+     "eid": "landmark",
+     "shape": "pillar"
+    },
+    {
+     "category": "person",
+     "center": [
+      8.2,
+      1.0,
+      10.0
+     ],
+     "color": [
+      200,
+      160,
+      140
+     ],
+     "eid": "walker",
+     "shape": "pillar"
+    }
+   ],
+   "tick_index_shown": 5,
+   "tick_shown": 6,
+   "ticks": [
+    1,
+    12
+   ],
+   "transform": {
+    "scale": 1.0,
+    "tick_offset": 0,
+    "translation": [
+     0.0,
+     0.0,
+     0.0
+    ],
+    "yaw": 0.0
+   }
+  },
+  {
+   "entities": {
+    "landmark": {
+     "category": "tree",
+     "color": [
+      60,
+      140,
+      70
+     ],
+     "positions": [
+      {
+       "pos": [
+        14.0,
+        1.0,
+        10.0
+       ],
+       "tick": 1
+      },
+      {
+       "pos": [
+        14.0,
+        1.0,
+        10.0
+       ],
+       "tick": 2
+      },
+      {
+       "pos": [
+        14.0,
+        1.0,
+        10.0
+       ],
+       "tick": 3
+      },
+      {
+       "pos": [
+        14.0,
+        1.0,
+        10.0
+       ],
+       "tick": 4
+      },
+      {
+       "pos": [
+        14.0,
+        1.0,
+        10.0
+       ],
+       "tick": 5
+      },
+      {
+       "pos": [
+        14.0,
+        1.0,
+        10.0
+       ],
+       "tick": 6
+      },
+      {
+       "pos": [
+        14.0,
+        1.0,
+        10.0
+       ],
+       "tick": 7
+      },
+      {
+       "pos": [
+        14.0,
+        1.0,
+        10.0
+       ],
+       "tick": 8
+      },
+      {
+       "pos": [
+        14.0,
+        1.0,
+        10.0
+       ],
+       "tick": 9
+      },
+      {
+       "pos": [
+        14.0,
+        1.0,
+        10.0
+       ],
+       "tick": 10
+      },
+      {
+       "pos": [
+        14.0,
+        1.0,
+        10.0
+       ],
+       "tick": 11
+      },
+      {
+       "pos": [
+        14.0,
+        1.0,
+        10.0
+       ],
+       "tick": 12
+      }
+     ]
+    },
+    "walker": {
+     "category": "person",
+     "color": [
+      200,
+      160,
+      140
+     ],
+     "positions": [
+      {
+       "pos": [
+        8.0,
+        1.0,
+        10.0
+       ],
+       "tick": 1
+      },
+      {
+       "pos": [
+        9.0,
+        1.0,
+        10.0
+       ],
+       "tick": 2
+      },
+      {
+       "pos": [
+        10.0,
+        1.0,
+        10.0
+       ],
+       "tick": 3
+      },
+      {
+       "pos": [
+        11.0,
+        1.0,
+        10.0
+       ],
+       "tick": 4
+      },
+      {
+       "pos": [
+        12.0,
+        1.0,
+        10.0
+       ],
+       "tick": 5
+      },
+      {
+       "pos": [
+        12.2,
+        1.0,
+        10.0
+       ],
+       "tick": 6
+      },
+      {
+       "pos": [
+        12.0,
+        1.0,
+        10.0
+       ],
+       "tick": 7
+      },
+      {
+       "pos": [
+        12.1,
+        1.0,
+        10.0
+       ],
+       "tick": 8
+      },
+      {
+       "pos": [
+        11.0,
+        1.0,
+        10.0
+       ],
+       "tick": 9
+      },
+      {
+       "pos": [
+        9.0,
+        1.0,
+        10.0
+       ],
+       "tick": 10
+      },
+      {
+       "pos": [
+        7.0,
+        1.0,
+        10.0
+       ],
+       "tick": 11
+      },
+      {
+       "pos": [
+        5.0,
+        1.0,
+        10.0
+       ],
+       "tick": 12
+      }
+     ]
+    }
+   },
+   "generated_source": "generated",
+   "gif": "translated.gif",
+   "image": "translated.png",
+   "name": "translated",
+   "objects_in_shown_frame": [
+    {
+     "category": "tree",
+     "center": [
+      14.0,
+      1.0,
+      10.0
+     ],
+     "color": [
+      60,
+      140,
+      70
+     ],
+     "eid": "landmark",
+     "shape": "pillar"
+    },
+    {
+     "category": "person",
+     "center": [
+      12.2,
+      1.0,
+      10.0
+     ],
+     "color": [
+      200,
+      160,
+      140
+     ],
+     "eid": "walker",
+     "shape": "pillar"
+    }
+   ],
+   "tick_index_shown": 5,
+   "tick_shown": 6,
+   "ticks": [
+    1,
+    12
+   ],
+   "transform": {
+    "scale": 1.0,
+    "tick_offset": 0,
+    "translation": [
+     4.0,
+     0.0,
+     0.0
+    ],
+    "yaw": 0.0
+   }
+  },
+  {
+   "entities": {
+    "landmark": {
+     "category": "tree",
+     "color": [
+      60,
+      140,
+      70
+     ],
+     "positions": [
+      {
+       "pos": [
+        14.0,
+        1.0,
+        10.0
+       ],
+       "tick": 1
+      },
+      {
+       "pos": [
+        14.0,
+        1.0,
+        10.0
+       ],
+       "tick": 2
+      },
+      {
+       "pos": [
+        14.0,
+        1.0,
+        10.0
+       ],
+       "tick": 3
+      },
+      {
+       "pos": [
+        14.0,
+        1.0,
+        10.0
+       ],
+       "tick": 4
+      },
+      {
+       "pos": [
+        14.0,
+        1.0,
+        10.0
+       ],
+       "tick": 5
+      },
+      {
+       "pos": [
+        14.0,
+        1.0,
+        10.0
+       ],
+       "tick": 6
+      },
+      {
+       "pos": [
+        14.0,
+        1.0,
+        10.0
+       ],
+       "tick": 7
+      },
+      {
+       "pos": [
+        14.0,
+        1.0,
+        10.0
+       ],
+       "tick": 8
+      },
+      {
+       "pos": [
+        14.0,
+        1.0,
+        10.0
+       ],
+       "tick": 9
+      },
+      {
+       "pos": [
+        14.0,
+        1.0,
+        10.0
+       ],
+       "tick": 10
+      },
+      {
+       "pos": [
+        14.0,
+        1.0,
+        10.0
+       ],
+       "tick": 11
+      },
+      {
+       "pos": [
+        14.0,
+        1.0,
+        10.0
+       ],
+       "tick": 12
+      }
+     ]
+    },
+    "walker": {
+     "category": "person",
+     "color": [
+      200,
+      160,
+      140
+     ],
+     "positions": [
+      {
+       "pos": [
+        5.514719,
+        1.0,
+        1.514719
+       ],
+       "tick": 1
+      },
+      {
+       "pos": [
+        6.928932,
+        1.0,
+        2.928932
+       ],
+       "tick": 2
+      },
+      {
+       "pos": [
+        8.343146,
+        1.0,
+        4.343146
+       ],
+       "tick": 3
+      },
+      {
+       "pos": [
+        9.757359,
+        1.0,
+        5.757359
+       ],
+       "tick": 4
+      },
+      {
+       "pos": [
+        11.171573,
+        1.0,
+        7.171573
+       ],
+       "tick": 5
+      },
+      {
+       "pos": [
+        11.454416,
+        1.0,
+        7.454416
+       ],
+       "tick": 6
+      },
+      {
+       "pos": [
+        11.171573,
+        1.0,
+        7.171573
+       ],
+       "tick": 7
+      },
+      {
+       "pos": [
+        11.312994,
+        1.0,
+        7.312994
+       ],
+       "tick": 8
+      },
+      {
+       "pos": [
+        9.757359,
+        1.0,
+        5.757359
+       ],
+       "tick": 9
+      },
+      {
+       "pos": [
+        6.928932,
+        1.0,
+        2.928932
+       ],
+       "tick": 10
+      },
+      {
+       "pos": [
+        4.100505,
+        1.0,
+        0.100505
+       ],
+       "tick": 11
+      },
+      {
+       "pos": [
+        1.272078,
+        1.0,
+        -2.727922
+       ],
+       "tick": 12
+      }
+     ]
+    }
+   },
+   "generated_source": "generated",
+   "gif": "rotated_scaled.gif",
+   "image": "rotated_scaled.png",
+   "name": "rotated_scaled",
+   "objects_in_shown_frame": [
+    {
+     "category": "tree",
+     "center": [
+      14.0,
+      1.0,
+      10.0
+     ],
+     "color": [
+      60,
+      140,
+      70
+     ],
+     "eid": "landmark",
+     "shape": "pillar"
+    },
+    {
+     "category": "person",
+     "center": [
+      11.454416,
+      1.0,
+      7.454416
+     ],
+     "color": [
+      200,
+      160,
+      140
+     ],
+     "eid": "walker",
+     "shape": "pillar"
+    }
+   ],
+   "tick_index_shown": 5,
+   "tick_shown": 6,
+   "ticks": [
+    1,
+    12
+   ],
+   "transform": {
+    "scale": 2.0,
+    "tick_offset": 0,
+    "translation": [
+     4.0,
+     0.0,
+     0.0
+    ],
+    "yaw": -0.7853981633974483
+   }
+  }
+ ],
+ "processes": [
+  {
+   "evidence": {
+    "actor_path": 11.6,
+    "approach_drop": 4.2,
+    "distance_end": 9.0,
+    "distance_min": 1.8,
+    "distance_start": 6.0,
+    "leave_rise": 7.2,
+    "stay_band": 0.5,
+    "stay_held_ticks": 3,
+    "stay_move": 0.5,
+    "stay_samples": 4
+   },
+   "phases": [
+    {
+     "phase": "approach",
+     "ticks": [
+      1,
+      6
+     ]
+    },
+    {
+     "phase": "stay",
+     "ticks": [
+      5,
+      8
+     ]
+    },
+    {
+     "phase": "leave",
+     "ticks": [
+      8,
+      12
+     ]
+    }
+   ],
+   "roles": {
+    "actor": "walker",
+    "ref": "landmark"
+   },
+   "samples": 12,
+   "ticks": [
+    1,
+    12
+   ],
+   "type": "approach_stay_leave"
+  }
+ ]
+}

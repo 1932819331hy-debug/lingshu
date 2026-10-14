@@ -1,0 +1,6 @@
+  D:\A-part-of-new-software\PROJIECT\lingshu\lingshu\core\core.py:4063: ComponentDiscoveryWarning: [issue156] 组件 'body' 未在受控解析面找到（已查 7 个条目；LINGSHU_COMPONENT_ROOT 未设置；cwd/空串 sys.path 条目已排除）。若确需该组件，请用 LINGSHU_COMPONENT_ROOT 或 PYTHONPATH 显式声明其所在目录。
+    from body import build_default_registry
+
+-- Docs: https://docs.pytest.org/en/stable/how-to/capture-warnings.html
+20 passed, 145 warnings in 3.88s
+

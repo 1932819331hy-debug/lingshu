@@ -1,0 +1,24 @@
+基线（未变异副本）：退出码=0 | 末行：39 passed in 0.16s
+M1 去方位角判据 | 预期红：test_loop_far_from_ref_not_detour | 理由：回路形状成立但不绕参照物的路径被误判为绕行
+    实际红：test_detour_circle_around_ref_from_real_history, test_detour_circle_clockwise_around_ref, test_detour_return_from_real_history, test_detour_return_variants_keep_detour[0, test_detour_return_variants_keep_detour[1, test_detour_return_variants_keep_detour[3, test_loop_far_from_ref_not_detour, test_pinched_orbit_around_ref_is_detour
+    检查：非 0 退出码=过，输出含 AssertionError=过，点名 test_loop_far_from_ref_not_detour=过，无导入/语法错误=过，红灯全部是 AssertionError（AssertionError）=过
+    退出码=1 | 末行：9 failed, 30 passed in 0.28s
+M2 关原地停留条件 | 预期红：test_same_radius_orbit_not_stay | 理由：等距绕行冒充原地停留，被误判为接近→停留→离开
+    实际红：test_same_radius_orbit_not_stay
+    检查：非 0 退出码=过，输出含 AssertionError=过，点名 test_same_radius_orbit_not_stay=过，无导入/语法错误=过，红灯全部是 AssertionError（AssertionError）=过
+    退出码=1 | 末行：1 failed, 38 passed in 0.19s
+M3 去绝对回路形状判据 | 预期红：test_straight_near_miss_round_trip_not_detour | 理由：穿越与扫角都成立的直线近距往返，去掉绝对回路判据后被误判为绕行；D 族四个取值（绝对回路读数 0）同时变红
+    实际红：test_moving_ref_straight_cross_round_trip_not_detour[2, test_moving_ref_straight_cross_round_trip_not_detour[3, test_straight_near_miss_round_trip_not_detour
+    检查：非 0 退出码=过，输出含 AssertionError=过，点名 test_straight_near_miss_round_trip_not_detour=过，无导入/语法错误=过，红灯全部是 AssertionError（AssertionError）=过
+    退出码=1 | 末行：5 failed, 34 passed in 0.23s
+M4 回路半径阈值退化为 0.0 | 预期红：test_straight_near_miss_round_trip_not_detour | 理由：阈值退化为 0.0 后“绝对回路读数 0 ≥ 0.0”恒真，直线近距往返与 D 族四个取值都重新误报（判定翻转，断言 recognize_processes == [] 失败）；另有 test_straight_cross_ref_round_trip_not_detour 及其 4 个变体变红，它们红在阈值比较断言 loop_radius < detour_loop_radius，不是判定翻转；原靶子 test_straight_cross_ref_round_trip_not_detour 现由穿越检测拦下
+    实际红：test_moving_ref_straight_cross_round_trip_not_detour[2, test_moving_ref_straight_cross_round_trip_not_detour[3, test_straight_cross_ref_round_trip_not_detour, test_straight_cross_ref_round_trip_variants_not_detour[0, test_straight_cross_ref_round_trip_variants_not_detour[1, test_straight_cross_ref_round_trip_variants_not_detour[3, test_straight_near_miss_round_trip_not_detour
+    检查：非 0 退出码=过，输出含 AssertionError=过，点名 test_straight_near_miss_round_trip_not_detour=过，无导入/语法错误=过，红灯全部是 AssertionError（AssertionError）=过
+    退出码=1 | 末行：10 failed, 29 passed in 0.29s
+M5 去穿越检测（ref_min_distance > detour_crossing_tol） | 预期红：test_cross_ref_with_side_loop_not_detour | 理由：穿越加侧圈的相对轨迹穿过参照物（最近距离 0、扫角 523°、绝对回路 0.844），去掉穿越检测后被误判为绕行（与终审 F2 反例一同根）
+    实际红：test_cross_ref_with_side_loop_not_detour
+    检查：非 0 退出码=过，输出含 AssertionError=过，点名 test_cross_ref_with_side_loop_not_detour=过，无导入/语法错误=过，红灯全部是 AssertionError（AssertionError）=过
+    退出码=1 | 末行：1 failed, 38 passed in 0.18s
+还原变异后副本：退出码=0（应回到 0）
+工作树世界过程模块 sha256：前 04a42b14fa413edc / 后 04a42b14fa413edc | 未变=True
+

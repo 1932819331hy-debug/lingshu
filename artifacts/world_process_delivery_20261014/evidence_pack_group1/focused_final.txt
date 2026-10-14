@@ -1,0 +1,6 @@
+聚焦六件套（F1 修复 + 指纹重冻结后实跑）：
+
+$ .venv/Scripts/python.exe -X utf8 -B -m pytest tests/test_world_process.py tests/test_motion_groups.py tests/test_world_process_core.py tests/test_doc_module_counts_guard.py tests/test_manifest_integrity.py tests/test_import_direction_lint.py -q -p no:cacheprovider --tb=short
+
+117 passed, 1 skipped, 138 warnings in 5.65s
+（跳过项为未配置脑端前置时的脑端用例；带脑端前置的实跑见 brain_core_lead.txt，20 passed）

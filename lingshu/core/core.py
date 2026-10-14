@@ -6425,6 +6425,224 @@ class SpacetimeMemoryEngine:
             return {"status": "ok", "learner": self._wlearner.state()}
         return {"status": "error", "error": f"未知动作 {action}（可用: init/create/entity/path/run/learn/predict/evaluate/curve/masked/model/history/state）"}
 
+    # ============ 世界过程第 1 组：时间会意 / 示教迁移 / 运动组合体 ============
+
+    #: world_process 的动作表（未知动作按门面惯例返回 error dict，不落到别处）。
+    WORLD_PROCESS_ACTIONS = ("recognize", "events", "extract", "transfer", "load",
+                             "groups", "predict_groups")
+
+    #: 世界过程实现的注入槽：core 不导入 world（依赖方向 world → core）。
+    #: 由 lingshu.world.register_world_process(engine) 写入本实例，固定两个
+    #: 模块引用 (world_process, motion_groups)；未注册时为 None，门面返回 error。
+    _world_process_impl = None
+
+    def register_world_process(self, world_process, motion_groups) -> None:
+        """把 world_process 与 motion_groups 两个模块记到**本引擎实例**。
+
+        由 world 侧注册函数调用；core 只保存这两个引用，不导入 world。
+        只作用于本实例：其它引擎保持未注册状态（模块级不放模块引用）。
+        """
+        self._world_process_impl = (world_process, motion_groups)
+
+    def _world_process_history(self, p: dict):
+        """世界过程门面要用的观测历史：显式 history 优先，否则读**当前已有模型**。
+
+        返回 (history, None) 或 (None, error dict)。形状适配只在本处发生一次：
+        UnifiedWorldModel.history 的实体值是 [x, y, z]，WorldLearner.history 的
+        实体值是 {"category": …, "pos": (x, y, z)}；两者统一成 world 模块认的
+        {"tick": int, "entities": {eid: [x, y, z]}}（记录里其余键丢弃，实体位置
+        另建列表——调用方的历史不被改写）。
+
+        模型不存在时返回 error：**不新建场景、不伪造观测**（门面不替调用方造数据）。
+        """
+        raw = p.get("history")
+        if raw is None:
+            source = str(p.get("source", "world_model"))
+            if source == "world_model":
+                if not hasattr(self, "_wmodel"):
+                    return None, {"status": "error",
+                                  "error": "当前没有统一世界模型（先执行 world_model "
+                                           "init 等动作）；也可显式给 history"}
+                raw = self._wmodel.history
+            elif source == "world_learner":
+                if not hasattr(self, "_wlearner"):
+                    return None, {"status": "error",
+                                  "error": "当前没有世界学习者（先执行 world_learner "
+                                           "init 等动作）；也可显式给 history"}
+                raw = self._wlearner.history
+            else:
+                return None, {"status": "error",
+                              "error": f"source 未知 {source}（可用: world_model/world_learner）"}
+        history = []
+        for record in raw:
+            entities = {}
+            for eid, value in record["entities"].items():
+                pos = value.get("pos") if isinstance(value, dict) else value
+                entities[eid] = [float(v) for v in pos]
+            history.append({"tick": int(record["tick"]), "entities": entities})
+        return history, None
+
+    def _world_process_record(self, p: dict):
+        """相对轨迹记录：record 直给；否则按 memory_id 从记忆恢复。
+
+        返回 (record, None) 或 (None, error dict)。
+        """
+        if p.get("record") is not None:
+            return p["record"], None
+        memory_id = str(p.get("memory_id") or "")
+        if not memory_id:
+            return None, {"status": "error", "error": "需要 record 或 memory_id"}
+        got = self.world_process("load", {"memory_id": memory_id,
+                                          "brain": p.get("brain")})
+        if got.get("status") != "ok":
+            return None, got
+        return got["record"], None
+
+    def world_process(self, action: str, params: dict = None) -> dict:
+        """世界过程第 1 组（时间会意 / 示教迁移 / 运动组合体）· 门面：
+
+        - recognize: 从观测历史识别过程（params: history 或 source，另可 entities/
+          thresholds——thresholds 传 ProcessThresholds 实例）
+        - events:    单实体的停止与转向事件（params: eid + history/source/thresholds）
+        - extract:   提取示教期的相对轨迹记录并写入记忆（params: actor/ref +
+          history/source，另可 process/importance；给 brain 时同写脑端）
+        - transfer:  把记录绑定到新 actor/ref，输出生成帧（params: actor/ref +
+          record 或 memory_id，另可 translation/yaw/scale/tick_offset）
+        - load:      按 memory_id 从记忆恢复记录（params: memory_id；给 brain 则读脑端）
+        - groups:    检测运动组合体（params: history/source + window/tol_pos/
+          min_samples/min_speed）
+        - predict_groups: 遮蔽成员推算（params: hide 遮蔽的 eid 列表 +
+          history/source，另可 observed/tick + 组检测参数）
+
+        history 缺省取**当前已有模型**的观测历史（source 缺省 world_model，
+        world_learner 可选）；组检测参数的缺省与全部判据都在 world 模块，门面只转发。
+        门面只读历史：生成帧只出现在返回值里，**不写进 actual 历史**；读当前模型
+        不触发模式重算（预测缓存不变）。
+
+        实现来自注入：core 不导入 world，本实例须先经
+        lingshu.world.register_world_process(engine) 注册两个 world 模块；未注册时
+        返回 error 并写明初始化步骤（不自行导入、不静默回退）。
+        """
+        p = params or {}
+        if action not in self.WORLD_PROCESS_ACTIONS:
+            return {"status": "error",
+                    "error": f"未知动作 {action}（可用: "
+                             f"{'/'.join(self.WORLD_PROCESS_ACTIONS)}）"}
+        impl = self._world_process_impl
+        if impl is None:
+            return {"status": "error",
+                    "error": "世界过程模块未注册。初始化步骤：from lingshu.world "
+                             "import register_world_process; "
+                             "register_world_process(engine)。core 不导入 world，"
+                             "每新建或重开引擎都要注册一次"}
+        wp, mg = impl
+
+        if action == "load":
+            memory_id = str(p.get("memory_id") or "")
+            if not memory_id:
+                return {"status": "error", "error": "load 需要 memory_id"}
+            brain = p.get("brain")
+            if brain is not None:
+                text = brain.store.read_content(memory_id)
+            else:
+                node = self.store.get_node(memory_id)
+                if node is None:
+                    return {"status": "error", "error": f"记忆里没有 {memory_id}"}
+                text = node.content
+            try:
+                record = json.loads(text)
+            except ValueError:
+                return {"status": "error",
+                        "error": f"{memory_id} 的正文不是世界过程记录（JSON 解析失败）"}
+            return {"status": "ok", "memory_id": memory_id, "record": record}
+
+        if action == "transfer":
+            record, err = self._world_process_record(p)
+            if err is not None:
+                return err
+            actor, ref = p.get("actor"), p.get("ref")
+            if not actor or not ref:
+                return {"status": "error", "error": "transfer 需要 actor 与 ref"}
+            moved = wp.transfer_demonstration(
+                record, str(actor), str(ref),
+                translation=p.get("translation", (0.0, 0.0, 0.0)),
+                yaw=float(p.get("yaw", 0.0)),
+                scale=float(p.get("scale", 1.0)),
+                tick_offset=int(p.get("tick_offset", 0)))
+            return {"status": "ok", "transfer": moved}
+
+        history, err = self._world_process_history(p)
+        if err is not None:
+            return err
+
+        if action == "recognize":
+            return {"status": "ok", "history_len": len(history),
+                    "processes": wp.recognize_processes(
+                        history, thresholds=p.get("thresholds"),
+                        entities=p.get("entities"))}
+
+        if action == "events":
+            eid = p.get("eid")
+            if not eid:
+                return {"status": "error", "error": "events 需要 eid"}
+            return {"status": "ok", "eid": str(eid),
+                    "events": wp.motion_events(history, str(eid),
+                                               thresholds=p.get("thresholds"))}
+
+        if action == "extract":
+            actor, ref = p.get("actor"), p.get("ref")
+            if not actor or not ref:
+                return {"status": "error", "error": "extract 需要 actor 与 ref"}
+            actor, ref = str(actor), str(ref)
+            importance = float(p.get("importance", 0.6))
+            record = wp.extract_relative_trajectory(history, actor, ref,
+                                                    process=p.get("process"))
+            content = json.dumps(record, ensure_ascii=False, sort_keys=True)
+            # skip_dedup：每条提取是独立记录——M5 去重命中会并进旧节点且正文不换，
+            # memory_id 就指不回本次记录（恢复出的会是别人的轨迹）。
+            node = self.add_perception(content=content, importance=importance,
+                                       tags=["world_process", "relative_trajectory"],
+                                       entities=[actor, ref], skip_dedup=True)
+            out = {"status": "ok", "memory_id": node.id, "record": record}
+            brain = p.get("brain")
+            if brain is not None:
+                # 同一份正文经**既有** BrainEngine.add_perception → mdcg_remember
+                # 落脑；不新开协议、不动连接白名单与超时。
+                brain_node = brain.engine.add_perception(
+                    content=content, importance=importance,
+                    tags=["world_process", "relative_trajectory"],
+                    entities=[actor, ref])
+                out["brain_memory_id"] = brain_node.id
+            return out
+
+        # 组检测参数的缺省与判据全在 world 模块：门面只转发调用方显式给出的键。
+        group_kw = {k: p[k] for k in ("window", "tol_pos", "min_samples", "min_speed")
+                    if k in p}
+
+        if action == "groups":
+            return {"status": "ok",
+                    "model": mg.detect_motion_groups(history, **group_kw)}
+
+        hide = [str(e) for e in (p.get("hide") or [])]
+        model = mg.detect_motion_groups(history, **group_kw)
+        observed = p.get("observed")
+        tick = p.get("tick")
+        if observed is None and history:
+            last = history[-1]
+            observed = {eid: list(pos) for eid, pos in last["entities"].items()}
+            if tick is None:
+                tick = last["tick"]
+        visible = {eid: pos for eid, pos in (observed or {}).items()
+                   if eid not in hide}          # 遮蔽：被遮蔽成员不在本帧可见集里
+        predictions, unresolved = {}, {}
+        for group in model["groups"]:
+            got = mg.predict_group_members(group, visible, tick)
+            predictions.update(got["predictions"])
+            unresolved.update(got["unresolved"])
+        return {"status": "ok", "tick": tick, "hide": hide,
+                "group_ids": [g["group_id"] for g in model["groups"]],
+                "predictions": predictions, "unresolved": unresolved}
+
     def curiosity_explorer(self, action: str, params: dict = None) -> dict:
         """好奇驱动探索（里程碑3.3）：主动选择观测最大化信息增益——
         - init: 初始化（size/seed/window/budget）

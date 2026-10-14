@@ -1,0 +1,3 @@
+ORIGINS origin-only=2 src-only=61 both=0 neither=0
+SUMMARY manifests=2 entries=63 match=63 mismatch=0 missing=0 malformed=0 unparseable=0 exit_code=0
+

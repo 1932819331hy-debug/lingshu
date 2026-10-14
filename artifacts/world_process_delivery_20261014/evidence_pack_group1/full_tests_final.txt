@@ -1,0 +1,9 @@
+全量 pytest（发布状态实跑；18 个脚本式测试按 gate.yml 口径排除，见 script_tests_final.txt）：
+
+$ .venv/Scripts/python.exe -X utf8 -B -m pytest tests/ -q -n 4 --dist loadfile -p no:cacheprovider --tb=short --disable-warnings <18 个 --ignore>
+
+............................                                             [100%]
+1451 passed, 16 skipped, 3637 warnings, 73 subtests passed in 185.17s (0:03:05)
+
+运行前后 core.py / world_process.py / motion_groups.py / world/__init__.py 的 sha256 不变。
+完整日志：仓库 artifacts/world_process_delivery_20261014/full_pytest_release.log（不随 PR 发布的本地日志）。
