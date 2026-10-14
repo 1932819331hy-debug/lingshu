@@ -464,8 +464,9 @@ def _node_recency(n) -> Optional[float]:
     return None
 
 
-def load_world_from_memory(agent_or_store, tag: str = "spatial") -> WorldModel:
-    """从记忆库遍历 `spatial` 标签节点 → 重建世界模型场景。
+def load_world_from_memory(agent_or_store, tag: str = "spatial",
+                           limit: int = 200) -> WorldModel:
+    """从带 `spatial` 标签的候选节点重建世界模型场景。
 
     记忆就是缓存：场景 = 记忆节点的实时投影；新增/更新记忆节点即改场景。
 
@@ -475,14 +476,17 @@ def load_world_from_memory(agent_or_store, tag: str = "spatial") -> WorldModel:
     是 `importance DESC, last_access DESC`（core.py:1557，最新在前），于是最后写入
     的是**最旧**观测，新观测反被丢弃、重建世界回落到陈旧坐标，「新增记忆节点即
     改场景」不成立。故按实体名归并：有时间字段者取时新度最大者；全无时间字段者
-    的旧返回单元保持旧行为（store 返回序末条胜出），不臆造新序。
+    （脑侧 BrainNode）保持旧行为（store 返回序末条胜出），不臆造新序。
+
+    limit 为 store 读取预算（默认 200），可由场景调用者显式调大。
+    脑侧是语义召回后过滤标签，预算不是实体总数或全库枚举保证。
     """
     store = getattr(agent_or_store, "store", agent_or_store)
     if not hasattr(store, "get_nodes_by_tag"):
         engine = getattr(agent_or_store, "engine", None)
         if engine is not None:
             store = getattr(engine, "store", store)
-    nodes = store.get_nodes_by_tag(tag, limit=200)
+    nodes = store.get_nodes_by_tag(tag, limit=limit)
     wm = WorldModel()
     grouped: Dict[str, List[Tuple[Optional[float], tuple]]] = {}
     for n in nodes:

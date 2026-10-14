@@ -1684,6 +1684,40 @@ class LayeredStore:
                 ''', (now, edge_id))
             self.conn.commit()
 
+    @_transactional
+    def unverify_edge(self, edge_id: str) -> bool:
+        """撤销边的已验证标记（D-43：`verified` 需可逆）。
+
+        `verify_edge` 只能把 `verified` 写 1，而 `decay_cycle` 的边衰减段是
+        `WHERE e.verified = 0` ⇒ verified=1 的边**永久免衰减**；修前全仓没有
+        任何路径能把 `verified` 置回 0（`unverify` / `SET verified=0` 均 0 命中），
+        误标（含 #117 那种「一次命中把非参与边一并标 verified」）就此固化、
+        无纠错入口。判据来源：`docs/plans/待裁清单_v0.1.md` **D-43**
+        「**需要**（全仓现无 `unverify` ⇒ 一旦误标无法回退）」。
+
+        与 `verify_edge` 对称：同样过共享层角色闸（#234）、同样挂
+        `@_transactional`、返回 bool（拒/不存在 ⇒ False，与 `delete_node` /
+        `restore_node` 契约一致），并落一条 `action_logs`——撤销是治理动作，
+        应可审计（对齐 #117 的 fail-closed 留痕取向）。
+        """
+        if self.role != Role.PRIMARY:
+            edge = self.get_edge(edge_id)
+            if edge is not None:
+                self._assert_edge_role(edge)
+        with self._lock:
+            c = self.conn.cursor()
+            c.execute("SELECT verified FROM edges WHERE id=?", (edge_id,))
+            row = c.fetchone()
+            if row is None or not row[0]:
+                return False          # 不存在或本就未验证 ⇒ 无变更
+            c.execute("UPDATE edges SET verified=0, last_verified=NULL WHERE id=?",
+                      (edge_id,))
+        self.log_action(
+            "edge_unverified",
+            f"撤销边 {edge_id} 的已验证标记（重新进入衰减面）",
+            outcome={"edge_id": edge_id})
+        return True
+
     # ---------- 查询 ----------
 
     def query_nodes(self, layer: MemoryLayer = None, modality: str = None,
