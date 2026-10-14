@@ -248,6 +248,35 @@ class UnifiedWorldModel:
         return {"status": "ok", "tick": self.tick, **stats,
                 "anomaly_events": stats["anomalies"], "observations": resolved}
 
+    def restore_trajectory_from_history(self) -> int:
+        """把观测历史重建成轨迹缓冲，返回写入的观测点总数。
+
+        轨迹缓冲 `_traj_buf` 是历史的**投影**：两者逐条对应同一份观测记录
+        （`perceive` 的 `snap`），只是键的形式不同——历史按 tick 成帧，
+        缓冲按 eid 成列。`_traj_buf` 只在 `perceive` 里追加，不随经验载荷
+        持久化；故从经验恢复世界模型后必须调用本方法，否则生成端
+        `_wm_static_check` / `_wm_smooth_check` 读到空缓冲，判据从
+        `speed_near_zero` 变成 `not_enough_samples`，两侧预测不再一致。
+
+        边界：只有本帧真实观测到的实体进缓冲（与 `snap` 同源），模型信念
+        位置不进；被存档历史丢掉的帧无法补回。
+        """
+        buf: Dict[str, List[Tuple[int, Tuple[float, float, float]]]] = {}
+        for frame in self.history:
+            tick = int(frame["tick"])
+            for eid, pos in frame["entities"].items():
+                buf.setdefault(eid, []).append((tick, tuple(float(v) for v in pos)))
+        for eid, seq in buf.items():
+            if len(seq) > 256:
+                buf[eid] = seq[-256:]
+        self._traj_buf = buf
+        # 与轨迹缓冲同批建立：包装层只在"缓冲不存在"时一并初始化这两个误差
+        # 队列；先把缓冲建出来而不建它们，下一帧 perceive 就会在
+        # `self._err_model.setdefault` 上抛 AttributeError。
+        self._err_model = {}
+        self._err_persist = {}
+        return sum(len(seq) for seq in buf.values())
+
     # ================= 模式推断（观测-only 启发式） =================
 
     def _motion_stats(self, eid: str, window: int = 8,

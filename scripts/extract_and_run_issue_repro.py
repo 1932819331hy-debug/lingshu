@@ -254,6 +254,24 @@ def _dedent(line, n):
         k += 1
     return line[k:]
 
+#: 列表项标记（CommonMark）：`- ` / `* ` / `+ ` / `N. `（N≥1 数字）。
+_RE_LIST_MARKER = re.compile(r"^ {0,3}(?:[-*+]|\d{1,9}[.)])(?:\s+|$)")
+
+
+def _container_strip(line):
+    """剥掉行首的容器前缀（块引用 `> ` ＋ 列表项 `- ` / `* ` / `+ ` / `N. `）。
+
+    #555 残留绕过（维护者复核指出）：`> <div title="` 与 `- <div title="` 的
+    HTML 块起点被容器前缀挡住（抽取器的围栏判定剥了 `_bq_strip`，HTML 块
+    判定却在**原始行**上跑）⇒ 隐藏块在引用块/列表项内仍被抽取执行。
+    修法：起点判定与块内结束条件均在剥容器后的内容上跑——与围栏判定
+    同口径。GitHub 的渲染验证见 PR #555 复核（`POST /markdown` gfm 实测，
+    blockquote / li 内的 `<div title=…` 均输出 raw HTML ⇒ 浏览器隐藏）。
+    """
+    s, _ = _bq_strip(line)
+    s = _RE_LIST_MARKER.sub("", s, count=1)
+    return s
+
 
 def _extract_fenced_blocks(text):
     """按 CommonMark 围栏口径抽取全部围栏块。
@@ -284,22 +302,25 @@ def _extract_fenced_blocks(text):
     while i < n:
         if html_state is not None:
             # HTML 块内：围栏不算块、注释不算注释——只找本型的结束条件。
+            # #555 残留：容器（引用块/列表项）内的 HTML 块，其结束条件也在
+            # 剥容器后的内容上判定（`> ` 后的空行也是空行）。
+            content = _container_strip(lines[i])
             kind = html_state[0]
             if kind == "blank":                       # ⑥⑦：空行收（空行不属块）
-                if not lines[i].strip():
+                if not content.strip():
                     html_state = None
                     prev_blank = True
                 else:
                     prev_blank = False
             elif kind == "tag":                       # ①：同行出现 </tag> 即收（含本行）
                 if re.search(r"</%s\s*>" % re.escape(html_state[1]),
-                             lines[i], re.IGNORECASE):
+                             content, re.IGNORECASE):
                     html_state = None
-                prev_blank = not lines[i].strip()
+                prev_blank = not content.strip()
             else:                                     # ②④⑤：出现终串即收（含本行）
-                if html_state[1] in lines[i]:
+                if html_state[1] in content:
                     html_state = None
-                prev_blank = not lines[i].strip()
+                prev_blank = not content.strip()
             i += 1
             continue
         if in_comment:
@@ -314,16 +335,18 @@ def _extract_fenced_blocks(text):
             # #520：HTML 块起点判定先于注释推进（①②④⑤⑥⑦；③注释走下方既有
             # 状态机）——`<div title="` 这类起点行里出现 `<!--` 时，块归属按
             # CommonMark 起点次序：行首是什么就开什么型。
-            st = _html_block_start(lines[i], prev_blank)
+            # #555 残留：起点判定在**剥容器后**的内容上跑（与围栏判定同口径）。
+            content = _container_strip(lines[i])
+            st = _html_block_start(content, prev_blank)
             if st is not None:
                 html_state = st
                 # 同行即含结束条件（如 `<?xml?>`、`<div></div>` 单行）⇒ 立即收。
-                if st[0] == "marker" and st[1] in lines[i]:
+                if st[0] == "marker" and st[1] in content:
                     html_state = None
                 elif st[0] == "tag" and re.search(
-                        r"</%s\s*>" % re.escape(st[1]), lines[i], re.IGNORECASE):
+                        r"</%s\s*>" % re.escape(st[1]), content, re.IGNORECASE):
                     html_state = None
-                prev_blank = not lines[i].strip()
+                prev_blank = not content.strip()
                 i += 1
                 continue
             in_comment = _advance_comment_state(lines[i], False)
