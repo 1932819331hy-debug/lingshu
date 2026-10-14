@@ -118,7 +118,15 @@ class PredictionEngine:
           causal（显式因果边）→ 高可信主路径（边置信度）
           structural（共同父结构模式）→ 中可信探索路径（0.6）
           preference（注意力偏好）→ 低可信假设路径（0.3）
-        不禁止低可信候选（CNN/探索是感知机构，禁止会掐死探索）——只分层。"""
+        不禁止低可信候选（CNN/探索是感知机构，禁止会掐死探索）——只分层。
+
+        #561：返回前按**确定性判据**排序（可信度降序，同分按 target_id 升序）。
+        此前直接按「因果边 DB 返回序 + 语义邻近序」拼接返回，而调用方
+        `_generate_routes` 用 `[:max_branches]` 截断 ⇒ 实际含义变成「取 DB 返回的
+        前 N 条」而非「取最可信的 N 条」：一条 confidence=0.99 的强因果边只要插得
+        晚，就会被 5 条 0.11 的弱边挤出候选集；且仅改变边的插入序就得到完全不同的
+        路线集合（与 docstring 的分层语义相反）。同分按 id 定序保证跨运行可复现。
+        """
         candidates = []
         seen = set()
         for e in self.engine.store.get_outgoing_edges(start_id):
@@ -134,6 +142,8 @@ class PredictionEngine:
                 candidates.append((n.id, 0.6, "structural_pattern"))
             elif self._preference_weight(n.content) > 0.8:
                 candidates.append((n.id, 0.3, "semantic_induced"))
+        # #561：确定性排序——可信度降序，同分按 target_id 升序（切断对 DB 返回序的依赖）
+        candidates.sort(key=lambda c: (-c[1], str(c[0])))
         return candidates
 
     # ==================== 生成式预测：因果路线图（D-001/D-004） ====================
