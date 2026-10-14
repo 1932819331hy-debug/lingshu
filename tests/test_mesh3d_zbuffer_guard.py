@@ -104,6 +104,31 @@ BASELINE_RGB_SHA256 = {
 # ---------------------------------------------------------------------------
 
 
+@pytest.fixture(autouse=True)
+def _disable_presentation_layer(monkeypatch):
+    """本文件的**全部**用例统一关掉本件新增的"呈现层"特性。
+
+    为什么（判据纯粹性）：本文件测的是 **z-buffer 光栅化**（与"只画三角形"的逐像素
+    真值逐字节一致、近面压远面、画家序穿模等）。而本件新增的**接触阴影**与**地面渐变**
+    会写入非三角形像素、并改变地面色 ⇒ 参考实现里没有它们 ⇒ 不关就会把"呈现层的
+    正确改动"误报成"光栅化错了"。实测：A1/A2/B1/B2/H1 五个用例因此转红
+    （其中 H1 的读数从 0 变成 15200 像素 —— 地面渐变让"非地面色"判据彻底失效）。
+    在**所有实例**上关最省事、也最不容易漏（不必逐个测试改动）。
+
+    `auto_frame` 同理：本文件的相机都是**刻意手摆**的，自动取景会覆盖它们。
+    """
+    from lingshu.world.world3d import World3D as _W
+    _orig = _W.__init__
+
+    def _init(self, *a, **kw):
+        _orig(self, *a, **kw)
+        self.contact_shadow = False
+        self.ground_gradient = False
+        self.auto_frame = False
+
+    monkeypatch.setattr(_W, "__init__", _init)
+
+
 def _scene_empty():
     return World3D()
 
@@ -275,6 +300,11 @@ def _mesh_scene(model="hex01", sw=SW, sh=SH):
         mesh3d.MESH_LIBRARY["_guard_cube"] = mesh
         cam = Camera3D(fov_deg=55.0, cx=1.2, cy=0.8, cz=-1.6, yaw=0.6, pitch=-0.25)
         w = World3D(cam)
+        #: 本件加的**呈现层**特性必须在此**显式关掉**：A1/A2/B1 测的是"z-buffer 光栅化
+        #: 与逐像素真值逐字节一致"，其参考实现只画三角形、没有阴影/渐变 ⇒ 不关就会
+        #: 把"呈现层的正确改动"误报成"光栅化错了"。（判据纯粹性优先。）
+        w.contact_shadow = False
+        w.ground_gradient = False
         w.objects = [Object3D("_guard_cube", (0, 0, 0), (1, 1, 1), (180, 120, 90), "box")]
         return w, mesh
     # ★ CI 保护（统一在此处，不逐个测试加装饰器）：真模型不在本机 ⇒ **skip 而非红**。
@@ -287,6 +317,8 @@ def _mesh_scene(model="hex01", sw=SW, sh=SH):
     mesh3d.load_obj_mesh(HEX01, "hex01", mtl_colors=cols)
     cam = Camera3D(fov_deg=50.0, cx=2.6, cy=1.4, cz=-2.9, yaw=0.5, pitch=-0.22)
     w = World3D(cam)
+    w.contact_shadow = False          # 同上：判据纯粹性（只比较三角形光栅化）
+    w.ground_gradient = False
     w.objects = [Object3D("hex01", (0, 0, 0), (2, 2, 2), (170, 170, 175), "box")]
     return w, mesh3d.MESH_LIBRARY["hex01"]
 
@@ -567,6 +599,11 @@ def test_h1_源几何远离世界原点时_按直觉摆位仍能渲出非空图(
     assert abs(info["recenter_offset"][0] - 6.0) < 1e-9, info["recenter_offset"]
     cam = Camera3D.frame_object((0.0, 0.0, 0.0), 1.0, fov_deg=45.0)
     w = World3D(cam)
+    #: 本件加的呈现层特性要显式关掉：H1 的判据是"像素**既不等于背景也不等于地面色**"，
+    #: 而**地面渐变**恰恰会改变地面色 ⇒ 不关的话，空图的反例也会被数出上万个 solid 像素
+    #: （实测 15200），判据当场失去判别力。
+    w.contact_shadow = False
+    w.ground_gradient = False
     w.objects = [Object3D("_guard_off", (0.0, 0.0, 0.0), (1, 1, 1), (200, 200, 200), "box")]
     px = w.render(SW, SH).tobytes()
     bg = bytes((20, 24, 40))
@@ -577,6 +614,8 @@ def test_h1_源几何远离世界原点时_按直觉摆位仍能渲出非空图(
     # 不重定心 ⇒ 同一条几何被推到 x≈11，必然出画面（这正是 Lead 踩到的读数）
     mesh3d.load_obj_mesh(path, "_guard_off_raw", recenter=False)
     w2 = World3D(cam)
+    w2.contact_shadow = False
+    w2.ground_gradient = False
     w2.objects = [Object3D("_guard_off_raw", (0.0, 0.0, 0.0), (1, 1, 1),
                            (200, 200, 200), "box")]
     px2 = w2.render(SW, SH).tobytes()

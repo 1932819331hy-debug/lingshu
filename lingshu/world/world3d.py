@@ -537,7 +537,40 @@ class World3D:
         # 地面（地平线以下）——深度 0.0（最远，任何几何都盖得住它）
         horizon_px = screen_h * 0.45
         self._set_backend_depth(draw, 0.0)
-        draw.rectangle([0, int(horizon_px), screen_w, screen_h], fill=ground_color)
+        #: ★ 地面渐变（本件）：**只在含网格的场景**把"常数填充的一条硬边"换成
+        #: 12 段横向渐变（近处略深、远处略亮，模拟地面受光衰减）。
+        #: 为什么必须限定"含网格"：全图元场景的位图**逐字节不变**（B1 硬约束），
+        #: 那条路径一个像素都不许动。
+        #: 为什么值得改：常数矩形在地平线处是一条**生硬的横线**（"贴纸感"）；
+        #: 分段渐变零依赖、零新失败面（还是 rectangle，只是多画几段）。
+        #: `ground_gradient` 是**开关**（缺省开）：守卫里要能显式关掉它做"判据纯粹性"
+        #: 对照（例如 H1 的判据是"像素既不等于背景也不等于地面色"，渐变恰恰改地面色）。
+        if self._has_mesh() and getattr(self, "ground_gradient", True):
+            n_band = 12
+            y0 = int(horizon_px)
+            span = max(1, screen_h - y0)
+            for i in range(n_band):
+                ya = y0 + span * i // n_band
+                yb = y0 + span * (i + 1) // n_band
+                if yb <= ya:
+                    continue
+                #: 远处（靠地平线）→ 近处：亮度从 1.06 降到 0.88
+                k = 1.06 - 0.18 * (i / max(1, n_band - 1))
+                band = tuple(min(255, max(0, int(round(v * k)))) for v in ground_color)
+                draw.rectangle([0, ya, screen_w, yb], fill=band)
+        else:
+            draw.rectangle([0, int(horizon_px), screen_w, screen_h], fill=ground_color)
+
+        #: ★ 接触阴影（本件）：只在**含网格**的场景加 —— 全图元场景必须逐字节不变（B1）。
+        #: 为什么需要：`shade_paint` 自认的天花板之一就是"没有接触阴影"，物体像浮在
+        #: 地面上。这里用**最省而有效**的做法：把落地物体在**地面平面**上的足迹投影
+        #: 成一块压暗的椭圆（blob shadow），垫在地面与物体之间（画家序：地面之后、物体之前）。
+        if self._has_mesh() and getattr(self, "contact_shadow", True):
+            self._set_backend_depth(draw, 1e-6)          # 略高于地面 ⇒ 不被地面盖住
+            for obj in sorted(self.objects, key=lambda o: -o.depth(cam)):
+                if not getattr(obj, "ground", True):
+                    continue                             # 天空物体不投影
+                self._draw_contact_shadow(draw, obj, cam, screen_w, screen_h, ground_color)
 
         # 画家算法：按相机深度降序（远先画）
         for obj in sorted(self.objects, key=lambda o: -o.depth(cam)):
@@ -575,6 +608,20 @@ class World3D:
             draw = ImageDraw.Draw(img)
             self._paint(draw, cam, screen_w, screen_h, ground_color)
             return img
+        #: ★ 自动取景（本件）：**走到这里就一定含网格**（全图元场景上面已 return，
+        #: 那条路径必须逐字节不变 —— B1 硬约束）⇒ 在这里改**不可能**碰到 B1。
+        #: 为什么需要：实测三个真实模型在"随手设的相机"下**全部裁切**
+        #: （turret 底 −1.9、arm 左 −4.2、hex01 左 −155.6 / 下 −182.4），
+        #: 主体压在画面一角（中心 0.23~0.25）。`autoframe` 按**投影后的真实包围盒**
+        #: 把主体精确放进画布（中心 0.500/0.500、左右留边对称），并在候选视角里选
+        #: "最长轴垂直于视线"的那个 —— 细长体（机械臂）才看得清结构。
+        #: 显式传了 camera ⇒ 一律尊重调用方（可复现对照用）。
+        if camera is None and getattr(self, "auto_frame", True):
+            try:
+                from . import autoframe as _AF
+                cam = _AF.frame_world(self, screen_w, screen_h)
+            except (ImportError, AttributeError, TypeError, ValueError, ZeroDivisionError):
+                pass
         ss = int(ssaa) if ssaa and int(ssaa) > 1 else 1
         w, h = screen_w * ss, screen_h * ss
         self._check_screen_dim(w, h)
@@ -611,6 +658,95 @@ class World3D:
         return self.render(tier["screen_w"], tier["screen_h"], camera=camera,
                            background=background, ground_color=ground_color,
                            ssaa=tier["ssaa"])
+
+    def _draw_contact_shadow(self, draw, obj, cam: Camera3D,
+                             screen_w: int, screen_h: int, ground_color) -> None:
+        """把落地物体在地面平面上的足迹画成一块压暗的椭圆（blob shadow）。
+
+        口径：足迹取物体包围盒在**水平面（xz）**上的范围 ⇒ 投影到 y = 地面高度
+        （`self.ground_y`，缺省 0）⇒ 在屏幕上取该四边形的外接椭圆。
+        `inv_z` 用物体自身深度 ⇒ 与 z-buffer 路径的遮挡一致（物体会盖住自己的影子）。
+
+        这是"**最省而有效**"的做法：真接触阴影需要阴影贴图/光线求交（零依赖下不现实），
+        而 blob shadow 已经能解决"浮空"这一视觉缺陷，且**不引入新的失败面**
+        （不依赖法线、不依赖光照模型、对任意网格都成立）。
+        """
+        lo, hi = None, None
+        mesh = None
+        try:
+            from .mesh3d import MESH_LIBRARY
+            mesh = MESH_LIBRARY.get(getattr(obj, "category", ""))
+        except (ImportError, AttributeError, TypeError):
+            mesh = None
+        if mesh is not None:
+            b = mesh.bounds()
+            if b:
+                lo, hi = b
+        if lo is None:
+            c = obj.center
+            sz = getattr(obj, "size", (1.0, 1.0, 1.0))
+            lo = tuple(c[k] - sz[k] / 2.0 for k in range(3))
+            hi = tuple(c[k] + sz[k] / 2.0 for k in range(3))
+        cx, cz = obj.center[0], obj.center[2]
+        gy = float(getattr(self, "ground_y", 0.0))
+        #: 水平足迹（世界）⇒ 贴到地面高度
+        x0, x1 = cx + lo[0], cx + hi[0]
+        z0, z1 = cz + lo[2], cz + hi[2]
+        #: 略微外扩一点（8%），让影子在轮廓外露出一点 —— 否则会被物体自己完全盖住
+        ex = (x1 - x0) * 0.08
+        ez = (z1 - z0) * 0.08
+        x0, x1, z0, z1 = x0 - ex, x1 + ex, z0 - ez, z1 + ez
+        #: ★ 用**屏幕空间的底部小椭圆**，而不是"地面平面上的足迹四边形"。
+        #: 为什么换（Lead 亲眼看图迭代两次）：地面平面上的足迹在**斜视角**下必然投影成
+        #: 一条**向地平线延伸的大梯形** ⇒ 画出来像"物体背后大片变暗"，而不是"接触阴影"。
+        #: 视觉上正确的接触阴影 = **只贴在物体底部那一小圈**。所以取底面中心投影到屏幕、
+        #: 按底面屏幕宽度画一个扁椭圆（两层：外淡内深，近似柔和边）。
+        quad = [(x0, gy, z0), (x1, gy, z0), (x1, gy, z1), (x0, gy, z1)]
+        pts = [cam.project(p, screen_w, screen_h) for p in quad]
+        if any(p is None for p in pts):
+            return
+        xs = [p[0] for p in pts]
+        ys = [p[1] for p in pts]
+        #: ★ 尺度口径（本件第 5 次迭代，前 4 次都是"看图才发现尺度不对"）：
+        #: 前几版按**底面投影宽度**定椭圆半径 —— 大底座在近处投影本就很大 ⇒ 画出来是
+        #: "物体下方一大片暗"。正确尺度应**相对物体在画面上的大小**：
+        #: 取**物体投影包围盒**的底部一小圈（宽 78%、高 12%），并把它居中在底边。
+        #: 这样无论模型多大、相机多近，接触暗部都**只贴底一圈**。
+        allp = []
+        try:
+            from .mesh3d import MESH_LIBRARY as _ML
+            _m = _ML.get(getattr(obj, "category", ""))
+            if _m is not None and _m.verts:
+                _vs = _m.verts
+                _step = max(1, len(_vs) // 600)
+                for _i in range(0, len(_vs), _step):
+                    _v = _vs[_i]
+                    _sp = cam.project((_v[0] + obj.center[0], _v[1] + obj.center[1],
+                                       _v[2] + obj.center[2]), screen_w, screen_h)
+                    if _sp is not None:
+                        allp.append(_sp)
+        except (AttributeError, TypeError, ValueError):
+            allp = []
+        if len(allp) >= 3:
+            axs = [q[0] for q in allp]
+            ays = [q[1] for q in allp]
+            ow = max(1.0, max(axs) - min(axs))
+            oh = max(1.0, max(ays) - min(ays))
+            cx_px = (min(axs) + max(axs)) / 2.0
+            cy_px = max(ays)
+            rx = ow * 0.39
+            ry = max(1.0, oh * 0.055)
+        else:
+            cx_px = (min(xs) + max(xs)) / 2.0
+            cy_px = max(ys)
+            rx = max(2.0, (max(xs) - min(xs)) / 2.0) * 0.5
+            ry = max(1.0, rx * 0.12)
+        self._set_backend_depth(draw, self._inv_z_of(cam, obj.center) * 0.999)
+        dk = tuple(max(0, int(v * 0.58)) for v in ground_color)
+        draw.ellipse([cx_px - rx * 1.18, cy_px - ry * 1.9,
+                      cx_px + rx * 1.18, cy_px + ry * 0.9], fill=dk)
+        draw.ellipse([cx_px - rx * 0.80, cy_px - ry * 1.0,
+                      cx_px + rx * 0.80, cy_px + ry * 0.35], fill=tuple(ground_color))
 
     def _ground_y(self, category: str, size) -> float:
         """地面物体的**枢轴高度**（世界 y），使部件组合的**真实底部**落在 y=0。

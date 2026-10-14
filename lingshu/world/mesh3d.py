@@ -818,15 +818,21 @@ class ZBuffer:
         self.stats["polygons"] += 1
         self._untouched = False
         base = self._invz
-        tris = []
+        #: ★ 修（本件）：原实现只写 12 个字段（x,y,w,i ×3），而 `rasterize_triangles`
+        #: 读的是 **15 个**（还要 r,g,b）⇒ `IndexError`。它此前**从未被走到**：
+        #: 含网格场景里恰好没有图元，图元场景又走 `PIL.ImageDraw`（不是 ZBuffer）
+        #: ⇒ 潜伏死代码；凡"混合场景（图元+网格）"一旦出现就当场崩。
+        #: 与 `rectangle` 同口径：一次算 `rgb8(fill)` 再补进三元组。
+        rgb = rgb8(fill) if fill is not None else (0, 0, 0)
+        self._untouched = False
         p0 = pts[0]
         for k in range(1, len(pts) - 1):
             p1, p2 = pts[k], pts[k + 1]
-            tris.append((p0[0], p0[1], base, 1.0, p1[0], p1[1], base, 1.0,
-                         p2[0], p2[1], base, 1.0))
-        for t in tris:
-            rasterize_triangles(self.depth, self.color, self.w, self.h, [t],
-                                stats=self.stats)
+            rasterize_triangles(
+                self.depth, self.color, self.w, self.h,
+                [(p0[0], p0[1], base, 1.0, p1[0], p1[1], base, 1.0,
+                  p2[0], p2[1], base, 1.0, rgb[0], rgb[1], rgb[2])],
+                stats=self.stats)
         if outline is not None:
             self._stroke_poly(pts, outline)
 
