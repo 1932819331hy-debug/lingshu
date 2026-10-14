@@ -382,3 +382,91 @@ def test_e4_开关真的改变渲染_关掉即回到基线():
         out.append(w.render(SW, SH).tobytes())
     assert out[0] == out[1], "关掉环境反射后两次渲染不一致（不确定行为）"
     assert out[0] != out[2], "开了环境反射却与关着一样 ⇒ 特性没生效"
+
+
+# ============================================================== F 规范级校验
+def test_f1_产出符合_SVG11_的结构约束():
+    """F1：本件的 SVG 产出必须满足 **SVG 1.1 的规范级**结构约束。
+
+    ⚠ **限制照实说明**（见 `SVG-PAINT-PROGRESS.md`）：本机**没有任何真 SVG 渲染器**
+    （rsvg-convert / resvg / inkscape / chromium / firefox / cairosvg 逐一查过，全部没有），
+    也**不联网装**。所以"在真实浏览器里打开过"这件事**做不到**，判据只能退到
+    **规范级**：结构合法性 + 属性取值合法 + 良构。凡涉及"看起来对不对"的结论，
+    本仓的判据是**自写光栅器 + 逐轮看图**，与浏览器**未做交叉验证** —— 这一点如实标注。
+
+    规范级检查项（都是 SVG 1.1 明确规定的）：
+      · 良构 XML（ElementTree 可解析）；
+      · 每个 `id` 唯一（编辑器按 id 寻址的前提，`svg_backend.begin_group` 已 fail-closed）；
+      · `class` 值非空且不含空白（本件的 `.ink` 靠它整层关）；
+      · `polygon` 的 `points` 是**偶数个**数字（奇数个是非法路径）；
+      · `fill` / `stroke` 只允许 `#rrggbb` / `none`（本后端明确不认十六进制以外的写法）；
+      · 宽高为正数。
+    """
+    import re as _re
+    import xml.etree.ElementTree as _ET
+    from lingshu.world import mesh_svg
+    key, m = _turret_or_synthetic()
+    b = m.bounds()
+    ctr = tuple((b[0][k] + b[1][k]) / 2.0 for k in range(3))
+    w = World3D(Camera3D(**MANUAL))
+    w.objects = [Object3D(key, ctr, (1, 1, 1), (170, 170, 175), "box")]
+    w.auto_frame = False
+    svg = mesh_svg.render_mesh_svg(w, SW, SH, camera=w.camera, style="technical")
+
+    root = _ET.fromstring(svg)                     # ① 良构
+    assert float(root.get("width")) > 0 and float(root.get("height")) > 0, "宽高须为正"
+
+    ids, classes = [], []
+    for el in root.iter():
+        if el.get("id"):
+            ids.append(el.get("id"))
+        if el.get("class") is not None:
+            classes.append(el.get("class"))
+        tag = el.tag.split("}")[-1]
+        if tag == "polygon":
+            vals = [v for v in _re.split(r"[,\s]+", (el.get("points") or "").strip()) if v]
+            assert len(vals) % 2 == 0, "polygon points 个数须为偶数：%r" % (el.get("points"),)
+            assert len(vals) >= 6, "polygon 至少 3 个点"
+        for attr in ("fill", "stroke"):
+            v = el.get(attr)
+            if v is not None and v != "none":
+                #: ⚠ 允许 **两种** SVG 1.1 合法写法：`#rrggbb` 与 `rgb(r,g,b)`。
+                #: 本判据第一版只放了 `#rrggbb` ⇒ 被 `rgb(238,236,229)` 判红 ——
+                #: **是我的断言太窄，不是产出不合法**（`rgb()` 在 SVG 1.1 里完全合法）。
+                #: 教训同「采样顺序不可臆测」：**规范断言要先查规范，不能凭印象**。
+                assert (_re.match(r"^#[0-9a-fA-F]{6}$", v)
+                        or _re.match(r"^rgb\(\s*\d+\s*,\s*\d+\s*,\s*\d+\s*\)$", v)), \
+                    "%s 须为 #rrggbb / rgb(r,g,b) / none：%r" % (attr, v)
+    assert len(ids) == len(set(ids)), "有重复 id（编辑器按 id 寻址会产生歧义）"
+    for c in classes:
+        assert c and not _re.search(r"\s", c), "class 值须非空且不含空白：%r" % (c,)
+    assert "ink" in classes, "本件应在线上打 class=ink（否则 F 组失去判别力）"
+
+
+def test_f2_关闭线稿层不产生非法文档():
+    """F2：把 `class="ink"` 的元素删掉（模拟 CSS `display:none` 后编辑器"删除隐藏层"）
+    之后，文档**仍须良构且结构约束不破** —— 否则"可整层关"在实际编辑器里会产出坏档。"""
+    import xml.etree.ElementTree as _ET
+    from lingshu.world import mesh_svg
+    key, m = _turret_or_synthetic()
+    b = m.bounds()
+    ctr = tuple((b[0][k] + b[1][k]) / 2.0 for k in range(3))
+    w = World3D(Camera3D(**MANUAL))
+    w.objects = [Object3D(key, ctr, (1, 1, 1), (170, 170, 175), "box")]
+    w.auto_frame = False
+    svg = mesh_svg.render_mesh_svg(w, SW, SH, camera=w.camera, style="technical")
+    root = _ET.fromstring(svg)
+
+    def strip(el):
+        for ch in list(el):
+            if ch.get("class") == "ink":
+                el.remove(ch)
+            else:
+                strip(ch)
+
+    strip(root)
+    out = _ET.tostring(root, encoding="unicode")
+    r2 = _ET.fromstring(out)                       # 删完仍须良构
+    ids = [e.get("id") for e in r2.iter() if e.get("id")]
+    assert len(ids) == len(set(ids)), "删掉线稿层后出现重复 id"
+    assert float(r2.get("width")) > 0, "删掉线稿层后宽高损坏"
