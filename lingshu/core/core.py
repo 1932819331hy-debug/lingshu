@@ -3721,6 +3721,14 @@ class LayeredStore:
         node = self.get_node(insight_id)
         if node is None or "insight_event" not in node.tags:
             return {"error": f"非洞见事件节点: {insight_id}"}
+        # #519：共享层角色闸——洞见经 D-003 终裁晋升到结构层/锚点层后，节点
+        # 仍带 insight_event 标签；旧实现只认标签不认层与角色 ⇒ SUB 可把已终裁
+        # 的结构层节点 verified→refuted、追加伪造证据、抬 importance 到 0.9。
+        # 与 #234 给 tag_node/protect_node/register_conflict/add_edge 加的闸同款。
+        if node.layer in self.SHARED_LAYERS and self.role != Role.PRIMARY:
+            raise PermissionError(
+                f"role={self.role.value} 无权改写共享层（{node.layer.value}）的洞见"
+                f"（id={insight_id}）——已终裁晋升的洞见归 PRIMARY 主控（#519）")
         now = time.time()
         sa = node.state_attributes or {}
         ins = sa.get("insight", {}) if isinstance(sa, dict) else {}
