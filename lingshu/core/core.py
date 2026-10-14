@@ -2989,7 +2989,9 @@ class LayeredStore:
         return hashlib.sha256((content or "").encode("utf-8")).hexdigest()[:16]
 
     @_transactional
-    def add_promotion_proposal(self, node_id: str, requester: str, reason: str) -> str:
+    def add_promotion_proposal(self, node_id: str, requester: str, reason: str,
+                                 override_rejected: bool = False,
+                                 designer_key: str = None) -> str:
         """提交层晋升提案（节点申请跨层升格，如 context→knowledge），返回提案 id。
 
         #140：提案在提交时**绑定被复核内容的哈希**（`content_hash` 列）——旧实现
@@ -2998,6 +3000,39 @@ class LayeredStore:
         `content_hash`）＋ `docs/plans/治理与写入边界_修复设计_v0.1.md` §3。
         """
         node = self.get_node(node_id)
+        # #581（#522 绕过②）：负记忆与共享层拒绝**下沉**到本方法
+        # ——门面 propose_promotion 已有这两道闸，但 store 层直调
+        # 本方法即绕过它们。
+        if node is not None and node.layer in (
+                MemoryLayer.ANCHOR, MemoryLayer.STRUCTURE):
+            raise ValueError(
+                "#581 共享层节点不可再提升"
+                "（store 层直调本方法不再绕过门面闸）")
+        if node is not None:
+            _paths = self.list_rejected_paths(status="open")
+            for p in _paths:
+                if p.get("path_type") != "promotion":
+                    continue
+                _sim = self.char_bigram_jaccard(
+                    node.content, p.get("description", "") + p.get("reason", ""))
+                if _sim > 0.15:
+                    if not override_rejected:
+                        raise ValueError(
+                        "#581 该内容此前已被终裁否决"
+                        "（负记忆 %s：%s）"
+                        "——重提须走门面并提供设计者密钥"
+                        % (p.get("id"), p.get("reason", "")))
+                    if not verify_designer(designer_key):
+                        raise PermissionError(
+                            "#581 负记忆重提须过设计者密钥闸"
+                            "（store 层 override 下沉）"
+                            "（#522 绕过② 收口）")
+                    # action_logs 留痕（#581 另一半）
+                    self.log_action(
+                        "promotion_negmem_override",
+                        f"经密钥放行负记忆重提 {p.get('id','?')}",
+                        node_ids=[node_id],
+                        outcome={"rejected_path": p.get("id"), "node_id": node_id})
         chash = self._content_hash(node.content if node else "")
         pid = f"pp_{uuid.uuid4().hex[:8]}"
         c = self.conn.cursor()
@@ -5294,7 +5329,9 @@ class SpacetimeMemoryEngine:
             if not verify_designer(designer_key):
                 raise PermissionError(
                     "#216 override 否决负记忆须过设计者密钥闸（fail-closed）")
-        pid = self.store.add_promotion_proposal(node_id, requester, reason)
+        pid = self.store.add_promotion_proposal(node_id, requester, reason,
+                                                   override_rejected=override_rejected,
+                                                   designer_key=designer_key)
         self.store.tag_node(node_id, "promotion_pending")
         return pid
 
