@@ -125,6 +125,10 @@ def _disable_presentation_layer(monkeypatch):
         self.contact_shadow = False
         self.ground_gradient = False
         self.auto_frame = False
+        #: 环境反射（本件）同样要关：A1/A2/B1 的"逐像素真值参考"只画三角形 + `shade_rgb`，
+        #: **没有环境项** ⇒ 不关就会因"颜色算法分叉"误报成"光栅化错了"。
+        #: （实测未关时：A1/A2/B1 三条转红。）
+        self.env_reflect = False
 
     monkeypatch.setattr(_W, "__init__", _init)
 

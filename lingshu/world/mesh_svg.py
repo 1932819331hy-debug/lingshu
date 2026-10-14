@@ -500,7 +500,8 @@ def _emit_mesh(backend, world, obj, mesh, cam, sw, sh, st, scale, counts, layers
         mesh = mesh.rotated(obj.rot)
     tris, pstats = mesh3d.prepare_triangles(
         mesh, obj.center, cam, sw, sh,
-        shade=world.mesh_shade, cull=world.mesh_cull, smooth=world.mesh_smooth)
+        shade=world.mesh_shade, cull=world.mesh_cull, smooth=world.mesh_smooth,
+        env_reflect=getattr(world, "env_reflect", True))
     counts["faces"] += len(mesh.faces)
     counts["tris"] += len(tris)
     for k, v in (pstats or {}).items():

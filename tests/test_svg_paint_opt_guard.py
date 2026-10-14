@@ -314,3 +314,71 @@ def test_d3_关掉线稿层确实改变画面():
     assert n_hidden == 0, "隐藏后仍剩 %d 个 ink 元素（删漏）" % n_hidden
     #: 线元素总数也应归零（线条确实被整体移除）
     assert len(_re.findall(r"<line|<polyline", hidden)) == 0, "隐藏后仍有线元素"
+
+
+# ============================================================== E 环境反射
+def test_e1_环境染色方向正确_上冷下暖():
+    """E1：`env_tint` 必须**上冷下暖** —— `ny=+1`（朝上的面）偏**蓝**，`ny=-1` 偏**暖**。
+
+    这条是"环境反射"的可判定形式：金属反射的是**环境**（天空冷 / 地面暖），
+    所以朝上的面该偏冷、朝下的面该偏暖。过去管线只做「标量 × 固有色」⇒ 不可能有这个方向性。
+    """
+    from lingshu.world import shade_paint as SP
+    base = (199, 204, 214)
+    up = SP.env_tint(base, 1.0, "metal")
+    dn = SP.env_tint(base, -1.0, "metal")
+    #: ⚠ 用**相对**判据，不用绝对"红>蓝"。原因（本判据第一版就这么红的）：
+    #: 基色 (199,204,214) **本身就偏冷**（b−r=15），而 V 底环境色 (134,126,116)
+    #: 的暖偏差只有 18、混合系数 0.30 ⇒ **不足以翻转**基色的冷暖，只能让它"变暖一些"。
+    #: 绝对判据会要求"朝下的面变成暖色"，那在物理上就是错的（反射不会盖过固有色）。
+    assert up[2] - up[0] > base[2] - base[0], \
+        "朝上的面应比基色更**冷**（反射天空），实为 %r（基色 %r）" % (up, base)
+    assert dn[2] - dn[0] < base[2] - base[0], \
+        "朝下的面应比基色更**暖**（反射地面），实为 %r（基色 %r）" % (dn, base)
+    assert up[2] - up[0] > dn[2] - dn[0], "朝上的面应比朝下的面更冷"
+    #: ⚠ 这里**不要**写 `dn[0] > up[0]`：环境色自身的红分量是 TOP(172) > BOT(134)
+    #: ⇒ 朝下的面红分量反而**更少**。判"暖"要看**冷暖差 b−r**，不是单看红通道
+    #: （本判据第二版就是因为这个错误假设红的）。
+    assert up[2] > dn[2], "朝上的面蓝分量应更大：%r vs %r" % (up, dn)
+    assert up[2] - up[0] > dn[2] - dn[0], "朝上应更冷、朝下应更暖：%r vs %r" % (up, dn)
+
+
+def test_e2_gain0_时逐位原样_零回归():
+    """E2：`env_tint(..., gain=0)` 必须**原样返回**基色 ⇒ 证明"关掉即回到改动前"
+    （守卫 fixture 就是靠这一点保 A1/A2 的逐字节真值）。"""
+    from lingshu.world import shade_paint as SP
+    for base in ((199, 204, 214), (0, 0, 0), (255, 255, 255), (17, 99, 200)):
+        got = SP.env_tint(base, 0.7, "metal", 0.0)
+        assert tuple(got) == tuple(int(v) for v in base), (base, got)
+
+
+def test_e3_金属的反射强度强于粗糙材质():
+    """E3：角色强度须与物理直觉一致 —— **金属 > 涂漆金属 > 石材/布料**。
+
+    粗糙表面把环境"打散"了，只剩漫反射；抛光金属几乎镜面。若这条反了，说明
+    `ENV_ROLE_STRENGTH` 被写错（那时画面会变成"石头比金属更有反光"）。
+    """
+    from lingshu.world import shade_paint as SP
+    k = SP.ENV_ROLE_STRENGTH
+    assert k["metal"] > k["painted_metal"] > k["stone"], k
+    assert k["metal"] > k["fabric"] and k["metal"] > k["wood"], k
+    assert k["emissive"] == 0.0, "自发光不吃环境反射"
+
+
+def test_e4_开关真的改变渲染_关掉即回到基线():
+    """E4：`World3D.env_reflect` 开/关必须产生**不同的像素**，且关掉与"本来就没有该特性"
+    一致（这里用"关两次相同 + 不等于开"表达）。"""
+    key, m = _turret_or_synthetic()
+    b = m.bounds()
+    ctr = tuple((b[0][k] + b[1][k]) / 2.0 for k in range(3))
+    out = []
+    for on in (False, False, True):
+        w = World3D(Camera3D(**MANUAL))
+        w.objects = [Object3D(key, ctr, (1, 1, 1), (170, 170, 175), "box")]
+        w.auto_frame = False
+        w.contact_shadow = False
+        w.ground_gradient = False
+        w.env_reflect = on
+        out.append(w.render(SW, SH).tobytes())
+    assert out[0] == out[1], "关掉环境反射后两次渲染不一致（不确定行为）"
+    assert out[0] != out[2], "开了环境反射却与关着一样 ⇒ 特性没生效"

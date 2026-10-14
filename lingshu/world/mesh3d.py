@@ -508,7 +508,8 @@ def _clip_near_cam(poly: List[Vec3], near: float) -> List[Vec3]:
 
 def prepare_triangles(mesh: "MeshGeometry", center, cam, sw: int, sh: int,
                       shade: str = "lambert", cull: bool = True,
-                      smooth: bool = False, quad: bool = False):
+                      smooth: bool = False, quad: bool = False,
+                      env_reflect: bool = False):
     """网格 → 屏幕空间三角形表（**位图与矢量共用的唯一投影内核**）。
 
     每个元素 `(x0,y0,w0,i0, x1,y1,w1,i1, x2,y2,w2,i2, r,g,b)`：
@@ -601,6 +602,12 @@ def prepare_triangles(mesh: "MeshGeometry", center, cam, sw: int, sh: int,
             # 退化到面强度——裁剪是罕见路径，避免为它维护属性插值链）
             inten = (inten[0], inten[0], inten[0])
         base = face.color
+        if env_reflect:
+            #: ★ 环境反射（本件）：按**面法线高度**把基色向环境色混合（金属最强）。
+            #: 放在这里是刻意的 —— 只有这一处**同时**拿得到 `面法线 n` 与 `_role`，
+            #: 且改的是"基色"而不是"逐像素表"，所以**不碰热路径**（`rasterize_triangles`
+            #: 的逐像素循环一行没动），也没有给 15 字段元组增容（那会波及所有消费者）。
+            base = _env_tint(base, n[1], _role)
         for k in range(1, len(pts) - 1):
             p0, p1, p2 = pts[0], pts[k], pts[k + 1]
             if len(poly) == 3:
@@ -613,6 +620,12 @@ def prepare_triangles(mesh: "MeshGeometry", center, cam, sw: int, sh: int,
                          base[0], base[1], base[2]))
     return tris, {"culled": n_cull, "clipped": n_clip, "offscreen": n_off,
                   "kept": len(tris)}
+
+
+def _env_tint(base, ny, role):
+    """`shade_paint.env_tint` 的薄封装（与 `shade_intensity` 同一惰性引用风格）。"""
+    import lingshu.world.shade_paint as _sp
+    return _sp.env_tint(base, ny, role)
 
 
 def _dot(a, b):

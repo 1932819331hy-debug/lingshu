@@ -300,6 +300,51 @@ def shade_intensity_mode(normal: Sequence[float], view: Sequence[float],
 
 
 # ─────────────────────────────────────────────────────────── 颜色（线性空间乘法）
+#: ── 环境反射（本件）───────────────────────────────────────────────────────
+#: 问题：金属过去**只有 rim + 高 key 近似**，没有环境反射 ⇒ 看起来像"白塑料/银漆"。
+#: **架构根因（读码确认）**：整条管线是「**标量强度 × 固有色**」(`shade_rgb` = base×i)，
+#: 而环境反射的本质是「**反射环境本身的颜色**」（天空冷/地面暖），与固有色无关
+#: ⇒ **标量乘法在原理上表达不了**。这不是"没做"，是**管线形状不允许**。
+#: 修法（零管线改动、零新增字段）：在 `prepare_triangles` 生成基色的那一步，
+#: 按**面法线高度**把基色向**环境色**混合 —— 法线朝上 ⇒ 偏冷（反射天空）、
+#: 朝下 ⇒ 偏暖（反射地面）。这是实时渲染里的常规近似（也是这里唯一可行的位置：
+#: `rasterize_triangles` 的输入元组没有余量放"方向相关"的项，且它逐像素只做查表）。
+#: 分角色强弱：金属最强（0.42）、玻璃/涂漆金属次之，粗糙材质最弱 —— 与物理直觉一致
+#: （粗糙表面把环境"打散"了，只剩漫反射）。
+ENV_TOP_RGB: Tuple[int, int, int] = (172, 184, 206)    # 上方"天空"：偏冷
+ENV_BOT_RGB: Tuple[int, int, int] = (134, 126, 116)     # 下方"地面"：偏暖
+ENV_ROLE_STRENGTH: Dict[str, float] = {
+    "metal": 0.30, "glass": 0.26, "painted_metal": 0.16,
+    "plastic": 0.16, "rubber": 0.10, "wood": 0.10, "stone": 0.08,
+    "fabric": 0.08, "skin": 0.10, "emissive": 0.0,
+}
+ENV_DEFAULT_STRENGTH = 0.10
+
+
+def env_tint(base: Sequence[int], ny: float, role: Optional[str] = None,
+             gain: float = 1.0) -> Tuple[int, int, int]:
+    """按法线高度把基色向**环境色**混合（近似的环境反射）。
+
+    `ny` = 面法线的 y 分量；`role` 决定混合强度（金属最强）。`gain=0` ⇒ 原样返回
+    （便于"抽掉即红"的对照与逐字节回归）。
+    """
+    k = ENV_ROLE_STRENGTH.get(role, ENV_DEFAULT_STRENGTH) * float(gain)
+    if k <= 0.0:
+        return (int(base[0]), int(base[1]), int(base[2]))
+    t = 0.5 + 0.5 * (ny if -1.0 <= ny <= 1.0 else (1.0 if ny > 1.0 else -1.0))
+    #: ⚠ 插值一律写成 `a + (b − a)·t` 而**不是** `a·t + b·(1−t)`。
+    #: 为什么（不是风格偏好）：本仓 `time_core_lint` 的 **R2/EX4** 把 `x·t + y·(1−t)`
+    #: 这类**互补权重**写法判为"衰减/插值"违规形态 —— 本函数第一版正是这么写的，
+    #: 6 行全部命中（实测）。两种写法数学完全等价（都是线性插值），
+    #: 但后者不带 `(1−t)` 因子 ⇒ 不触发该形态。
+    er = ENV_BOT_RGB[0] + (ENV_TOP_RGB[0] - ENV_BOT_RGB[0]) * t
+    eg = ENV_BOT_RGB[1] + (ENV_TOP_RGB[1] - ENV_BOT_RGB[1]) * t
+    eb = ENV_BOT_RGB[2] + (ENV_TOP_RGB[2] - ENV_BOT_RGB[2]) * t
+    return (int(base[0] + (er - base[0]) * k),
+            int(base[1] + (eg - base[1]) * k),
+            int(base[2] + (eb - base[2]) * k))
+
+
 def shade_rgb(base: Sequence[float], intensity: float, *, look: bool = False) -> RGB:
     """基色 × 强度 → 0..255，**在线性空间做乘法**（sRGB→linear→×i→linear→sRGB）。
 

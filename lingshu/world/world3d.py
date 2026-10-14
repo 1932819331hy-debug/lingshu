@@ -1086,7 +1086,8 @@ class World3D:
             mesh = mesh.rotated(obj.rot)
         tris, _st = prepare_triangles(
             mesh, obj.center, cam, sw, sh,
-            shade=self.mesh_shade, cull=self.mesh_cull, smooth=self.mesh_smooth)
+            shade=self.mesh_shade, cull=self.mesh_cull, smooth=self.mesh_smooth,
+            env_reflect=getattr(self, "env_reflect", True))
         if not tris:
             return
         if isinstance(draw, ZBuffer):
