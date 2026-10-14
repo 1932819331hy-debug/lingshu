@@ -16,6 +16,7 @@ world3d · 3D 语义时空图（WORLD3D-REV1）
        └──── 渲染（任意视角透视投影）←──────────┘
 """
 
+import json
 import math
 import time
 from dataclasses import dataclass, field, asdict
@@ -170,6 +171,31 @@ def default_spec(category: str) -> VisualSpec:
 # ---------------------------------------------------------------------------
 
 
+def _meta_number(value, where: str) -> float:
+    """相机元数据字段必须是**有限实数**（否则 `CameraMetaError`）。
+
+    非数 / NaN / ±inf 一律拒：NaN 在比较与三角化里**不抛错**（`min/max` 与线性
+    方程组都吞得下），会静默产出 NaN 世界坐标——比拒绝坏得多。
+    """
+    if isinstance(value, bool) or not isinstance(value, (int, float)):
+        raise CameraMetaError("%s 必须是实数（收到 %r）" % (where, value))
+    v = float(value)
+    if not math.isfinite(v):
+        raise CameraMetaError("%s 必须是有限实数（拒绝 NaN/±inf，收到 %r）"
+                              % (where, value))
+    return v
+
+
+def _meta_positive_int(value, where: str) -> int:
+    """屏幕尺寸类字段必须是正整数（fusion 的焦距按它算，0/负/小数都无意义）。"""
+    if isinstance(value, bool) or not isinstance(value, (int, float)):
+        raise CameraMetaError("%s 必须是正整数（收到 %r）" % (where, value))
+    v = float(value)
+    if not math.isfinite(v) or v != int(v) or int(v) <= 0:
+        raise CameraMetaError("%s 必须是正整数（收到 %r）" % (where, value))
+    return int(v)
+
+
 @dataclass
 class Camera3D:
     """针孔相机：世界坐标 → 屏幕坐标。fov 决定焦距。"""
@@ -273,6 +299,68 @@ class Camera3D:
                center[2] + dist * math.cos(el) * math.cos(az))
         return cls.from_look_at(eye, center, up=(0.0, 1.0, 0.0), fov_deg=fov_deg)
 
+    # ---- 真实相机元数据（F04：观测 ⇄ 记忆的六参数位姿载体）----
+
+    def to_meta(self) -> Dict[str, float]:
+        """相机 → 元数据 dict（**六参数全量**：cx/cy/cz/yaw/pitch/fov_deg）。
+
+        F04：观测落库与读回都走这一个形状。旧的核心门面按
+        `Camera3D(yaw=…, pitch=…, cx=…, cy=…)` 构造入参相机，**静默丢掉 cz 与
+        fov_deg**——三角化按错位姿收敛（实测：真值 (0.6,1.0,6.0) 的两视角重建，
+        丢 cz 偏 0.25 m、丢 fov 偏 0.37 m）。故 meta 形状取「落盘即实际使用」，
+        六个参数一个不少（缺一个就是另一个相机）。
+        """
+        return {"cx": float(self.cx), "cy": float(self.cy), "cz": float(self.cz),
+                "yaw": float(self.yaw), "pitch": float(self.pitch),
+                "fov_deg": float(self.fov_deg)}
+
+    @classmethod
+    def from_meta(cls, meta, strict: bool = True) -> "Camera3D":
+        """元数据 dict → 相机（**保留全部参数**）。
+
+        strict=True：六个位姿参数**缺一即拒**（`CameraMetaError`）——记忆里残缺的
+        位姿不得用默认值补齐后当成真实位姿（F04/#211：不伪造位姿）。
+        strict=False：只采纳调用方显式给出的字段，其余回落 `Camera3D` 默认值
+        （旧 `cp.get("yaw", 0)` 那一套），落盘一律走 `to_meta()`，写出的是
+        **实际使用**的完整位姿。**低层兼容口**：仅留给直调本模块 API 的调用方；
+        `core.world3d("add") / ("add_view")` 这两条**真实摄取**通路已不再用它
+        （R6 返工实测：strict=False 的默认补齐让 `camera={}` 也返回 ok 且
+        `persisted=node_*`，即凭默认值伪造位姿 ⇒ 摄取入口现一律 strict=True）。
+
+        `fov` 是 `fov_deg` 的别名；两个都给且不一致 ⇒ 拒（不猜哪个是真的）。
+        未知键忽略（前向兼容：块里将来多带字段不该炸掉整条重建链）。
+        """
+        if not isinstance(meta, dict):
+            raise CameraMetaError(
+                "相机位姿必须是对象（收到 %s）" % type(meta).__name__)
+        fov = None
+        if "fov_deg" in meta and "fov" in meta:
+            a = _meta_number(meta["fov_deg"], "fov_deg")
+            b = _meta_number(meta["fov"], "fov")
+            if a != b:
+                raise CameraMetaError(
+                    "相机位姿同时给了 fov_deg=%r 与 fov=%r 且不一致——不猜哪个是真的"
+                    % (meta["fov_deg"], meta["fov"]))
+            fov = a
+        elif "fov_deg" in meta:
+            fov = _meta_number(meta["fov_deg"], "fov_deg")
+        elif "fov" in meta:
+            fov = _meta_number(meta["fov"], "fov")
+        if fov is None:
+            if strict:
+                raise CameraMetaError("相机位姿缺字段 'fov_deg'（别名 'fov' 亦可）")
+            fov = float(cls.fov_deg)
+        if not (0.0 < fov < 180.0):
+            raise CameraMetaError("相机 fov_deg 必须落在 (0,180)：%r" % (fov,))
+        vals = {}
+        for key in ("cx", "cy", "cz", "yaw", "pitch"):
+            if key in meta:
+                vals[key] = _meta_number(meta[key], key)
+            elif strict:
+                raise CameraMetaError(
+                    "相机位姿缺字段 %r——残缺位姿不得当作真实位姿" % key)
+        return cls(fov_deg=fov, **vals)
+
     def focal(self, screen_w: int) -> float:
         return (screen_w / 2) / math.tan(math.radians(self.fov_deg) / 2)
 
@@ -349,6 +437,149 @@ class Camera3D:
 
 
 # ---------------------------------------------------------------------------
+# 观测的真实相机元数据块（F04：位姿随观测进记忆、跨引擎读回）
+# ---------------------------------------------------------------------------
+
+#: 观测正文里的相机元数据块标记。形态沿用本仓既有的记忆正文块约定
+#: （lingshu-scene / lingshu-world 两种块：人类可读行在前、fenced JSON 结构化真值在后）。
+CAMERA_BLOCK_TAG = "lingshu-camera"
+#: 块内模式版本：缺失/不认识 ⇒ 拒（不按旧版猜字段语义）。
+CAMERA_META_VERSION = "lingshu.camera.v1"
+
+
+class CameraMetaError(ValueError):
+    """相机元数据**残缺或畸形**（fail-closed）。
+
+    `reason` 是机器可读原因码，由 `core.world3d("build")` 原样透传到返回值。
+    语义边界：**块不存在不是本异常**——那是「这条观测没有位姿」，由调用方按
+    `no_camera_pose` 处理；本异常只覆盖「块在，但读不出来/不完整/不合法」。
+    """
+
+    reason = "bad_camera_pose"
+
+
+def format_camera_observation(category, bbox, camera: "Camera3D",
+                              screen_w, screen_h, eid: str = "",
+                              tick=None, confidence: float = 0.5,
+                              ts=None, source: str = "world3d") -> Dict:
+    """一条带**真实相机位姿**的观测 → 可持久化的记忆记录（正文 + 结构化元数据）。
+
+    正文 = 锚点行（`VPrim.describe()` 的既有文本约定，单一真源，不另造格式）
+    + ```lingshu-camera``` 块。锚点行沿用 `VPrim` 的**整数像素文本**约定（单视角
+    `build` 仍按同一行读旧观测）；块内是**未截断**的结构化真值（bbox 保浮点），
+    多视角重建只认块。
+
+    返回 `{"content": <正文>, "meta": <落进块里的 dict>}`。入参不合法（bbox 非四个
+    有限数、屏幕尺寸非正整数、tick 非有限数、camera 不是 `Camera3D`）⇒
+    `CameraMetaError`：宁可不落库，也不写一条重建不出来的观测。
+    """
+    if not isinstance(camera, Camera3D):
+        raise CameraMetaError("camera 必须是 Camera3D（收到 %s）"
+                              % type(camera).__name__)
+    cat = str(category)
+    if not cat:
+        raise CameraMetaError("category 必填（没有类别的观测没有语义锚点）")
+    if not isinstance(bbox, (list, tuple)) or len(bbox) != 4:
+        raise CameraMetaError("bbox 必须是四个有限数 [x1,y1,x2,y2]（收到 %r）" % (bbox,))
+    box = [_meta_number(v, "bbox[%d]" % i) for i, v in enumerate(bbox)]
+    sw = _meta_positive_int(screen_w, "screen_w")
+    sh = _meta_positive_int(screen_h, "screen_h")
+    if tick is not None:
+        tick = _meta_number(tick, "tick")
+        if tick == int(tick):
+            tick = int(tick)
+    if not isinstance(eid, str):
+        raise CameraMetaError("eid 必须是字符串（收到 %s）" % type(eid).__name__)
+    meta = {"v": CAMERA_META_VERSION, "category": cat, "bbox": box, "eid": eid,
+            "tick": tick, "screen_w": sw, "screen_h": sh,
+            "confidence": _meta_number(confidence, "confidence"),
+            "ts": _meta_number(ts if ts is not None else time.time(), "ts"),
+            "source": str(source), "camera": camera.to_meta()}
+    try:
+        from .vprim import VPrim          # 惰性：world3d↔vprim 不做模块级循环
+    except ImportError:
+        from .vprim import VPrim
+    vp = VPrim(category=cat, bbox=tuple(box), confidence=float(meta["confidence"]),
+               ts=float(meta["ts"]), source=str(source), eid=eid)
+    content = (vp.describe() + "\n" + "```" + CAMERA_BLOCK_TAG + "\n"
+               + json.dumps(meta, ensure_ascii=False) + "\n```")
+    return {"content": content, "meta": meta}
+
+
+def parse_camera_observation(content) -> Optional[Dict]:
+    """观测正文 → 真实相机元数据（无块 ⇒ `None`；有块但残缺/畸形 ⇒ `CameraMetaError`）。
+
+    校验全部 fail-closed 并给出人可读原因：① 块是已闭合的 fenced JSON 对象；
+    ② `v` 恰为本模块认识的版本；③ category 非空串；④ bbox 四个有限数；
+    ⑤ screen_w/h 正整数；⑥ eid 字符串、tick 为 null 或有限数；
+    ⑦ `camera` 六参数齐备且有限（`Camera3D.from_meta(strict=True)`）。
+    另拒「同一节点挂 ≥2 条锚点却只带一个位姿块」——一块只绑定一条观测，不猜归属。
+    """
+    text = content or ""
+    marker = "```" + CAMERA_BLOCK_TAG
+    i = text.find(marker)
+    if i < 0:
+        return None
+    head = text[:i]
+    body = text[i + len(marker):]
+    if body.startswith("\n"):
+        body = body[1:]
+    end = body.find("```")
+    if end < 0:
+        raise CameraMetaError("```%s 块未闭合（缺收尾）" % CAMERA_BLOCK_TAG)
+    raw = body[:end].strip()
+    if not raw:
+        raise CameraMetaError("```%s 块是空的" % CAMERA_BLOCK_TAG)
+    try:
+        meta = json.loads(raw)
+    except ValueError as exc:
+        raise CameraMetaError("```%s 块不是合法 JSON（%s: %s）"
+                              % (CAMERA_BLOCK_TAG, type(exc).__name__, exc))
+    if not isinstance(meta, dict):
+        raise CameraMetaError("```%s 块必须是 JSON 对象（收到 %s）"
+                              % (CAMERA_BLOCK_TAG, type(meta).__name__))
+    if meta.get("v") != CAMERA_META_VERSION:
+        raise CameraMetaError("相机元数据版本不认识/缺失：v=%r（本模块认识 %r）"
+                              % (meta.get("v"), CAMERA_META_VERSION))
+    try:
+        from .vprim import parse_anchor
+    except ImportError:
+        from .vprim import parse_anchor
+    anchors = sum(1 for tok in head.split("；") if parse_anchor(tok) is not None)
+    if anchors > 1:
+        raise CameraMetaError(
+            "该节点有 %d 条视觉锚点却只带一个位姿块——一个块只绑定一条观测，"
+            "不猜它属于哪条" % anchors)
+    for key in ("category", "bbox", "eid", "tick", "screen_w", "screen_h", "camera"):
+        if key not in meta:
+            raise CameraMetaError("相机元数据缺字段 %r" % (key,))
+    category = meta["category"]
+    if not isinstance(category, str) or not category:
+        raise CameraMetaError("category 必须是非空字符串（收到 %r）" % (category,))
+    bbox = meta["bbox"]
+    if not isinstance(bbox, (list, tuple)) or len(bbox) != 4:
+        raise CameraMetaError("bbox 必须是四个有限数（收到 %r）" % (bbox,))
+    box = [_meta_number(v, "bbox[%d]" % i) for i, v in enumerate(bbox)]
+    sw = _meta_positive_int(meta["screen_w"], "screen_w")
+    sh = _meta_positive_int(meta["screen_h"], "screen_h")
+    eid = meta["eid"]
+    if not isinstance(eid, str):
+        raise CameraMetaError("eid 必须是字符串（收到 %r）" % (eid,))
+    tick = meta["tick"]
+    if tick is not None:
+        tick = _meta_number(tick, "tick")
+        if tick == int(tick):
+            tick = int(tick)
+    conf = _meta_number(meta.get("confidence", 0.5), "confidence")
+    ts = meta.get("ts")
+    ts = _meta_number(ts, "ts") if ts is not None else None
+    cam = Camera3D.from_meta(meta["camera"], strict=True)
+    return {"v": CAMERA_META_VERSION, "category": category, "bbox": box, "eid": eid,
+            "tick": tick, "screen_w": sw, "screen_h": sh, "confidence": conf,
+            "ts": ts, "source": str(meta.get("source", "")), "camera": cam.to_meta()}
+
+
+# ---------------------------------------------------------------------------
 # 3D 物体与世界
 # ---------------------------------------------------------------------------
 
@@ -368,6 +599,8 @@ class Object3D:
     #   缺此字段时斜置连杆（如六足机大腿 35°、小腿 -73°）只能画成水平盒，
     #   「同一件东西」在两侧就对不上——这是本次重构的核心缺口。
     rot: Tuple[float, float, float] = (0.0, 0.0, 0.0)
+    eid: str = ""
+    observed_tick: Optional[int] = None
 
     def to_dict(self) -> Dict:
         return asdict(self)
@@ -442,7 +675,8 @@ class World3D:
     # ---- 2D → 3D 反投影（时空重建的感知侧） ----
 
     def add_vprim(self, vprim, screen_w: int, screen_h: int,
-                  horizon_ratio: float = 0.45) -> Optional[Object3D]:
+                  horizon_ratio: float = 0.45,
+                  tick: Optional[int] = None) -> Optional[Object3D]:
         """VPrim(2D bbox) → 3D 物体。
 
         反投影：Z = f * 真实宽 / 像素宽；X/Y/Z 由相机位姿反投影（project 的逆）。
@@ -480,15 +714,23 @@ class World3D:
             category=vprim.category,
             center=(round(X, 2), round(Y, 2), round(Zw, 2)),
             size=spec.size, color=spec.color, shape=spec.shape,
-            confidence=vprim.confidence, source=vprim.source)
+            confidence=vprim.confidence, source=vprim.source,
+            eid=vprim.eid, observed_tick=tick, ts=vprim.ts)
         # 时间序列收敛：同类 + 距离近 → 更新位置
         merged = False
         for i, old in enumerate(self.objects):
+            if obj.eid:
+                if old.eid == obj.eid:
+                    self.objects[i] = obj
+                    merged = True
+                    break
+                continue
             if old.category != obj.category:
                 continue
             dx = old.center[0] - obj.center[0]
             dz = old.center[2] - obj.center[2]
             if math.hypot(dx, dz) < max(old.size[0], old.size[2]):
+                obj.eid = old.eid
                 self.objects[i] = obj
                 merged = True
                 break
@@ -1124,7 +1366,8 @@ class World3D:
     # ---- 多视角融合（阶段1 · 里程碑1.1 · 借鉴 DUSt3R 多视图对齐） ----
 
     def add_view(self, category: str, bbox2d, screen_w: int, screen_h: int,
-                 camera: "Camera3D" = None, confidence: float = 0.5) -> Dict:
+                 camera: "Camera3D" = None, confidence: float = 0.5,
+                 eid: str = "", tick: Optional[int] = None) -> Dict:
         """多视角观测 → 三角化融合（同一物体从多个视角观测 → 3D 位置收敛）。
 
         bbox2d: (x1, y1, x2, y2) 屏幕 2D 框；camera: 该视角相机（缺省当前相机）。
@@ -1145,7 +1388,7 @@ class World3D:
         spec = self.visual.get(category, default_spec(category))
         result = self._mv.add_observation(
             category, obs, size=spec.size, color=spec.color,
-            shape=spec.shape, confidence=confidence)
+            shape=spec.shape, confidence=confidence, eid=eid, tick=tick)
         # 融合成功 → 更新世界物体
         # #136：多视角融合的**同一个物体桶**只对应 objects 里的一个世界物体。
         # 旧实现每个视角三角化成功即 append——同一把椅子看 N 次得到 N-1 个重复
@@ -1159,7 +1402,8 @@ class World3D:
                 obj = Object3D(
                     category=category, center=tuple(result["center_3d"]),
                     size=spec.size, color=spec.color, shape=spec.shape,
-                    confidence=confidence, source="multiview")
+                    confidence=confidence, source="multiview", eid=result["eid"],
+                    observed_tick=tick)
                 self.objects.append(obj)
                 if key is not None:
                     self._mv_objects[key] = obj
@@ -1169,12 +1413,21 @@ class World3D:
                 obj.center = tuple(result["center_3d"])
                 obj.confidence = confidence
                 obj.ts = time.time()
+                obj.observed_tick = tick
                 result["object_added"] = False
                 result["object_updated"] = True
         else:
             result["object_added"] = False
             result["object_updated"] = False
         return result
+
+    def observations(self, tick: Optional[int] = None) -> List[Dict]:
+        """视觉重建 → 动态模型观测；指定 tick 时只交付该帧实测对象。"""
+        return [{"eid": obj.eid, "category": obj.category, "pos": obj.center,
+                 "conditions": {"source": obj.source, "timestamp": obj.ts,
+                                "frame_tick": obj.observed_tick}}
+                for obj in self.objects
+                if tick is None or obj.observed_tick == tick]
 
     def _mv_track_of(self, category: str, obs) -> Optional[Dict]:
         """本次观测落入的 MultiViewFusion 物体桶（#136 的「物体身份」）。

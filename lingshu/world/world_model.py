@@ -28,6 +28,7 @@ UnifiedWorldModel = 世界图（统一骨干）+ 三端口：
 """
 from __future__ import annotations
 
+import inspect
 import math
 import random
 from dataclasses import dataclass, field, asdict
@@ -166,7 +167,8 @@ class UnifiedWorldModel:
         return n is not None and bool(n.attrs.get("hypothesis"))
 
     def perceive(self, observations: Optional[List[Dict]] = None,
-                 tool: str = "observer") -> Dict:
+                 tool: str = "observer", tick: Optional[int] = None,
+                 timestamp: Optional[float] = None) -> Dict:
         """观测 → 更新世界图（理解端口）。
 
         生成先验注入理解：对每个观测实体，若上一 tick 有预测，对比预期位置：
@@ -174,21 +176,26 @@ class UnifiedWorldModel:
           - 异常（距离 ≥ bound）→ 置信 -0.1，记录 anomaly（模型缺口/外部事件）
         """
         obs = observations if observations is not None else self._observe_world()
-        self.tick += 1
+        if tick is not None and self.history and tick <= self.tick:
+            raise ValueError("观测 tick 必须晚于当前世界图时刻")
+        self.tick = self.tick + 1 if tick is None else tick
         stats = {"observed": 0, "matched": 0, "new": 0, "consistent": 0, "anomalies": 0}
         snap: Dict[str, List[float]] = {}      # 本轮真实观测快照（verify 的 actual 来源）
         # 身份关联的一一匹配上下文（issue #226）：
         #   frame_pos = 帧起点节点位置（匹配不受本帧就地改写影响）
         #   taken     = 本帧已被占用的 eid（显式 eid 优先占用；匿名观测匹配后亦占用）
-        frame_pos = {eid: tuple(n.pos) for eid, n in self.nodes.items()}
-        taken = {str(o.get("eid", "")) for o in obs if str(o.get("eid", ""))}
+        frame_pos = {eid: tuple(expected["predicted"]) if (expected := self._expected(eid))
+                     is not None else tuple(n.pos) for eid, n in self.nodes.items()}
+        taken = {str(o["eid"]) for o in obs if o.get("eid") is not None and str(o["eid"])}
+        resolved = []
         for o in obs:
-            eid = str(o.get("eid", ""))
+            eid = str(o["eid"]) if o.get("eid") is not None else ""
             if not eid:
                 eid = self._track_identity(o, taken=taken, positions=frame_pos)
                 taken.add(eid)                 # 一个节点本帧至多被一个观测占用
             pos = tuple(float(v) for v in o["pos"])
             snap[eid] = list(pos)
+            resolved.append({**o, "eid": eid, "pos": list(pos)})
             stats["observed"] += 1
             if eid in self.nodes:
                 stats["matched"] += 1
@@ -217,12 +224,15 @@ class UnifiedWorldModel:
                                          pos=pos, first_seen=self.tick,
                                          last_seen=self.tick)
             self._conditions[eid] = {
+                **o.get("conditions", {}),
                 "first_seen": self.nodes[eid].first_seen,
                 "last_seen": self.tick,
                 "observation_tool": tool,
                 "time_window": [self.tick - 5, self.tick],
                 "existence_constraint": "观测存在中",
             }
+            if timestamp is not None:
+                self._conditions[eid]["timestamp"] = timestamp
         # 留存本轮真实观测快照与时刻（verify 只以它为 actual 来源）
         self._obs_snapshot = snap
         self._obs_tick = self.tick
@@ -233,9 +243,11 @@ class UnifiedWorldModel:
         # 「静止未动」的假轨迹。
         self.history.append({"tick": self.tick,
                              "entities": {eid: list(p) for eid, p in snap.items()}})
+        if timestamp is not None:
+            self.history[-1]["timestamp"] = timestamp
         self._patterns = {}   # 模式缓存失效（新观测后重新推断）
         return {"status": "ok", "tick": self.tick, **stats,
-                "anomaly_events": stats["anomalies"]}
+                "anomaly_events": stats["anomalies"], "observations": resolved}
 
     # ================= 模式推断（观测-only 启发式） =================
 
@@ -688,7 +700,7 @@ def _wm_win(self, eid):
     仍读旧的 96 切片 ⇒ `len(seq) < P+1` ⇒ 返回 None ⇒ 实体退回 `smooth`，
     表观上变成"自适应没用"。默认口径下本函数与 `_wm_traj` 等价（逐位不变）。
     """
-    raw = [p for _t, p in getattr(self, "_traj_buf", {}).get(eid, [])]
+    raw = [p for _t, p in _wm_traj_buf(self).get(eid, [])]
     # ★ 只有"上一次检测**升级过**"的实体才用长窗 —— 否则一律旧窗（逐位兼容）。
     if _PRD["adaptive_window"] and (getattr(self, "_prd_esc", None) or {}).get(eid):
         return raw[-max(_PC["window"], min(_PRD["max_window"], len(raw))):]
@@ -799,8 +811,8 @@ except Exception as _exc:                                          # noqa: BLE00
 
 
 def _wm_traj(self, eid, n=None):
-    buf = getattr(self, "_traj_buf", {}).get(eid, [])
-    return buf[-(n or _PC["window"]):]
+    seq = _wm_traj_buf(self).get(eid, [])
+    return seq[-(n or _PC["window"]):]
 
 
 def _wm_amp(seq):
@@ -835,7 +847,7 @@ def _wm_detect_period(self, eid, seq=None):
             _esc = self._prd_esc = {}
         _esc[eid] = False
         return P, d
-    raw = [q for _t, q in getattr(self, "_traj_buf", {}).get(eid, [])]
+    raw = [q for _t, q in _wm_traj_buf(self).get(eid, [])]
     long_w = max(_PC["window"], min(_PRD["max_window"], len(raw)))
     if long_w <= _PC["window"]:
         return P, d                      # 缓冲不够长，升级无意义
@@ -861,7 +873,7 @@ def _wm_detect_period_once(self, eid, seq=None, win=None, maxp_cap=None,
     from_buffer = seq is None
     if from_buffer:
         w = _PC["window"] if win is None else int(win)
-        seq = [q for _t, q in getattr(self, "_traj_buf", {}).get(eid, [])][-w:]
+        seq = [q for _t, q in _wm_traj_buf(self).get(eid, [])][-w:]
     else:
         seq = list(seq)
     n = len(seq)
@@ -1001,16 +1013,40 @@ _ORIG_WM_PERCEIVE = UnifiedWorldModel.perceive
 _ORIG_WM_GENERATE = UnifiedWorldModel.generate
 
 
-def _perceive_with_traj(self, observations=None, tool="observer"):
-    """包装：① 记轨迹缓冲（供周期检测）② 用上一轮预测对账，滚动记两种误差。"""
-    prev_pos = {e: (getattr(self, "_traj_buf", {}).get(e) or [(0, None)])[-1][1]
-                for e in (str(o.get("eid", "")) for o in (observations or []))}
-    out = _ORIG_WM_PERCEIVE(self, observations, tool)
+def _wm_traj_buf(self):
+    """轨迹缓冲（本层的**运行期派生视图**）；缺失时按观测历史 `self.history` 回填。
+
+    为什么回填：缓冲只是 `history` 的派生视图，`history` 才是真源。模型从脑侧恢复时
+    只带回 `history`、不带本缓冲 ⇒ 不回填则恢复后的 `generate()` 落到
+    `smooth_blocked.not_enough_samples`，与恢复前不等（PR #516 的「重启后行为一致」
+    用例即挡在此处）。回填只发生在缓冲**首次**被访问时；全新模型此刻 `history` 为空
+    ⇒ 行为逐位不变（既有标定读数不受影响）。
+    """
     buf = getattr(self, "_traj_buf", None)
     if buf is None:
         buf = self._traj_buf = {}
+        for entry in (getattr(self, "history", None) or []):
+            for eid, pos in (entry.get("entities") or {}).items():
+                buf.setdefault(eid, []).append((entry["tick"], tuple(pos)))
+        for eid, seq in buf.items():
+            buf[eid] = seq[-256:]
         self._err_model = {}
         self._err_persist = {}
+    return buf
+
+
+def _perceive_with_traj(self, observations=None, tool="observer",
+                        tick=None, timestamp=None):
+    """包装：① 记轨迹缓冲（供周期检测）② 用上一轮预测对账，滚动记两种误差。
+
+    ⚠ **转发纪律**：本层必须把入参**逐位**转给内层（含 `tick` / `timestamp`）。
+    见文件尾「包装链签名契约 `wm.perceive-signature/1`」：任一层漏转，等于把
+    下层的关键字参数吃掉——调用方不报错，但 `tick` 静默失效。
+    """
+    buf = _wm_traj_buf(self)
+    prev_pos = {e: (buf.get(e) or [(0, None)])[-1][1]
+                for e in (str(o.get("eid", "")) for o in (observations or []))}
+    out = _ORIG_WM_PERCEIVE(self, observations, tool, tick, timestamp)
     last = getattr(self, "_last_prediction", None) or {}
     for o in (observations or []):
         eid = str(o.get("eid", ""))
@@ -1376,7 +1412,8 @@ _OVERRIDE_MODES = ("periodic", "static", "smooth")
 _ORIG3_WM_PERCEIVE = _perceive_with_traj   # gen1 的 perceive（组合顺序 orig → gen1 → gen2）
 
 
-def _perceive_with_guard_pairs(self, observations=None, tool="observer"):
+def _perceive_with_guard_pairs(self, observations=None, tool="observer",
+                              tick=None, timestamp=None):
     """包装：为**配对口径**采集 (覆写误差, 同 tick 持续误差) 对。
 
     跑在上一轮 perceive 之后（故轨迹缓冲已含本帧新观测）：
@@ -1387,7 +1424,7 @@ def _perceive_with_guard_pairs(self, observations=None, tool="observer"):
       · 只有 `mode ∈ _OVERRIDE_MODES` 才配对（static 的预测恒等于持续预测，比值 1.0，无害）。
     纯追加、零副作用（只写 `_err_ovr`），未观测到的实体不产生样本。
     """
-    out = _ORIG3_WM_PERCEIVE(self, observations, tool)
+    out = _ORIG3_WM_PERCEIVE(self, observations, tool, tick, timestamp)
     buf = getattr(self, "_traj_buf", None)
     last = getattr(self, "_last_prediction", None) or {}
     for o in (observations or []):
@@ -1829,12 +1866,14 @@ _ORIG4_WM_PERCEIVE = _perceive_with_guard_pairs
 _ORIG5_WM_GENERATE = _generate_with_modes
 
 
-def _perceive_with_rot(self, observations=None, tool="observer"):
+def _perceive_with_rot(self, observations=None, tool="observer",
+                      tick=None, timestamp=None):
     """包装（gen3 perceive）：把观测里的 `rot_quat` 记进旋转缓冲。
 
     **纯追加**：没有 `rot_quat` 时 `_rot_buf` 保持空 ⇒ 整层零足迹（见本段铁律）。
+    签名与转发同内层（见 `wm.perceive-signature/1`）。
     """
-    out = _ORIG4_WM_PERCEIVE(self, observations, tool)
+    out = _ORIG4_WM_PERCEIVE(self, observations, tool, tick, timestamp)
     if not _ROT["enabled"] or not observations:
         return out
     buf = getattr(self, "_rot_buf", None)
@@ -1959,6 +1998,55 @@ _WM_FACTORY = {
 }
 
 
+#: 包装链**签名契约**：生效的 `perceive` 必须接受基类 `perceive` 的全部参数。
+#: 为什么与「哪一对生效」并列守卫：**包装链是隐形调用方**——它把类方法本体换掉了，
+#: 调用方（`core.py` 的 `world_model(action="perceive")` / `perceive_visual`）按关键字
+#: 传 `tick=` / `timestamp=`。任一层漏掉一个参数，调用方在签名处不报错，却在这一层
+#: 抛 `TypeError`；若某层改成 `**kwargs` 更宽的形状，则**静默丢参**（更坏）。
+#: 2026-10-13 PR #516 的语义冲突正是这一类：基类扩到 4 参，三层包装仍是 2 参。
+PERCEIVE_SIGNATURE_CALIBER = "wm.perceive-signature/1"
+
+
+#: 链上各层：包装 perceive 的函数名（基类本体不列，它就是基准）。
+_PERCEIVE_LAYERS = ("_perceive_with_traj", "_perceive_with_guard_pairs",
+                    "_perceive_with_rot")
+
+
+def _missing_params(fn, base):
+    """`fn` 相对 `base` 缺哪些参数；不可内省时返回全部（fail-closed）。"""
+    try:
+        params = inspect.signature(fn).parameters
+    except (TypeError, ValueError):
+        return list(base)
+    if any(p.kind is inspect.Parameter.VAR_KEYWORD for p in params.values()):
+        return []                                    # `**kwargs` ⇒ 关键字全部可收
+    return [n for n in base if n not in params]
+
+
+def perceive_signature_status():
+    """包装链签名契约：链上**每一层**都必须接受基类 `perceive` 的全部参数。
+
+    **不抛异常**，只回报读数。查每一层而不只查生效层：外层签名正确、内层漏参时，
+    `TypeError` 仍会在内层抛出（本 PR 的缺陷正是内层 `_perceive_with_rot` 少了 2 个参数）。
+    """
+    base = [n for n in inspect.signature(_ORIG_WM_PERCEIVE).parameters if n != "self"]
+    layers = {}
+    for name in _PERCEIVE_LAYERS:
+        fn = globals().get(name)
+        if fn is not None:
+            layers[name] = _missing_params(fn, base)
+    eff = UnifiedWorldModel.perceive
+    # 生效层单独占一个键：它与链上某层常常是同一个函数，用同一键会互相覆盖。
+    layers["生效层:" + getattr(eff, "__name__", "?")] = _missing_params(eff, base)
+    bad = {name: miss for name, miss in layers.items() if miss}
+    return {"caliber": PERCEIVE_SIGNATURE_CALIBER,
+            "effective": getattr(eff, "__name__", "?"),
+            "base_params": base,
+            "layers_missing": layers,
+            "missing_layers": sorted(bad),
+            "ok": not bad}
+
+
 def active_wrapper_pair():
     """现在生效的 perceive/generate（名字 + 是否就是出厂对象）。**不抛异常**。"""
     p = UnifiedWorldModel.perceive
@@ -1970,6 +2058,7 @@ def active_wrapper_pair():
             "generate_is_factory": g is _WM_FACTORY["generate"],
             "guard_trip_is_factory":
                 globals().get("_wm_guard_trip") is _WM_FACTORY["guard_trip"],
+            "perceive_signature": perceive_signature_status(),
             "expected": {"perceive": _WM_FACTORY["perceive"].__name__,
                          "generate": _WM_FACTORY["generate"].__name__,
                          "guard_trip": _WM_FACTORY["guard_trip"].__name__,
@@ -1981,8 +2070,16 @@ def prediction_wrapper_status():
     """状态回执（**不抛异常**）：出厂绑定是否仍然生效。守卫与评测框架都用它。"""
     a = active_wrapper_pair()
     a["ok"] = bool(a["perceive_is_factory"] and a["generate_is_factory"]
-                   and a["guard_trip_is_factory"])
-    if not a["ok"]:
+                   and a["guard_trip_is_factory"]
+                   and a["perceive_signature"]["ok"])
+    if not a["perceive_signature"]["ok"]:
+        a["reason"] = ("包装链有层不接受基类参数：%s —— 漏转的关键字参数（签名契约 %s）"
+                       "会在该层 TypeError，或静默丢参；调用方（core.py 的 "
+                       "world_model(action=\"perceive\") / perceive_visual）正是按 "
+                       "tick=/timestamp= 调用。"
+                       % ({k: v for k, v in a["perceive_signature"]["layers_missing"].items()
+                           if v}, PERCEIVE_SIGNATURE_CALIBER))
+    elif not a["ok"]:
         a["reason"] = ("当前生效的对 (%s / %s) 不是出厂绑定 (%s / %s)%s —— 多半是被按"
                        "**函数名**回装了被取代的旧包装；请改调 "
                        "`install_prediction_wrappers()`。"

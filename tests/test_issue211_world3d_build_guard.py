@@ -1,7 +1,8 @@
 # -*- coding: utf-8 -*-
 """#211 `world3d("build", multiview=True)` 编造相机位姿 + `objects` 计数口径 —— 守卫
 
-缺陷（分诊表 `triage_lingshu_ALL.md` 行 211 判定「成立」；issue 原文 `.tmp/issues_p3.json` #211）：
+缺陷（分诊表 `triage_lingshu_ALL.md` 行 211 判定「成立」；issue 原文
+`.tmp/issues_p3.json` #211）：
   ① 记忆里的 vprim 只有 bbox，**没有拍摄时的相机位姿**。旧实现按索引凭空给第 i 帧
      造一台相机（`yaw = i*30°-30°`、`cx = ±1.5`，注释「模拟环绕观测」）再交给
      `add_view` 三角化 ⇒ 得到的 3D 位置与真实世界无关（issue 实测：几乎相同的三个
@@ -9,33 +10,35 @@
   ② 两种模式返回的 `"objects": added` 都是**调用次数 / 三角化成功次数**：单视角下
      3 次同类同位置的 `add_vprim` 被合并成 1 个物体，接口仍报 3。
 
-修法（最小 · 两条）：
-  ① 不再编造视角——vprim 节点未携带位姿 ⇒ 退回单视角，返回
-     `mode="single_view"`、`reason="no_camera_pose"`；带真实位姿的多视角仍可经
-     `world3d("add_view", {"camera": {...}})` 显式驱动（不受本件影响）。
-  ② `objects` 改报**世界中的物体数** `len(world.objects)`；本趟处理的观测数挪到
-     新增字段 `observations`。
+修法沿革（两批）：
+  · 第一批（本文件原有断言面）：不再编造视角——vprim 节点未携带位姿 ⇒ 不做三角化
+    （当时仓内无位姿载体格式，故多视角**恒**退回单视角）；
+    `objects` 改报**世界物体数**，本趟观测数挪到新增字段 `observations`。
+  · 第二批 F04（本文件随之更新——是有意的接口变更，见
+    `docs/second_third_batch_plan.md` F04「缺元数据明确失败，不得自动退回单视角或
+    伪造位姿；显式 multiview=False 兼容旧观测」）：`multiview=True` 而位姿缺失 ⇒
+    **status="error" + reason="no_camera_pose"**（不再报成一次「成功的单视角重建」），
+    失败**不写** `self._world3d`（旧世界不被半成品覆盖）；带真实位姿的落库/读回通路与
+    六参数保真见新增 `tests/test_second_batch_camera.py`（C1~C10）。
+  · R6 返工（A 包第一次返工）：显式 `camera` 的**摄取**入口必须六参数齐备——空/缺项
+    一律 status=error + bad_camera_pose，不落库、不融合、不污染旧世界（旧实现用
+    `Camera3D.from_meta(strict=False)` 补默认值后当真实位姿落库 ⇒ `camera={}` 返回 ok）。
 
-判据来源：issue #211「期望行为：没有真实相机位姿时不做三角化（回退单视角，或明确
-返回 reason="no_camera_pose"），不编造视角。objects 等于世界中的物体数
-len(world.objects)，或拆成 observations / objects 两个字段」＋ 分诊表行 211
-（经验标定）＋ 理论 `docs/theory/世界模型与语义时空图_完整理论整理与实现路线.md`
-§3.2「三视图/双目视差——**已知相机参数**下的映射，非猜测」。
-边界（削掉的判别力，如实标注）：本件**不**新增位姿载体格式（把 yaw/pitch/cx/cy/cz
-塞进 tags / condition_space 属新机制，须先裁定格式）——因此 `multiview=True` 在
-当前仓内**恒**退回单视角；多视角能力仍经显式 `add_view` 保留（Q5 钉住）。
-`objects` 字段语义变更（调用次数 → 世界物体数）是本件要求的破坏性口径修正，
-仓内无其它调用方（全仓 grep：`world3d(` 仅出现在 tests 与本模块）。
-
-断言组（把修复改回缺陷形态 ⇒ Q1/Q2/Q3 红）：
-  Q1 不编造视角：multiview=True 时 mode=single_view、reason=no_camera_pose，
-     且世界物体与单视角 build 的**同一 3D 位置**（旧：造出不同位置的假物体）。
-  Q2 objects = 世界物体数：3 个近似同位置 vprim ⇒ objects=1 且
-     objects == detail["count"]（旧：objects=3）。
-  Q3 observations 承载旧口径：observations == 3（处理的观测数）。
-  Q4 非回归：multiview 与单视角两种入参得到相同的 scene/物体集合。
-  Q5 显式位姿路径仍在：`add_view` 带真实相机两次 ⇒ 第二次 triangulated=True
-     （本件未砍多视角能力）。
+断言组（把修复改回缺陷形态 ⇒ 对应组红）：
+  Q1 不编造视角、不静默回退：multiview=True（无位姿）⇒ status=error、
+     reason=no_camera_pose，且**不**带 mode="single_view"/objects；世界仍为空
+     （旧形态会造出与单视角不同的假位置物体）。
+  Q2 objects = 世界物体数：3 个近似同位置 vprim ⇒ objects=1 且 objects ==
+     detail["count"]（旧：objects=3）。
+  Q3 observations 承载旧口径：observations == 3（本趟处理的观测数）。
+  Q4 显式 multiview=False 兼容旧观测：不给 multiview 与显式 false 得到同一 scene；
+     requested_mode 如实回报；multiview=True 仍如实回报 requested_mode 并失败。
+  Q5 显式位姿路径仍在：`add_view` 给**完整六参数已知相机**（`Camera3D.to_meta()`）两次
+     ⇒ 第二次 triangulated=True 且重建位置贴真值（误差 < 0.05 m，阈值未放宽）；
+     空/缺项 camera（含只给 yaw/pitch/cx/cy 的旧调用形）⇒ status=error +
+     reason=bad_camera_pose，不落库、不进内存世界（R6 返工：不得补默认值当真实位姿）。
+  Q6 位姿不被截断：`add_view` 给**六参数**位姿（含 cz≠0 与离轴 fov=75）⇒ 融合位置
+     贴近真值（旧门面只留 yaw/pitch/cx/cy，实测偏 0.25~0.4 m ⇒ 本组红）。
 
 运行（仓根）：python -X utf8 -m pytest tests/test_issue211_world3d_build_guard.py -q --no-header
 """
@@ -61,21 +64,25 @@ def _engine_with_tree():
     return e
 
 
-def test_q1_no_fabricated_camera_pose():
-    """Q1：无位姿 ⇒ 不三角化、不编造视角（旧：凭空造 yaw/cx 得到假位置）。"""
+def test_q1_no_fabricated_camera_pose_no_silent_fallback():
+    """Q1：无位姿 ⇒ 明确失败（旧形态：凭空造 yaw/cx 得到假位置；第一批形态：静默退回单视角）。"""
     e = _engine_with_tree()
     r = e.world3d("build", {"multiview": True})
-    assert r["mode"] == "single_view", (
-        "#211①：multiview=True 仍走了三角化路径——mode=%r（无位姿时不得编造视角）"
-        % r["mode"])
+    assert r["status"] == "error", (
+        "#211①：multiview=True 无位姿却报成功——mode=%r（不得编造视角，也不得静默回退）"
+        % r.get("mode"))
     assert r["reason"] == "no_camera_pose", (
         "#211①：未如实回报 reason——reason=%r" % r.get("reason"))
+    assert r.get("mode") != "single_view", (
+        "#211①：缺位姿被报成一次成功的单视角重建（不自动退回单视角）：%r" % (r.get("mode"),))
+    assert "objects" not in r and "scene" not in r, (
+        "#211①：失败返回带上了成功字段，调用方会当成重建结果：%r" % (r,))
+    assert e.world3d("status")["objects"] == [], (
+        "#211①：无位姿的多视角 build 造出了物体（编造视角的旧形态）")
+    # 旧观测仍可显式走单视角
     r2 = e.world3d("build", {"multiview": False})
-    centers_mv = sorted(o["center"] for o in r["detail"]["objects"])
-    centers_sv = sorted(o["center"] for o in r2["detail"]["objects"])
-    assert centers_mv == centers_sv, (
-        "#211①：multiview 造出与单视角不同的 3D 位置——%r vs %r"
-        % (centers_mv, centers_sv))
+    assert r2["status"] == "ok" and r2["mode"] == "single_view"
+    assert r2["objects"] == 1
 
 
 def test_q2_objects_is_world_object_count():
@@ -98,19 +105,23 @@ def test_q3_observations_keeps_old_reading():
         "#211②：observations=%r（应为本趟处理的 3 条 vprim 观测）" % r.get("observations"))
 
 
-def test_q4_both_modes_agree_on_scene():
-    """Q4：非回归——两种入参得到相同 scene（多视角不再产出额外假物体）。"""
+def test_q4_explicit_single_view_compatible():
+    """Q4：显式 multiview=False（及默认入参）与旧单视角行为一致；多视角如实回报。"""
     e = _engine_with_tree()
-    r_mv = e.world3d("build", {"multiview": True})
+    r_default = e.world3d("build", {})
     r_sv = e.world3d("build", {"multiview": False})
-    assert r_mv["scene"] == r_sv["scene"], (
-        "#211：multiview 与单视角 scene 不一致——%r vs %r"
-        % (r_mv["scene"], r_sv["scene"]))
-    assert r_mv["requested_mode"] == "multiview" and r_mv["mode"] == "single_view"
+    assert r_default["scene"] == r_sv["scene"], (
+        "#211：默认入参与 multiview=False 的 scene 不一致——%r vs %r"
+        % (r_default["scene"], r_sv["scene"]))
+    assert r_sv["status"] == "ok" and r_sv["mode"] == "single_view"
+    assert r_sv["requested_mode"] == "single_view"
+    r_mv = e.world3d("build", {"multiview": True})
+    assert r_mv["requested_mode"] == "multiview" and r_mv["status"] == "error", r_mv
 
 
 def test_q5_explicit_camera_multiview_still_works():
-    """Q5：本件未砍多视角能力——`add_view` 带真实相机两次 ⇒ 第二次三角化成物。"""
+    """Q5：显式位姿路径仍在——给**完整六参数**已知相机两次 ⇒ 第二次三角化且位置贴真值；
+    空/缺项 camera（旧调用形）在摄取入口即被明确拒绝（R6 返工：不再补默认值当真实位姿）。"""
     e = SpacetimeMemoryEngine(":memory:")
     truth = (0.0, 1.2, 5.0)
     cams = [Camera3D(), Camera3D(cx=3.0, cz=-2.0, yaw=0.5)]
@@ -120,8 +131,53 @@ def test_q5_explicit_camera_multiview_still_works():
         results.append(e.world3d("add_view", {
             "category": "person",
             "bbox": [px - 20, py - 30, px + 20, py + 30],
-            "camera": {"yaw": cam.yaw, "pitch": cam.pitch, "cx": cam.cx, "cy": cam.cy},
+            "camera": cam.to_meta(),          # 六参数全量（R6 返工后的摄取口径）
+            "screen_w": SW, "screen_h": SH, "eid": "person-1", "tick": 1,
         }))
-    assert results[0]["triangulated"] is False, "首帧不应三角化（仅记录）"
-    assert results[1]["triangulated"] is True, (
-        "#211：显式位姿路径被本件误伤——第二视角未三角化：%r" % results[1])
+    assert results[0]["status"] == "ok" and results[0]["triangulated"] is False, \
+        "首帧不应三角化（仅记录）：%r" % (results[0],)
+    assert results[1]["status"] == "ok" and results[1]["triangulated"] is True, (
+        "#211：显式位姿路径被本件误伤——第二视角未三角化：%r" % (results[1],))
+    # 真实误差验证（阈值与 Q6/C2 同口径，未放宽）：两视角重建须贴近已知真值
+    objects = e.world3d("status")["objects"]
+    assert len(objects) == 1, objects
+    err = max(abs(a - b) for a, b in zip(objects[0]["center"], truth))
+    assert err < 0.05, (
+        "#211：完整六参数位姿下的两视角重建偏了 %.4f m（%r vs 真值 %r）"
+        % (err, objects[0]["center"], truth))
+    # 空/缺项 camera（旧调用形）⇒ 明确拒绝，且不动已建好的世界与记忆
+    nodes_before = [n.id for n in e.store.get_nodes_by_tag("vprim")]
+    for bad in ({}, {"yaw": cams[1].yaw, "pitch": cams[1].pitch,
+                 "cx": cams[1].cx, "cy": cams[1].cy}):
+        r_bad = e.world3d("add_view", {
+            "category": "person",
+            "bbox": [300, 250, 340, 310],
+            "camera": bad, "screen_w": SW, "screen_h": SH,
+            "eid": "person-2", "tick": 2})
+        assert r_bad["status"] == "error", (bad, r_bad)
+        assert r_bad["reason"] == "bad_camera_pose", (bad, r_bad)
+        assert not r_bad.get("persisted"), (bad, r_bad)
+    assert [n.id for n in e.store.get_nodes_by_tag("vprim")] == nodes_before, \
+        "#211/F04：缺项 camera 被拒后仍落了库（伪造位姿）"
+    assert len(e.world3d("status")["objects"]) == 1, "被拒的观测进了内存世界"
+
+
+def test_q6_camera_pose_not_truncated_in_fusion():
+    """Q6：六参数位姿（cz≠0、离轴 fov）必须全量进融合——截断即偏（旧门面偏 0.25~0.4 m）。"""
+    e = SpacetimeMemoryEngine(":memory:")
+    truth = (0.6, 1.0, 6.0)
+    cams = [Camera3D.look_at((-2.0, 1.4, -1.0), truth),
+            Camera3D.look_at((2.5, 1.6, 0.5), (1.6, 1.0, 6.0), fov_deg=75.0)]
+    for cam in cams:
+        px, py = cam.project(truth, SW, SH)
+        r = e.world3d("add_view", {
+            "category": "person", "bbox": [px - 20, py - 30, px + 20, py + 30],
+            "camera": cam.to_meta(), "screen_w": SW, "screen_h": SH,
+            "eid": "person-1", "tick": 1})
+        assert r["status"] == "ok", r
+    objects = e.world3d("status")["objects"]
+    assert len(objects) == 1, objects
+    err = max(abs(a - b) for a, b in zip(objects[0]["center"], truth))
+    assert err < 0.05, (
+        "#211/F04：融合位置偏了 %.4f m（%r vs 真值 %r）——相机位姿被截断（旧形态丢 "
+        "cz/fov_deg）" % (err, objects[0]["center"], truth))

@@ -87,8 +87,12 @@ if _fn is not None:
     check('E 三条过滤/解析分支未动（格式解析与 skip_dedup 选择面）',
           'parts = [p.strip() for p in ln.split("|")]' in _src
           and "skip_dedup=True" in _src, '')
-    check('E 函数签名未变（agent, scene_desc, store=None, tag="spatial"）',
-          "def ingest_scene(agent, scene_desc: str, store=None, tag: str = \"spatial\")" in _src, '')
+    # 本件把签名扩为「文本描述 **或** scene_model.WorldModel + 关系表」：
+    # scene_desc 去掉 ': str' 注解（现两种入参都收），末尾追加 relations。
+    # 守卫仍是**逐字钉死整条声明**（不是「含 relations 即可」）——再加/改参数照样判红。
+    check('E 函数签名按本件声明（agent, scene_desc, store=None, tag="spatial", relations=None）',
+          'def ingest_scene(agent, scene_desc, store=None, tag: str = "spatial",' in _src
+          and 'relations: Optional[List[Tuple[str, str, str]]] = None)' in _src, '')
 
 print(f'\n=== ingest_scene 状态批量提交守卫: {pass_n}/{pass_n + fail_n} 通过 ===')
 sys.exit(0 if fail_n == 0 else 1)

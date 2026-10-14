@@ -564,7 +564,8 @@ class SimulationLoop:
         except (IndexError, ValueError):
             return None
 
-    def load_priors(self, mdcg_root: str, limit: int = 20) -> Dict:
+    def load_priors(self, mdcg_root: str = "", limit: int = 20, brain=None,
+                    memory_id: Optional[str] = None) -> Dict:
         """认知图 contextual 层（tags 含 wm_simloop 的节点）→ 世界图实体先验。
 
         诚实边界：v1 只重建位置+类别先验（行为不重建，落 wander 缺省）。
@@ -581,6 +582,56 @@ class SimulationLoop:
         章节；docs/theory/世界模型与语义时空图_完整理论整理与实现路线.md
         未涉及）。削掉的判别力：无（两处均为「参数本应生效而未生效」）。
         """
+        if brain is not None:
+            store = getattr(brain, "store", brain)
+            snapshots = []
+            if memory_id is not None:
+                block = store.read_content(memory_id).partition("\n```lingshu-world\n")[2]
+                snapshots.append((memory_id, json.loads(block.partition("\n```")[0])))
+            else:
+                memories = store.get_nodes_by_tag("wm_simloop", limit=200,
+                                                  seed_query="世界模型推演循环记忆", view="receipt")
+                for memory in memories:
+                    block = memory.content.partition("\n```lingshu-world\n")[2]
+                    if block:
+                        snapshots.append((memory.id, json.loads(block.partition("\n```")[0])))
+            if not snapshots:
+                return {"status": "ok", "seeded": 0, "entities": [], "memory_id": None}
+            memory_id, state = max(snapshots, key=lambda item: item[1]["saved_at"])
+            if state["schema"] != "lingshu.world-prior.v1":
+                raise ValueError("不支持的世界模型经验格式")
+            selected = list(state["nodes"].items())[:max(0, limit)]
+            self.wm.nodes = {eid: WMNode(**{**node, "pos": tuple(node["pos"])})
+                             for eid, node in selected}
+            self.wm.edges = [WMEdge(**edge) for edge in state["edges"]
+                             if edge["source"] in self.wm.nodes and edge["target"] in self.wm.nodes]
+            self.wm._conditions = {eid: state["conditions"][eid] for eid in self.wm.nodes
+                                    if eid in state["conditions"]}
+            self.wm.history = [{**frame, "entities": {eid: pos for eid, pos in frame["entities"].items()
+                                                       if eid in self.wm.nodes}}
+                               for frame in state["history"]]
+            self.wm.tick = state["tick"]
+            self.wm.size = state["size"]
+            self.wm._motion_estimates = {eid: tuple(value) for eid, value in state["motion_estimates"].items()
+                                         if eid in self.wm.nodes}
+            self.wm._motion_directions = {eid: tuple(value) for eid, value in state["motion_directions"].items()
+                                          if eid in self.wm.nodes}
+            self.wm.relation_history = state["relation_history"]
+            self.wm._patterns = {}
+            # 记忆是先验，不是新观测或本轮生成；验证必须等外部下一帧。
+            self.wm._obs_snapshot = self.wm._obs_tick = self.wm._pred_tick = None
+            self.wm._last_prediction = {}
+            self.wm._compare = {}
+            self.wm._anomalies = []
+            self._hypotheses = {eid: h for eid, h in state["hypotheses"].items()
+                                 if eid in self.wm.nodes and h["node"] in self.wm.nodes}
+            self._rolling_rates = state["rolling_rates"]
+            return {"status": "ok", "seeded": len(selected), "memory_id": memory_id,
+                    "truncated": len(selected) < len(state["nodes"]),
+                    "entities": [{"source": memory_id, "eid": eid, "seeded_id": eid,
+                                   "category": node["category"], "pos": node["pos"]}
+                                  for eid, node in selected],
+                    "note": "脑侧经验已恢复为内部先验；等待外部观测验证"}
         root = mdcg_root or os.environ.get("MDCG_ROOT", "")
         seeded = []
         ctx = os.path.join(root, "contextual")
@@ -612,7 +663,7 @@ class SimulationLoop:
 
     # ---------- 回写环（WAL → 认知图 contextual 载荷）----------
 
-    def flush_payloads(self, out_path: Optional[str] = None) -> Dict:
+    def flush_payloads(self, out_path: Optional[str] = None, brain=None) -> Dict:
         """推演结果 → 认知图 contextual 节点载荷（frontmatter + 正文）。
 
         对齐 data/mdcg/contextual/arc_agi_ls20_*.md 先例格式；
@@ -641,7 +692,7 @@ class SimulationLoop:
             "created_at": round(self._clock(), 3),
             "edges": [], "evidence_count": 0, "positive_evidence": 0,
             "negative_evidence": 0, "protected": False,
-            "sensitivity": "internal", "verification_basis": "wal_replay",
+            "sensitivity": "internal", "verification_basis": "wal_replay" if self.wal else "observation_history",
             "non_applicable_conditions": []}
         lines = [f"# 世界模型推演循环记忆 - {wid} (tick {self.wm.tick})", "",
                  f"## 世界快照 (tick={self.wm.tick})"]
@@ -668,6 +719,26 @@ class SimulationLoop:
                 lines.append(f"- {ev['event']}@{ev['tick']}: "
                              f"{ev.get('subject')}→{ev.get('hypothesis')} "
                              f"{ev.get('reason', ev.get('criterion', ''))}")
+        confirmed = {subject: h for subject, h in self._hypotheses.items()
+                     if h["phase"] == "confirmed"}
+        confirmed_ids = {h["node"] for h in confirmed.values()}
+        nodes = {eid: {k: v for k, v in node.items() if k != "conditions"}
+                 for eid, node in g["nodes"].items()
+                 if not node["attrs"].get("hypothesis") or eid in confirmed_ids}
+        for eid in confirmed_ids:
+            nodes[eid]["attrs"]["phase"] = "confirmed"
+        state = {"schema": "lingshu.world-prior.v1", "saved_at": fm["created_at"],
+                 "tick": self.wm.tick, "size": self.wm.size, "nodes": nodes,
+                 "edges": [e for e in g["edges"] if e["source"] in nodes and e["target"] in nodes],
+                 "conditions": {eid: g["nodes"][eid]["conditions"] for eid in nodes},
+                 "history": self.wm.history,
+                 "motion_estimates": self.wm._motion_estimates,
+                 "motion_directions": self.wm._motion_directions,
+                 "relation_history": self.wm.relation_history,
+                 "hypotheses": confirmed, "rolling_rates": self._rolling_rates,
+                 "last_verification": self.wm._compare}
+        lines += ["", "## 可恢复的观测经验（内部先验）", "```lingshu-world",
+                  json.dumps(state, ensure_ascii=False), "```"]
         body = "\n".join(lines)
         md = ("---\n" + "\n".join(
             f"{k}: {json.dumps(v, ensure_ascii=False) if isinstance(v, (list, dict)) else json.dumps(v, ensure_ascii=False)}"
@@ -696,8 +767,15 @@ class SimulationLoop:
                     pass
                 raise
             written = out_path
+        memory_id = None
+        if brain is not None:
+            memory_id = brain.engine.add_perception(
+                md, importance=fm["importance"], tags=fm["tags"],
+                condition_space=json.loads(fm["condition_space"]),
+                role="tool-output", skip_dedup=True).id
         return {"status": "ok", "payload": payload, "written": written,
-                "note": "载荷已生成；真实摄取走 mdcg 正规通道（不旁路写真源）"}
+                "memory_id": memory_id,
+                "note": "经验已经 MCP 摄取" if memory_id else "载荷已生成；可通过 brain 参数经 MCP 摄取"}
 
     # ---------- 报告 ----------
 
