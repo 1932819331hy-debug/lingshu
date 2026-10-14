@@ -2062,9 +2062,13 @@ class LayeredStore:
 
     # ---------- 因果推理 ----------
 
-    def infer_causal_paths(self, start_id: str, end_id: str, max_depth: int = 5,
+    TRUNCATED_EVIDENCE_CAP = 8  # 截断证据条数上界；超出即计数外传，不静默
+
+    def infer_causal_paths(self, start_id: str, end_id: str,
+                           max_depth: Optional[int] = 5,
                            relation_types: List[str] = None,
-                           max_paths: int = _CAUSAL_MAX_PATHS) -> List[List[STEdge]]:
+                           max_paths: int = _CAUSAL_MAX_PATHS,
+                           causal_stats: Dict = None) -> List[List[STEdge]]:
         """
         传递闭包因果推理：找出从 start 到 end 的所有路径。
         v1.16 图架构增强：relation_types 可多类型（默认 causal；
@@ -2074,32 +2078,32 @@ class LayeredStore:
         同一条因果事实被记录 k 次（`add_edge` 不合并平行边）时路径数是 k⁵——6 节点
         无环链 k=12 即 248832 条 / 3.5s / 669MB，k=24 约 800 万条使长驻进程 OOM
         （issue 实测）。达到上限即停止枚举（结果被截断）。
-        判据来源：公开 issue #327「修复建议 2」（「`reason_causal` / `infer_causal_paths`
-        ……加 `max_paths`（如 1000）与时间预算，超限返回 `truncated=True`」）＋ 其
-        实测读数（k=8/12/16 的路径数、耗时、RSS）＋ 分诊表 `triage_lingshu_ALL.md`
-        行 327。仓内无规定该预算的理论章节，属经验标定（本件 #327）。
         边界（削掉的判别力，如实标注）：① 达到上限时返回的是**前 max_paths 条**
-        （非全量），调用方无法从返回类型区分「就这么多」与「被截断」——issue 建议的
-        `truncated=True` 标记未加（会改返回类型，波及既有调用）；② issue 建议 1
-        （`add_edge` 合并平行边 + 存量库迁移）**不在本件**：那会改写入语义与既有边
-        id，波及衰减/验证/同步路径，属独立面；本件只收「枚举无上限」这一半。
+        （非全量），调用方无法从返回类型区分「就这么多」与「被截断」；② issue
+        建议 1（`add_edge` 合并平行边 + 存量库迁移）**不在本件**（会改写入语义）。
 
         #385：内部 DFS 由**递归**改**显式栈**（同文件 `has_causal_cycle`/Tarjan/
-        `traverse` 已是迭代实现）。旧实现递归深度 = 路径长度 = `max_depth`，
-        `max_depth` 未与 `sys.getrecursionlimit()` 挂钩 ⇒ 1500 节点线性链上
-        `reason_causal(n0, end_id, max_depth=2000)` 抛 `RecursionError`
-        （issue 实测；同一张图上迭代实现的 `timeline` 照常返回 1500 个节点）。
-        判据来源：公开 issue #385（「把三个 DFS 改成显式栈（与同文件的
-        has_causal_cycle / Tarjan 迭代写法一致）」）＋ 其复现实读 ＋ 分诊表
-        `triage_lingshu_ALL.md` 行 385。仓内无规定该实现口径的理论章节，属经验
-        标定（本件 #385）。
-        边界（削掉的判别力，如实标注）：改栈**不**放宽 `max_depth` 语义（仍是
-        搜索深度上限，超出即不返回该路径）；栈帧携带路径副本，单帧内存与路径长度
-        同阶（与递归版的栈帧同阶）。
+        `traverse` 已是迭代实现）。旧实现递归深度 = 路径长度 = `max_depth`，1500
+        节点线性链上 `reason_causal(n0, end_id, max_depth=2000)` 抛 `RecursionError`。
+        栈帧携带路径副本，单帧内存与路径长度同阶（与递归版栈帧同阶）。
+
+        #328（issue #145 同族补修 · **传 end_id 的这一半**）——到 max_depth 且**该
+        节点仍有出边**时，不再直接丢弃该分支：保留路径并标
+        `CausalChain(truncated=True)`，与「确无因果路径」可区分（空列表＝确无因果）。
+        语义变化（相对旧实现，如实声明）：
+        - 预算内可达 end 的完整路径依旧返回，且仍是列表**前缀**；仅当无完整路径时
+          才会返回截断证据；返回列表末项可能不以 end_id 结尾。
+        - `max_depth=0` 现返回 1 条截断证据（若 start 有出边）；`max_depth<0` 同 0。
+          `max_depth=None` 为**不限深度**。
+        - 截断证据条数受 `TRUNCATED_EVIDENCE_CAP` 约束，超出即计数外传（不静默）。
+        - `causal_stats`：可选出参，传入 dict 即被填充
+          `{max_depth, complete, truncated, truncated_dropped}`。
         """
         types = relation_types or ["causal"]
         type_set = {t.lower() for t in types}
-        all_paths = []
+        all_paths: List[CausalChain] = []
+        truncated_all: List[CausalChain] = []
+        truncated_dropped = 0
 
         # 显式栈：#385——帧=(当前节点, 到达路径, 到达前的路径节点集, 深度)。
         # `on_path` 等价递归版的 `visited`（沿当前路径的节点集合，回溯时消失）。
@@ -2107,12 +2111,22 @@ class LayeredStore:
         stack = [(start_id, [], frozenset(), 0)]
         while stack:
             current_id, path, on_path, depth = stack.pop()
-            if depth > max_depth or len(all_paths) >= max_paths:
+            if len(all_paths) >= max_paths:
                 continue
             if current_id == end_id and path:
-                all_paths.append(list(path))
+                all_paths.append(CausalChain(path))
                 continue
             if current_id in on_path:
+                continue
+            if max_depth is not None and depth > max_depth:
+                # #328 预算耗尽。**必须先确认本节点仍有出边**（与不传 end_id 分支的
+                # 天然终点判定同口径）：无出边者是**天然终点**（死胡同），到 end 确
+                # 无路径 ⇒ 不记截断，否则会把「确无因果」误报成「链太长」（假阳性）。
+                if path and self.get_outgoing_edges(current_id):
+                    if len(truncated_all) < self.TRUNCATED_EVIDENCE_CAP:
+                        truncated_all.append(CausalChain(path, truncated=True))
+                    else:
+                        truncated_dropped += 1
                 continue
             next_on = on_path | {current_id}
             edges = self.get_outgoing_edges(current_id)
@@ -2121,9 +2135,19 @@ class LayeredStore:
                     break
                 if edge.relation_type.value in type_set:
                     stack.append((edge.target_id, path + [edge], next_on, depth + 1))
-        # 按路径长度和平均置信度排序
+        # 完整路径优先：先按长度与平均置信度排序；截断证据次之（同口径排序），
+        # 使「已有完整解」时首元素仍是最短完整路径（既有调用方读数不变）。
         all_paths.sort(key=lambda p: (len(p), -sum(e.confidence for e in p)/len(p)))
-        return all_paths
+        truncated_all.sort(key=lambda p: (len(p), -sum(e.confidence for e in p)/len(p)))
+        paths = all_paths + truncated_all
+        if causal_stats is not None:
+            causal_stats.update({
+                "max_depth": max_depth,
+                "complete": len(all_paths),
+                "truncated": len(truncated_all) + truncated_dropped,
+                "truncated_dropped": truncated_dropped,
+            })
+        return paths
 
     def find_cycles(self, max_depth: int = 10,
                     limit: int = None) -> List[List[STEdge]]:
@@ -5086,50 +5110,53 @@ class SpacetimeMemoryEngine:
     # ==================== 因果推理 ====================
 
     def reason_causal(self, start_id: str, end_id: str = None,
-                      max_depth: int = 5, relation_types: List[str] = None,
+                      max_depth: Optional[int] = 5,
+                      relation_types: List[str] = None,
                       importance_weighted: bool = False,
                       include_subgraph: bool = False,
-                      max_paths: int = _CAUSAL_MAX_PATHS) -> List[List[STEdge]]:
+                      max_paths: int = _CAUSAL_MAX_PATHS,
+                      causal_stats: Dict = None) -> List[List[STEdge]]:
         """
         因果推理（v1.16 图架构增强）：
         - 指定 end_id：查找 start→end 的所有路径（relation_types 可多类型）
+          ——与「未指定」同口径：到深度预算仍有出边 ⇒ 存截断链并标 truncated；
+          空列表=确无因果路径，不再混同于「链太长」（issue #145 同族补修，
+          此前这一半静默返回空，见 tests/test_causal_end_id_truncation.py）
         - 未指定：返回从 start 出发的所有链（每条链最长 max_depth），元素为
           CausalChain（list 子类）——到深度预算仍有出边 ⇒ 存截断链并标
           truncated；链尾遇回边/自环 ⇒ 存链并标 cyclic（可达部分不丢弃）；
           空列表=确无因果后果，不再混同于「链太长/有环」（issue #145）
-        - importance_weighted：路径排序加权（节点 importance 均值）
-        - include_subgraph：结果附尾节点知识点子图（嵌套感知）
+        - max_depth：正整数=深度预算；**None=不限深度**（显式要求「必须找到」）
+        - causal_stats：可选出参 dict，两分支同口径填充
+          `{max_depth, truncated, complete, truncated_dropped}`——截断事实外传
 
         #327：两个分支都受 `max_paths`（默认 `_CAUSAL_MAX_PATHS`）约束。旧实现
-        无上限——同一条因果事实被记录 k 次（`add_edge` 不合并平行边）时路径数
-        是 k⁵：6 节点无环链 k=12 即 248832 条 / 3.5s / 669MB，k=24 约 800 万条
-        使长驻进程 OOM（issue 实测；且该图无环，故 #145/#215/#252 的环侧修复
-        全不触发）。达到上限即停止枚举。
-        判据来源：公开 issue #327「修复建议 2」（「`reason_causal` /
-        `infer_causal_paths` ……加 `max_paths`（如 1000）与时间预算」）＋ 其实测
-        读数 ＋ 分诊表 `triage_lingshu_ALL.md` 行 327。仓内无规定该预算的理论
-        章节，属经验标定（本件 #327）。
-        边界（削掉的判别力，如实标注）：① 达上限时返回**前 max_paths 条**，未加
-        `truncated` 标记（会改返回类型/元素语义，波及 #145 的 CausalChain 契约与
-        既有调用）；② issue 建议 1（`add_edge` 合并平行边 + 存量迁移）不在本件
-        ——那会改写入语义与既有边 id，波及衰减/验证/同步面。
+        无上限——同一条因果事实被记录 k 次时路径数是 k⁵，6 节点无环链 k=24 约
+        800 万条使长驻进程 OOM（issue 实测）。达到上限即停止枚举。
+        边界（削掉的判别力，如实标注）：达上限时返回**前 max_paths 条**，未加
+        `truncated` 标记（会改返回类型/元素语义，波及 #145 的 CausalChain 契约）。
 
         #385：`collect` 由**递归**改**显式栈**（帧含节点、到达路径、路径节点集、
         深度与**边迭代器**）——旧实现递归深度 = 链长 = `max_depth`，1500 节点线性
-        链上 `reason_causal(n0, max_depth=2000)` 抛 `RecursionError`（issue 实测；
-        同图迭代实现 `timeline` 照常返回 1500 个节点）。用「帧 + 迭代器」而非
-        「一次性压栈全部子帧」，是为了**逐字保持**递归版的输出顺序（同一节点的
-        带环链 append 与其非环子树的输出是交错产生的）。判据来源：公开 issue #385
-        ＋ 分诊表 `triage_lingshu_ALL.md` 行 385；仓内无规定该实现口径的理论章节，
-        属经验标定（本件 #385）。边界（削掉的判别力，如实标注）：只改遍历实现，
-        `max_depth` / `truncated` / `cyclic` / 空列表语义一律不动。
+        链上抛 `RecursionError`。用「帧 + 迭代器」而非「一次性压栈全部子帧」，是为
+        了**逐字保持**递归版的输出顺序。边界：`max_depth` / `truncated` / `cyclic`
+        / 空列表语义一律不动。
+
+        #328（**改编采纳** · 如实标注一处**不采纳**）：传 `end_id` 的分支采纳
+        「截断证据不静默」；两个分支都填充 `causal_stats`。**不采纳**本件对
+        「不传 end_id」分支的截断证据**条数上界**——本仓 #385 守卫
+        （`tests/test_issue385_iterative_dfs_no_recursion_error_guard.py::
+        test_q3_output_order_matches_recursive_reference`）要求截断链不过滤、与
+        递归参考逐字一致，与「丢弃超上界截断证据」**互斥**；故该分支保持主干
+        **无上界**截断链（`truncated_dropped` 恒 0）。
         """
         if end_id:
-            paths = self.store.infer_causal_paths(start_id, end_id, max_depth,
-                                                  relation_types=relation_types,
-                                                  max_paths=max_paths)
+            paths = self.store.infer_causal_paths(
+                start_id, end_id, max_depth, relation_types=relation_types,
+                max_paths=max_paths, causal_stats=causal_stats)
         else:
             chains: List[CausalChain] = []
+            truncated_dropped = 0
 
             # 帧 = [节点, 到达路径, 路径节点集, 深度, 边迭代器(None=未展开)]
             frames = [[start_id, [], {start_id}, 0, None]]
@@ -5151,8 +5178,9 @@ class SpacetimeMemoryEngine:
                             chains.append(CausalChain(path))
                         frames.pop()
                         continue
-                    if depth >= max_depth:
-                        # 深度预算用尽仍有出边：存截断链（不丢弃、不混同于无后果）
+                    if max_depth is not None and depth >= max_depth:
+                        # 深度预算用尽仍有出边：存截断链（不丢弃、不混同于无后果）。
+                        # #328 不采纳条数上界——与 #385 守卫互斥（见 docstring）。
                         if path:
                             chains.append(CausalChain(path, truncated=True))
                         frames.pop()
@@ -5174,6 +5202,19 @@ class SpacetimeMemoryEngine:
                 if not advanced:
                     frames.pop()
             paths = chains
+            if causal_stats is not None:
+                # 三条出口形态互斥，显式分解：complete + truncated + cyclic。
+                cyclic_count = len([c for c in chains
+                                    if getattr(c, "cyclic", False)])
+                truncated_count = len([c for c in chains
+                                       if getattr(c, "truncated", False)])
+                causal_stats.update({
+                    "max_depth": max_depth,
+                    "complete": len(chains) - truncated_count - cyclic_count,
+                    "truncated": truncated_count + truncated_dropped,
+                    "truncated_dropped": truncated_dropped,
+                    "cyclic": cyclic_count,
+                })
         # importance 加权排序
         if importance_weighted and paths:
             def _imp_mean(p):
@@ -5185,7 +5226,11 @@ class SpacetimeMemoryEngine:
                 imp = {r[0]: r[1] for r in rows}
                 vals = [imp.get(i, 0.5) for i in ids]
                 return sum(vals) / len(vals) if vals else 0.5
-            paths.sort(key=lambda p: (-_imp_mean(p), len(p)))
+            # **完整路径优先**：先按 truncated 位分层（完整在前），层内再按原口径
+            # （importance 均值、长度）排序。否则 importance 高的截断链会抢占首元素，
+            # 破坏「已有完整解时首元素是最短完整路径」的既有读数。
+            paths.sort(key=lambda p: (bool(getattr(p, "truncated", False)),
+                                      -_imp_mean(p), len(p)))
         # 子图感知：尾节点知识点子图
         if include_subgraph:
             decorated = []
@@ -6695,7 +6740,8 @@ class SpacetimeMemoryEngine:
 
     def scene_simulator(self, action: str, params: dict = None) -> dict:
         """场景级世界模拟器（里程碑2.3 · 自主行为玩家）：
-        - create: 创建场景（size/trees/water）
+        - create: 创建场景（size/trees/water；seed 缺省 42——**只播种实体行为随机流
+          （wander 等），地形布局与 seed 无关**，见 world/voxel_world.py）
         - entity: 添加自主实体（category/behavior/pos/speed/goal——wander/seek/avoid/flee/follow）
         - path: 定义巡逻路径（path_id/points）
         - step: 推进 n tick（所有自主实体决策→行动→场景演化）
@@ -6711,7 +6757,8 @@ class SpacetimeMemoryEngine:
                 return {"status": "scene_not_ready", "error": str(e)}
         if not hasattr(self, '_scene'):
             self._scene = SceneSimulator(size=int(p.get('size', 24)),
-                                       ground_level=int(p.get('ground_level', 1)))
+                                       ground_level=int(p.get('ground_level', 1)),
+                                       seed=int(p.get('seed', 42)))
         if action == "create":
             r = self._scene.create_scene(trees=int(p.get("trees", 4)),
                                         water=bool(p.get("water", True)))
@@ -6738,7 +6785,7 @@ class SpacetimeMemoryEngine:
 
     def spacetime_consistency(self, action: str, params: dict = None) -> dict:
         """时空一致性验证（里程碑2.4 · 阶段2收官）——世界模型自洽判定：
-        - init: 初始化一致性验证器（size/window/hit_threshold/drift_rate/drift_ticks/consistent_rate/min_consistent_ticks）
+        - init: 初始化一致性验证器（size/seed/window/hit_threshold/drift_rate/drift_ticks/consistent_rate/min_consistent_ticks——seed 缺省 42，**只播种实体行为随机流，地形与 seed 无关**）
         - create: 创建场景（透传 SceneSimulator）
         - entity: 添加自主实体（wander/seek/avoid/flee/follow）
         - path: 定义巡逻路径
@@ -6766,6 +6813,7 @@ class SpacetimeMemoryEngine:
             self._stc = SpacetimeConsistency(
                 size=int(p.get('size', 24)),
                 ground_level=int(p.get('ground_level', 1)),
+                seed=int(p.get('seed', 42)),
                 window=int(p.get('window', 20)),
                 hit_threshold=float(p.get('hit_threshold', 0.5)),
                 drift_rate=float(p.get('drift_rate', 0.7)),
