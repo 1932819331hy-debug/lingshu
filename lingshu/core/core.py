@@ -3913,8 +3913,18 @@ class LayeredStore:
                 for r in c.fetchall()]
 
     @_transactional
-    def mark_rejected_path_consumed(self, rejected_id: str):
-        """标记否决路径已消费（同类问题复用该否决答案后）。"""
+    def mark_rejected_path_consumed(self, rejected_id: str,
+                                      designer_key: str = None):
+        """标记否决路径已消费（同类问题复用该否决答案后）。
+
+        #522：消费否决行＝解除 #216 负记忆闸——旧实现无密钥无角色检查，
+        任何人调一下就把 status='open' 翻成 'consumed'，重提闸即被绕过。
+        现须过设计者密钥（fail-closed，与 resolve_blindspot 同款）。
+        """
+        if not verify_designer(designer_key):
+            raise PermissionError(
+                "#522 消费否决路径须过设计者密钥闸（fail-closed）——"
+                "消费＝解除 #216 负记忆闸，不得无密钥调用")
         c = self.conn.cursor()
         c.execute("UPDATE rejected_paths SET status='consumed', consumed_at=? WHERE id=?",
                   (time.time(), rejected_id))
@@ -8105,8 +8115,8 @@ class SpacetimeMemoryEngine:
         return {"new_root_id": new_root_id, "new_nodes": counter["n"],
                 "removed_nodes": deleted}
 
-    def mark_rejected_path_consumed(self, rejected_id: str):
-        self.store.mark_rejected_path_consumed(rejected_id)
+    def mark_rejected_path_consumed(self, rejected_id: str, designer_key: str = None):
+        self.store.mark_rejected_path_consumed(rejected_id, designer_key=designer_key)
 
     # ---- A-2 验证器可演进（四步制衡路径） ----
 
