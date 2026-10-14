@@ -1,0 +1,8 @@
+newmtl M_brass
+Kd 0.550000 0.360000 0.130000
+newmtl M_dark
+Kd 0.070000 0.075000 0.085000
+newmtl M_glow
+Kd 0.900000 0.500000 0.060000
+newmtl M_steel
+Kd 0.180000 0.190000 0.210000

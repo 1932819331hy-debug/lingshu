@@ -1,0 +1,23 @@
+{
+ "crosscheck": {
+  "checked": true,
+  "n_problems": 0,
+  "ok": true,
+  "problems": []
+ },
+ "mode": "spec",
+ "ok": true,
+ "out": "wm_bridge/factory/_det/out/run1/shapes.json",
+ "summary": {
+  "bytes": 2756,
+  "export_frame": 0,
+  "kinds": {
+   "box": 1,
+   "pillar": 14,
+   "pyramid": 0,
+   "sphere": 4
+  },
+  "links": 2,
+  "parts": 19
+ }
+}
