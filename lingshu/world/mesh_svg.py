@@ -582,6 +582,8 @@ def _emit_mesh(backend, world, obj, mesh, cam, sw, sh, st, scale, counts, layers
                                     **{"data-layer": "outline"})
             switched = True
         if payload[0] == "fill":
+            if hasattr(backend, "set_elem_class"):
+                backend.set_elem_class(None)      # 色块不带 ink 类
             _t, col, pts = payload
             outline = None
             if fstroke > 0.0:
@@ -597,7 +599,13 @@ def _emit_mesh(backend, world, obj, mesh, cam, sw, sh, st, scale, counts, layers
                 continue
         else:
             _t, ocol, w, pts = payload
+            #: ★ 线稿统一打 `class="ink"`（本件）：**顺序不变**（遮挡仍正确），
+            #: 但编辑器可用一条 CSS 整层关掉全部线稿 ⇒ 解掉"线稿两难"。
+            if hasattr(backend, "set_elem_class"):
+                backend.set_elem_class(st.get("ink_class", "ink") or None)
             backend.line(pts, fill=ocol, width=w)
+            if hasattr(backend, "set_elem_class"):
+                backend.set_elem_class(None)
             emitted_lines += 1
     if layers:
         backend.end_group()

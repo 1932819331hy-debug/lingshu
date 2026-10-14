@@ -124,6 +124,14 @@ class SVGBackend:
         self.height = int(height)
         self.background = background
         self._elements: List[str] = []
+        #: ★ 元素级 CSS 类（本件）：给"线稿元素"统一打 `class="ink"` ⇒ 编辑器一条
+        #: `.ink{display:none}` 就能**整层关线**，而**不必**把线全部搬到文档末尾。
+        #: 这解掉了矢量出口长期的"线稿两难"：
+        #:   · `interleave`（本件缺省）：遮挡正确，但线混在色块之间 ⇒ 过去无法整层关；
+        #:   · `separate`：可整层关，但线全在末尾 ⇒ **X 光透出**（SVG 无 z-buffer）。
+        #: 加 class 后 `interleave` **同时**满足两条，且**一个像素都不改**（文档顺序不变）。
+        #: 缺省 `None` ⇒ `_emit` 的 attrs 与改动前逐字节相同（零回归前提）。
+        self._elem_class: Optional[str] = None
         #: 分层（`<g id="...">`）——**纯增量能力**：一次都不调用 `begin_group()`
         #: 时下面两个容器恒空，`to_svg()` 走的是与改动前**逐字节相同**的分支。
         #: 为什么用 mark 而不是往 `_elements` 里塞标记：`_elements` 保持"字符串列表"
@@ -340,7 +348,14 @@ class SVGBackend:
         return len(self._elements)
 
     # ------------------------------------------------------------ 内部
+    def set_elem_class(self, name: Optional[str]) -> None:
+        """设定**后续元素**的 CSS 类（`None` = 清除）。给 `mesh_svg` 在线稿元素上
+        打 `class="ink"` 用；缺省不清 ⇒ 每处显式设更不容易漏。"""
+        self._elem_class = name
+
     def _emit(self, tag: str, attrs: str) -> None:
+        if self._elem_class:
+            attrs = '%s class="%s"' % (attrs, _attr_escape(str(self._elem_class)))
         self._elements.append("<%s%s/>" % (tag, attrs))
         self._emitted += 1
 

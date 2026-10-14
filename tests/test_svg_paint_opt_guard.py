@@ -221,3 +221,96 @@ def test_c2_ZBuffer_polygon_三角形字段数与内核一致():
     zb.set_depth(0.5)
     zb.polygon([(2, 2), (20, 2), (20, 20), (2, 20)], fill=(200, 60, 60))
     assert len(set(zb.to_bytes())) > 1, "polygon 没写进任何像素"
+
+
+# ============================================================== D 线稿两难
+def _turret_or_synthetic():
+    """有真模型用真模型；没有就退回合成网格（保证 CI 上也有判别力）。"""
+    import os as _os
+    path = "/mnt/d/DSH/blender/out/wmtest/turret/mesh.obj"
+    if _os.path.isfile(path):
+        key = "__g_d_turret__"
+        if key not in mesh3d.MESH_LIBRARY:
+            mtl = path[:-4] + ".mtl"
+            cols = mesh3d.load_mtl(mtl) if _os.path.isfile(mtl) else None
+            mesh3d.load_obj_mesh(path, key, mtl_colors=cols)
+        return key, mesh3d.MESH_LIBRARY[key]
+    key = "__g_d_syn__"
+    m = _mk_mesh(key, hx=0.6, hy=0.7, hz=0.9)
+    mesh3d.MESH_LIBRARY[key] = m
+    return key, m
+
+
+def _svg_pair(mode="interleave", ink_class="ink"):
+    """渲两份 SVG：带 ink class / 不带（其余完全同参）。返回 (带, 不带)。"""
+    from lingshu.world import mesh_svg
+    key, m = _turret_or_synthetic()
+    b = m.bounds()
+    ctr = tuple((b[0][k] + b[1][k]) / 2.0 for k in range(3))
+    out = []
+    for cls in (ink_class, None):
+        w = World3D(Camera3D(**MANUAL))
+        w.objects = [Object3D(key, ctr, (1, 1, 1), (170, 170, 175), "box")]
+        w.auto_frame = False
+        st = dict(mesh_svg.STYLE_PRESETS["technical"])
+        st["outline_mode"] = mode
+        st["ink_class"] = cls
+        out.append(mesh_svg.render_mesh_svg(w, SW, SH, camera=w.camera, style=st))
+    return out
+
+
+def test_d1_线稿元素全部带_ink_类_色块不带():
+    """D1：`interleave` 下**每一个线元素**都要带 `class="ink"`，且**色块一个都不能带**。
+
+    这条是"线稿可整层关"的可判定形式：编辑器一条 `.ink{display:none}` 就能关掉全部线稿，
+    而不必关掉色块。若只给部分线打类（例如漏掉折角线），关层后画面会残留半截线。
+    """
+    import re as _re
+    on, _off = _svg_pair()
+    n_line = len(_re.findall(r"<line|<polyline", on))
+    n_ink = len(_re.findall(r'class="ink"', on))
+    assert n_line > 0, "没有线元素可测"
+    assert n_ink == n_line, "线元素 %d 个但带 ink 类的只有 %d 个（会漏关）" % (n_line, n_ink)
+    #: 色块（polygon）不得带 ink 类
+    for m_ in _re.finditer(r"<polygon[^>]*>", on):
+        assert 'class="ink"' not in m_.group(0), "色块被误打了 ink 类：" + m_.group(0)[:80]
+
+
+def test_d2_加类不改文档顺序_故遮挡仍正确():
+    """D2（**核心判据**）：带类与不带类的两份 SVG，**去掉 class 属性后必须逐字节相同**。
+
+    这就证明了「顺序未变」⇒ 遮挡关系与 `interleave` 完全一致（不会 X 光透出）。
+    为什么这条是强的：`outline_mode="separate"` 的修法会把线搬到文档末尾（顺序变了 ⇒
+    线透出），而本件只加属性 ⇒ 文档顺序**一个字都没动**。
+    """
+    import re as _re
+    on, off = _svg_pair()
+    strip_on = _re.sub(r' class="ink"', "", on)
+    assert strip_on == off, "去掉 class 后两份 SVG 不同 ⇒ 文档顺序被改了（遮挡可能已变）"
+
+
+def test_d3_关掉线稿层确实改变画面():
+    """D3：把带 ink 类的元素删掉（等价 CSS 隐藏）后，**渲染结果必须与全量不同**
+    —— 否则"可整层关"是句空话（关不关都一样）。"""
+    import re as _re
+    import xml.etree.ElementTree as _ET
+    on, _off = _svg_pair()
+    root = _ET.fromstring(on)
+
+    def strip(el):
+        for ch in list(el):
+            if ch.get("class") == "ink":
+                el.remove(ch)
+            else:
+                strip(ch)
+
+    strip(root)
+    hidden = _ET.tostring(root, encoding="unicode")
+    n_on = len(_re.findall(r'class="ink"', on))
+    n_hidden = len(_re.findall(r'class="ink"', hidden))
+    assert n_on > 0, "没有 ink 类元素"
+    assert hidden != on, "删掉 ink 元素后文档没变"
+    #: 隐藏后 ink 元素应**一个不剩**（不是"少了几条"—— 否则说明删漏了）
+    assert n_hidden == 0, "隐藏后仍剩 %d 个 ink 元素（删漏）" % n_hidden
+    #: 线元素总数也应归零（线条确实被整体移除）
+    assert len(_re.findall(r"<line|<polyline", hidden)) == 0, "隐藏后仍有线元素"
