@@ -77,7 +77,8 @@ LAYERS = ("core", "world", "nn", "gen")
 DIST_ALIAS = {"pil": "pillow", "yaml": "pyyaml", "pytest": "pytest"}
 
 # world 渲染面：引用 PIL 的模块集合（缺陷 #253 取证点；只钉集合与 render 存在，
-# 不钉行号——行号随提交漂移）
+# 不钉行号——行号随提交漂移）。本集合的语义是「**常规路径**依赖 Pillow 且有 render()」，
+# 故惰性 PIL 面（`world/anim.py`）**不在**其中，只在下面的并集里登记。
 WORLD_PIL_MODULES = frozenset({
     "skeleton3d.py", "silhouette3d.py", "scene_model.py", "world3d.py",
 })
@@ -189,7 +190,10 @@ def test_scanner_is_alive():
         % (absent, sorted(seen)))
 
     pil_mods = {p.split("/")[-1].split(":")[0] for p in seen["PIL"]}
-    assert pil_mods == set(WORLD_PIL_MODULES) | {"hex_gen.py", "hex_train.py",
+    # `anim.py` 是**惰性 PIL 面**（函数内 import，见其模块 docstring），
+    # **不是** render 件 ⇒ 只能进这个并集，**不许**进上面的 WORLD_PIL_MODULES
+    # ——紧随其后的循环会对该集合逐个断言 `"def render(" in src`。
+    assert pil_mods == set(WORLD_PIL_MODULES) | {"anim.py", "hex_gen.py", "hex_train.py",
                                                  "hexgen_c1_real.py", "hexgen_multi_seed.py"}, (
         "引用 PIL 的模块集合与预期不符（扫描器或代码面已变）：%s" % sorted(pil_mods))
 

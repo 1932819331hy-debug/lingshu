@@ -90,6 +90,10 @@ STDLIB_ALLOWED = frozenset({
     # 语法树（ast：2026-10-12 外部 PR 引入 world/coord_contract.py——标准库；
     # 守卫按设计判红「未知裸名」，此处补分类而非放宽判据）
     "ast",
+    # 临时文件（tempfile：2026-10-13 新增 world/anim.py 引入——GIF 导出采用
+    # 「写同目录 tmp → 回读自校验 → os.replace 原子替换」，故需要它；
+    # 标准库。守卫按设计判红「未知裸名」，此处补分类而非放宽判据）
+    "tempfile",
     # 命令行 / 子进程
     "argparse", "subprocess",
 })
