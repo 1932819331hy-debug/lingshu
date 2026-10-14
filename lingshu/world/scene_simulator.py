@@ -101,7 +101,12 @@ class SceneSimulator:
     """
 
     def __init__(self, size: int = 24, ground_level: int = 1, seed: int = 42):
-        self.world = VoxelWorld(size=size, ground_level=ground_level)
+        # seed 必须**同时**播种两条独立随机流（此前只播了下面那条实体行为流）：
+        #   · VoxelWorld._rng → 世界构建（build_flatland 的种树位置）
+        #   · self._rng       → 实体行为（wander 抖动）
+        # 漏传第一处的后果：`create_scene` 的地形与 seed 完全无关（VoxelWorld 恒用
+        # 自身缺省 seed=0），「换 seed 重跑」在世界构建维度上是空转。
+        self.world = VoxelWorld(size=size, ground_level=ground_level, seed=seed)
         self.entities: Dict[str, SceneEntity] = {}
         self.paths: Dict[str, List[Tuple[float, float, float]]] = {}
         # #424：环形缓冲——此前是普通 list，长期运行 / 单次大 n 只增不减，
@@ -123,6 +128,11 @@ class SceneSimulator:
         # 结果变）。seed 缺省 42 = 历史硬编码值，既有实验行为不变。
         # 顺序无关化（排序/分相/每实体 rng）属设计裁定，本处不改（见 step
         # docstring 与 .tmp/待裁清单_20261010.md #428）。
+        # #379 兼容性声明（如实）：本改动**同时**让 __init__ 起始处开始透传 seed
+        # 给 VoxelWorld；此前 VoxelWorld 恒为自身缺省 0，故 `create_scene` 的
+        # **地形默认输出会变**（树位置由 seed=0 的流改为 seed=42 的流）。这是修复
+        # "seed 对世界构建无效"的必然后果，无法两全：要么地形与 seed 无关（旧），
+        # 要么与 seed 有关（新）。
         self._rng = random.Random(seed)
 
     # ---- 场景构建 ----
