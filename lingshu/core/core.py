@@ -3072,14 +3072,24 @@ class LayeredStore:
             raise PermissionError(
                 "D-007 设计者认证失败：密钥无效或未配置 AEIS_DESIGNER_KEY（fail-closed）")
         c = self.conn.cursor()
-        c.execute("SELECT node_id, status, content_hash FROM promotion_proposals WHERE id=?",
-                  (proposal_id,))
+        c.execute("SELECT node_id, status, content_hash, requester, verified_by "
+                  "FROM promotion_proposals WHERE id=?", (proposal_id,))
         row = c.fetchone()
         if not row:
             return None
         node_id, status, bound_hash = row[0], row[1], (row[2] or "")
+        requester, verified_by = (row[3] or ""), (row[4] or "")
         if status != "verified":
             return None
+        # #565：身份互斥——终裁人不得等于提议人或复核人（C-4 / D-02「三者两两互斥」）。
+        # #118 的修复建议第1条把「终裁人是否允许与前序角色重合」显式标为**由维护者
+        # 定口径**的悬置项；同仓 A-2 流水线（`adjudicate_verifier_standard`）已按
+        # C-4/D-02 落实为 `adjudicator not in (proposer, independent_reviewer,
+        # cs_reviewer)`，本件按同一口径对齐，避免两条流水线行为不一致。
+        # 例外：库里若 `verified_by` 为空（老提案未经复核人字段），不据空值拒——
+        # 只在 `adjudicated_by` 与非空的 `requester`/`verified_by` 相撞时拒。
+        if adjudicated_by and adjudicated_by in (x for x in (requester, verified_by) if x):
+            return None  # 身份互斥：终裁人与提议/复核人两两互斥（C-4 / D-02）
         # #140：内容绑定比对（未绑定哈希的老提案（bound_hash 空）不做比对，保持向后兼容）
         node = self.get_node(node_id)
         # #167：节点存续门（fail-closed）——见 docstring。先于哈希比对：老提案
@@ -3721,6 +3731,14 @@ class LayeredStore:
         node = self.get_node(insight_id)
         if node is None or "insight_event" not in node.tags:
             return {"error": f"非洞见事件节点: {insight_id}"}
+        # #519：共享层角色闸——洞见经 D-003 终裁晋升到结构层/锚点层后，节点
+        # 仍带 insight_event 标签；旧实现只认标签不认层与角色 ⇒ SUB 可把已终裁
+        # 的结构层节点 verified→refuted、追加伪造证据、抬 importance 到 0.9。
+        # 与 #234 给 tag_node/protect_node/register_conflict/add_edge 加的闸同款。
+        if node.layer in self.SHARED_LAYERS and self.role != Role.PRIMARY:
+            raise PermissionError(
+                f"role={self.role.value} 无权改写共享层（{node.layer.value}）的洞见"
+                f"（id={insight_id}）——已终裁晋升的洞见归 PRIMARY 主控（#519）")
         now = time.time()
         sa = node.state_attributes or {}
         ins = sa.get("insight", {}) if isinstance(sa, dict) else {}
@@ -3895,8 +3913,18 @@ class LayeredStore:
                 for r in c.fetchall()]
 
     @_transactional
-    def mark_rejected_path_consumed(self, rejected_id: str):
-        """标记否决路径已消费（同类问题复用该否决答案后）。"""
+    def mark_rejected_path_consumed(self, rejected_id: str,
+                                      designer_key: str = None):
+        """标记否决路径已消费（同类问题复用该否决答案后）。
+
+        #522：消费否决行＝解除 #216 负记忆闸——旧实现无密钥无角色检查，
+        任何人调一下就把 status='open' 翻成 'consumed'，重提闸即被绕过。
+        现须过设计者密钥（fail-closed，与 resolve_blindspot 同款）。
+        """
+        if not verify_designer(designer_key):
+            raise PermissionError(
+                "#522 消费否决路径须过设计者密钥闸（fail-closed）——"
+                "消费＝解除 #216 负记忆闸，不得无密钥调用")
         c = self.conn.cursor()
         c.execute("UPDATE rejected_paths SET status='consumed', consumed_at=? WHERE id=?",
                   (time.time(), rejected_id))
@@ -4718,12 +4746,19 @@ class SpacetimeMemoryEngine:
         tags = [tag] + list(extra_tags or [])
         try:
             if self.role == Role.PRIMARY:
+                # #571：`add_structure_node` 无 `tags` 形参（节点标签硬编码
+                # `["structure"]`），故 PRIMARY 分支**接不住** `extra_tags` ⇒
+                # `migrate_v17_coordinates` 传的 `["v1.7"]` 在主控角色下被静默
+                # 丢弃（SUB 分支正常落库）。修法：把算出的 `tags` 逐个补上
+                # （沿用既有的事后补写机制；`tag_node` 幂等，重复无害），
+                # 不动 `add_structure_node` 的公共签名。
                 n = self.add_structure_node(record, importance=0.9)
             else:
                 n = self.add_perception(record, importance=0.9,
                                         tags=tags + [self.SUB_PENDING_SYNC_TAG])
             if n:
-                self.store.tag_node(n.id, tag)
+                for t in tags:              # tags = [tag] + extra_tags（#571）
+                    self.store.tag_node(n.id, t)
             return n
         except Exception:
             return None
@@ -8596,8 +8631,8 @@ class SpacetimeMemoryEngine:
         return {"new_root_id": new_root_id, "new_nodes": counter["n"],
                 "removed_nodes": deleted}
 
-    def mark_rejected_path_consumed(self, rejected_id: str):
-        self.store.mark_rejected_path_consumed(rejected_id)
+    def mark_rejected_path_consumed(self, rejected_id: str, designer_key: str = None):
+        self.store.mark_rejected_path_consumed(rejected_id, designer_key=designer_key)
 
     # ---- A-2 验证器可演进（四步制衡路径） ----
 

@@ -130,14 +130,58 @@ def test_g6_type6_paragraph_interrupt_rule():
 def test_g7_mutation_html_state_machine_required():
     """G7（形态锚·定点变异自证）：HTML 块状态机在抽取循环里不得被短路。"""
     src = SRC.read_text(encoding="utf-8")
-    assert 'st = _html_block_start(lines[i], prev_blank)' in src, (
-        "#520：抽取循环必须经 _html_block_start 判定 HTML 块起点——"
-        "短路即回潮（G1/G3 必红）")
+    assert '_html_block_start(content, prev_blank)' in src, (
+        "#520/#555 残留：抽取循环必须经 _html_block_start 判定 HTML 块起点"
+        "（在剥容器后的内容上）——短路即回潮（G1/G3/G8/G9 必红）")
+    assert '_container_strip' in src, (
+        "#555 残留：容器前缀剥离函数必须存在")
     assert '"python3" in _PY_LANGS' in src or '"python", "python3"' in src, (
         "#409：_PY_LANGS 必须含 python3")
 
 
+# --------------------------------------- G8/G9 · #555 残留（容器内 HTML 块绕过）
+def test_g8_blockquote_html_block_bypass():
+    """G8：引用块 `> <div title="` 内的围栏不得被抽取执行（改前 chosen=HIDDEN）。"""
+    body = ('> <div title="\n'
+            '> ```python\n'
+            '> print(HIDDEN_BQ)\n'
+            '> ```\n'
+            '> "></div>\n'
+            '\n'
+            '```python\n'
+            'print(VISIBLE_BQ)\n'
+            '```\n')
+    blocks = R._extract_fenced_blocks(body)
+    chosen = R._choose_python_block(blocks)
+    assert chosen and chosen[3].strip() == 'print(VISIBLE_BQ)', (
+        "#555 残留：引用块内 HTML 块的围栏不得被选中（改前 chosen=%r）"
+        % (chosen[3][:40] if chosen else None))
+    # 防过修：正常引用块内的围栏不受影响
+    bq_fence = '> 前言\n> ```python\n> print(OK_BQ)\n> ```\n'
+    blocks2 = R._extract_fenced_blocks(bq_fence)
+    assert len(blocks2) == 1 and 'OK_BQ' in blocks2[0][3]
+
+
+def test_g9_list_item_html_block_bypass():
+    """G9：列表项 `- <div title="` 内的围栏不得被抽取执行（改前 chosen=HIDDEN）。"""
+    body = ('- <div title="\n'
+            '  ```python\n'
+            '  print(HIDDEN_LI)\n'
+            '  ```\n'
+            '  "></div>\n'
+            '\n'
+            '```python\n'
+            'print(VISIBLE_LI)\n'
+            '```\n')
+    blocks = R._extract_fenced_blocks(body)
+    chosen = R._choose_python_block(blocks)
+    assert chosen and chosen[3].strip() == 'print(VISIBLE_LI)', (
+        "#555 残留：列表项内 HTML 块的围栏不得被选中（改前 chosen=%r）"
+        % (chosen[3][:40] if chosen else None))
+
+
 if __name__ == "__main__":
     import subprocess
+    import sys
     raise SystemExit(subprocess.call(
         [sys.executable, "-X", "utf8", "-m", "pytest", __file__, "-q", "--no-header"]))
