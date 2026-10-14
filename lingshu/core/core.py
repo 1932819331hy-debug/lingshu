@@ -3362,7 +3362,8 @@ class LayeredStore:
                   "WHERE value = ?) "
                   "ORDER BY importance DESC, last_access DESC LIMIT ?",
                   (tag, limit))
-        return [STNode.from_row(tuple(r)) for r in c.fetchall()]
+        nodes, _skipped = self._tolerant_nodes(c.fetchall())
+        return nodes
 
     @_transactional
     def update_blindspot_status(self, blindspot_id: str, status: str,
@@ -3406,7 +3407,8 @@ class LayeredStore:
         c = self.conn.cursor()
         c.execute(f"SELECT * FROM nodes WHERE {' AND '.join(conds)} ORDER BY temporal_coordinate DESC LIMIT ?",
                   params + [limit])
-        return [STNode.from_row(tuple(r)) for r in c.fetchall()]
+        nodes, _skipped = self._tolerant_nodes(c.fetchall())
+        return nodes
 
     @_transactional
     def update_node_importance(self, node_id: str, delta: float):
@@ -5747,7 +5749,7 @@ class SpacetimeMemoryEngine:
                 c.execute("SELECT * FROM nodes WHERE tags LIKE ? "
                           "ORDER BY created_at DESC, rowid DESC LIMIT 3",
                           ("%screen_state%",))
-                nodes = [STNode.from_row(tuple(r)) for r in c.fetchall()]
+                nodes, _skipped = self.store._tolerant_nodes(c.fetchall())
                 # 匹配存储格式 "[屏幕状态 <path>] note" 中的真实路径
                 # （要求盘符或 / 开头，排除中文前缀）
                 _path_re = _re.compile(
