@@ -281,7 +281,27 @@ def load_shapes(path: str, source: str = None) -> Tuple[int, int]:
         raise ValueError("shapes 描述缺 shapes 对象或为空")
     src = source or doc.get("source") or os.path.basename(path)
     #: "bbox_center" = 内置口径（归零到包围盒中心）；"anchor" = 外部枢轴口径（原样）
-    pos_origin = doc.get("pos_origin", "bbox_center")
+    """load_shapes的 pos_origin 声明：
+    
+    缺失时发 DeprecationWarning 并回落 bbox_center
+    （#575：外部导入件应显式声明
+    pos_origin=bbox_center|anchor；向后可升为 raise）。
+    """
+    # #575：pos_origin 是**必需字段**（PR #468 声明）
+    # ——缺失时不得静默取 bbox_center
+    # 外部导入件（pos 相对关节枢轴）静默归零
+    # 会把枢轴锚点挪走、机构错位。
+    pos_origin = doc.get("pos_origin")
+    if pos_origin is None:
+        # #575：向后兼容取 warn 而非 raise
+        # ——外部导入件缺失 pos_origin 时
+        # 不再静默归零，但也不阻断既有调用方
+        import warnings
+        warnings.warn(
+            "pos_origin 缺失，已按 bbox_center 处理——"
+            "外部导入件应显式声明 pos_origin（#575）",
+            DeprecationWarning, stacklevel=2)
+        pos_origin = "bbox_center"
     if pos_origin not in ("bbox_center", "anchor"):
         raise ValueError("pos_origin 取值非法：%r（须为 bbox_center | anchor）" % pos_origin)
     staged = {}
