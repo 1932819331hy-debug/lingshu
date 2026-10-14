@@ -4746,12 +4746,19 @@ class SpacetimeMemoryEngine:
         tags = [tag] + list(extra_tags or [])
         try:
             if self.role == Role.PRIMARY:
+                # #571：`add_structure_node` 无 `tags` 形参（节点标签硬编码
+                # `["structure"]`），故 PRIMARY 分支**接不住** `extra_tags` ⇒
+                # `migrate_v17_coordinates` 传的 `["v1.7"]` 在主控角色下被静默
+                # 丢弃（SUB 分支正常落库）。修法：把算出的 `tags` 逐个补上
+                # （沿用既有的事后补写机制；`tag_node` 幂等，重复无害），
+                # 不动 `add_structure_node` 的公共签名。
                 n = self.add_structure_node(record, importance=0.9)
             else:
                 n = self.add_perception(record, importance=0.9,
                                         tags=tags + [self.SUB_PENDING_SYNC_TAG])
             if n:
-                self.store.tag_node(n.id, tag)
+                for t in tags:              # tags = [tag] + extra_tags（#571）
+                    self.store.tag_node(n.id, t)
             return n
         except Exception:
             return None
