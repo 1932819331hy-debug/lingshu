@@ -7887,6 +7887,11 @@ class SpacetimeMemoryEngine:
                 orphan_rows = [r for r in rows if r not in keep]
                 rows = keep
             for r in rows:
+                # #574：importance 值域钳制（与 add_node 同款）
+                # 旧实现绕过 add_node 直接 INSERT，越界值原样落库
+                if table == "nodes" and "importance" in r:
+                    r["importance"] = _finite_clamp(
+                        r.get("importance"), 0.0, 1.0, default=0.5)
                 c.execute(f"INSERT OR REPLACE INTO {table} ({col_sql}) VALUES ({placeholders})",
                           tuple(r.get(col) for col in cols))
             counts[table] = len(rows)
