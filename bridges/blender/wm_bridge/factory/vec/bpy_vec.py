@@ -435,7 +435,9 @@ def export_anim_document(draw_objs, cam_factory, path, keyframes=5, dur=14.0,
             continue
         ds = []
         for cam, _doc in docs:
-            ds.append(_object_path(ob, cam))
+            #: ⚠ 这里**必须** `cull_backface=False`：morph 要的是"面集合与相机无关"
+            #: （见 `_object_path` 的 docstring：填充语义下并集不变，故零影响）。
+            ds.append(_object_path(ob, cam, cull_backface=False))
         if any(not d for d in ds):
             continue
         ok, why = SM.validate_morph(ds)
@@ -468,8 +470,20 @@ def export_anim_document(draw_objs, cam_factory, path, keyframes=5, dur=14.0,
                  "emitted": out.stats()["emitted"], "anim_items": len(tl)}
 
 
-def _object_path(ob, cam):
-    """部件 → 一条 path 的 `d`（面序固定 = 网格面序，保证跨帧同构）。"""
+def _object_path(ob, cam, cull_backface=True):
+    """部件 → 一条 path 的 `d`。
+
+    ⚠ 原 docstring 自称「面序固定 = 网格面序，**保证跨帧同构**」—— **实际不成立**：
+    下面按 `n·to_eye` **剔除背面** ⇒ 相机环视时**可见面集合会变** ⇒ 子路径条数变
+    ⇒ 跨关键帧**不同构**，SMIL 的 `d` 路径 morph 就无法进行（实测 59 个部件里有 19 个
+    因此只能静态）。`cull_backface=False` 时**保留全部面**，面集合与相机无关
+    ⇒ 拓扑稳定 ⇒ 可以 morph。
+
+    为什么 `False` 在**语义上仍然是对的**（不是"为了能跑就放宽"）：morph 路径走的是
+    **填充/剪影**语义（`fill_rule="nonzero"`），而"全部投影面的并集"与"可见面的并集"
+    **是同一个区域** —— 隐藏面投影在轮廓**内部**，并集不变。故对填充结果零影响。
+    背面剔除仍由**渲染/分层**那条路径自己负责（`build_document` 里的 `cull_backface`）。
+    """
     wm = ob.world_mesh()
     parts = []
     for f in wm.faces:
@@ -477,7 +491,8 @@ def _object_path(ob, cam):
         n = G.face_normal(pts3)
         c = [sum(p[i] for p in pts3) / len(pts3) for i in range(3)]
         to_eye = (cam.eye[0] - c[0], cam.eye[1] - c[1], cam.eye[2] - c[2])
-        if n[0] * to_eye[0] + n[1] * to_eye[1] + n[2] * to_eye[2] <= 0.0:
+        if cull_backface and (n[0] * to_eye[0] + n[1] * to_eye[1]
+                              + n[2] * to_eye[2] <= 0.0):
             continue
         clipped = cam.clip_polygon(pts3)
         if len(clipped) != len(pts3):        # 裁剪会改变点数 ⇒ 该帧舍弃此面（宁可少画）
