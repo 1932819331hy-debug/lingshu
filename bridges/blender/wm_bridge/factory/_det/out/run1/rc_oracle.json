@@ -1,0 +1,13 @@
+{
+ "frame_coverage_problem": null,
+ "mode": "spec",
+ "ok": true,
+ "out": "wm_bridge/factory/_det/out/run1/oracle.jsonl",
+ "summary": {
+  "bytes": 150163,
+  "entities": 6,
+  "export_frame": 0,
+  "frames": 144,
+  "tracks": 864
+ }
+}

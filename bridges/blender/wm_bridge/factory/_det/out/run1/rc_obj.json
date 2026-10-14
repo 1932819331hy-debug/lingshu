@@ -1,0 +1,15 @@
+{
+ "mode": "spec",
+ "mtl": "wm_bridge/factory/_det/out/run1/mesh.mtl",
+ "ok": true,
+ "out": "wm_bridge/factory/_det/out/run1/mesh.obj",
+ "summary": {
+  "faces": 3660,
+  "materials": 4,
+  "mtl_bytes": 178,
+  "normalize_line": "# normalize: scale=1.0 center=(0.000000,0.000000,0.000000)",
+  "obj_bytes": 112699,
+  "objects": 19,
+  "vertices": 1868
+ }
+}
