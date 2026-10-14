@@ -30,10 +30,12 @@ D 组（#532 枢纽 degree 取声明 count）——build_viewer 旧码 `"degree"
 from __future__ import annotations
 
 import hashlib
+import importlib.util
 import io
 import json
 import os
 import re
+import shutil
 import subprocess
 import sys
 import tempfile
@@ -338,6 +340,70 @@ class HubDegreeFromActualEdgesTests(unittest.TestCase):
                          "送进 cytoscape 的 degree 不得是声明 count（否则宽度被画成超级节点）")
 
 
+# ============================================================ E 组 · #412 BOM
+
+class ServeTemplateBomReadTests(unittest.TestCase):
+    """#412（viewer_serve.tmpl 读点）：带 UTF-8 BOM 的记忆正文必须剥 BOM 后再判前言。
+
+    缺陷形态：`viewer_serve.tmpl::node_detail` 用纯 utf-8 读节点正文，BOM（U+FEFF）
+    让 `raw.startswith("---")` 判否 ⇒ front matter（含 id/tags/edges）被**整段当正文**
+    展示给用户。
+    修复：读取改 `utf-8-sig`（剥 BOM），`startswith("---")` 成立、前言被正确切除。
+    """
+
+    BODY = "# 功能名：A\n真正的正文\n"
+
+    def _node_detail(self, bom):
+        """把 tmpl 落到临时目录当 serve.py 跑（它从自身目录读 viewer_graph.json）。"""
+        tmp = tempfile.mkdtemp()
+        self.addCleanup(shutil.rmtree, tmp, ignore_errors=True)
+        shutil.copy(os.path.join(COG, "viewer_serve.tmpl"), os.path.join(tmp, "serve.py"))
+        graph = {"meta": {"counts": {"nodes": 1, "edges": 0}, "source_sha": "test"},
+                 "nodes": [_node("a", "节点A")], "edges": []}
+        with io.open(os.path.join(tmp, "viewer_graph.json"), "w",
+                     encoding="utf-8", newline="\n") as f:
+            json.dump(graph, f, ensure_ascii=False)
+        fm = "---\nid: a\ntitle: A\n---\n"
+        data = (fm + self.BODY).encode("utf-8")
+        if bom:
+            data = b"\xef\xbb\xbf" + data
+        with open(os.path.join(tmp, "a.md"), "wb") as f:
+            f.write(data)
+        old = os.environ.get("MDCG_ROOT")
+        os.environ["MDCG_ROOT"] = tmp
+        self.addCleanup(lambda: os.environ.__setitem__("MDCG_ROOT", old) if old is not None
+                        else os.environ.pop("MDCG_ROOT", None))
+        mod_name = "serve_probe_%d" % id(self)
+        spec = importlib.util.spec_from_file_location(mod_name, os.path.join(tmp, "serve.py"))
+        mod = importlib.util.module_from_spec(spec)
+        sys.modules[mod_name] = mod
+        self.addCleanup(lambda: sys.modules.pop(mod_name, None))
+        # serve.py 顶部 `if len(sys.argv) > 2: MDCG = sys.argv[2]` —— pytest 的 argv 恒 >2，
+        # 不隔离会把 MDCG 顶成本进程的测试参数。执行期临时换成单元素 argv。
+        old_argv = sys.argv
+        sys.argv = ["serve.py"]
+        try:
+            spec.loader.exec_module(mod)
+        finally:
+            sys.argv = old_argv
+        return mod.node_detail("a").get("content") or ""
+
+    def test_bom_frontmatter_is_not_shown_as_content(self):
+        content = self._node_detail(bom=True)
+        self.assertNotIn("id: a", content,
+                         "BOM 使 startswith('---') 判否 ⇒ front matter 被整段当正文展示（#412 缺陷形态）")
+        self.assertIn("真正的正文", content)
+
+    def test_no_bom_behavior_unchanged(self):
+        """回归：无 BOM 路径读数与修复前逐字相同（正文原样、前言同样被切掉）。"""
+        content = self._node_detail(bom=False)
+        self.assertNotIn("id: a", content)
+        self.assertIn("真正的正文", content)
+
+    def test_bom_and_no_bom_readings_match(self):
+        self.assertEqual(self._node_detail(bom=True), self._node_detail(bom=False),
+                         "BOM 与非 BOM 的正文读数必须一致（否则即 #412 缺陷形态）")
+
+
 if __name__ == "__main__":
     unittest.main()
-

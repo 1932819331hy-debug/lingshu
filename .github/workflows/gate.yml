@@ -70,6 +70,7 @@ env:
     tests/test_core_nplus1_getstats_forgetadvisor.py
     tests/test_traverse_frontier_batch.py
     tests/test_prediction_path_nodes_single_fetch.py
+    tests/test_coggraph_utf8_bom.py
 
 jobs:
   gate:
