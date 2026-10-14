@@ -22,6 +22,7 @@ from __future__ import annotations
 
 import json
 import math
+import sqlite3
 import warnings
 from dataclasses import dataclass, field
 from typing import Dict, List, Optional, Tuple
@@ -403,7 +404,11 @@ def ingest_scene(agent, scene_desc: str, store=None, tag: str = "spatial"):
             # 再逐条重试并逐条告警——粒度和文案与改动前逐位一致。
             try:
                 store.conn.rollback()
-            except Exception:                                     # noqa: BLE001
+            except (AttributeError, sqlite3.Error):
+                # best-effort 清事务：脑侧 store 的 `conn` 是 `_ConnShim`（无
+                # `rollback`，AttributeError 属**常态**而非异常）；真 sqlite 连接
+                # 无活动事务时 rollback 为 no-op。故此处收窄到这两种预期失败，
+                # 不放宽成 `except Exception`（那会把「库读坏」这类真错静默吞掉）。
                 pass
             for _nm, _st, _nid in _pending_states:
                 try:

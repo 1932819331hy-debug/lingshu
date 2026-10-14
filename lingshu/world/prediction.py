@@ -312,14 +312,11 @@ class PredictionEngine:
         与旧实现逐位一致：旧实现每个 id 调一次 `get_node`，取不到即 `n` 为 `None`
         且下游 `if n and ...` / `if n:` 不成立 ⇒ 不计数；占位 `None` 后同理。
         **不去重**（重复 id 各取一次，与旧实现相同，以免改动分母）。
+        取数**不吞异常**（旧实现 `get_node` 直调、异常照常上抛；此处加一层
+        `except Exception` 会把「库读坏」静默降级成 D₂/D₄ 全零，属新增静默宽
+        except，与「零行为变更」自述不符）。
         """
-        out = []
-        for _nid in path:
-            try:
-                out.append(self.engine.store.get_node(_nid))
-            except Exception:                      # 与旧实现同口径：取不到按 None
-                out.append(None)
-        return out
+        return [self.engine.store.get_node(_nid) for _nid in path]
 
     def _boundary_consistency(self, path: List[str], nodes: List = None) -> float:
         """D₂：路径节点是否均有可信边界声明（boundary 标记/不确定声明）"""

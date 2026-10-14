@@ -73,7 +73,8 @@ def main():
                                  '-p', 'no:cacheprovider', '--rootdir', str(snapshot),
                                  '--confcutdir', str(snapshot), '--junitxml', str(xml)], cwd=snapshot,
                                 env={**os.environ, 'PYTHONPATH': str(snapshot), 'PYTHONDONTWRITEBYTECODE': '1'},
-                                capture_output=True, text=True)
+                                capture_output=True, text=True,
+                                encoding='utf-8', errors='replace')
         log = result.stdout + result.stderr
         (OUT / (name + '.log')).write_text(log, encoding='utf-8')
         suite = ET.parse(xml).getroot().find('testsuite')

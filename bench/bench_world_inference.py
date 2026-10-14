@@ -91,7 +91,8 @@ def run(repeats):
                    'median_seconds': statistics.median(seconds)}
             rows.append(row)
             print(json.dumps(row), flush=True)
-    commit = subprocess.run(['git', 'rev-parse', 'HEAD'], cwd=ROOT, capture_output=True, text=True)
+    commit = subprocess.run(['git', 'rev-parse', 'HEAD'], cwd=ROOT, capture_output=True,
+                            text=True, encoding='utf-8', errors='replace')
     sources = ['motion.py', 'world_learner.py', 'world_model.py']
     return {'python': platform.python_version(), 'head': commit.stdout.strip(), 'repeats': repeats,
             'benchmark_sha256': hashlib.sha256(Path(__file__).read_bytes()).hexdigest(),
