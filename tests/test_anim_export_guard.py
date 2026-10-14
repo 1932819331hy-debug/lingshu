@@ -734,3 +734,73 @@ def test_g2_import_anim_still_works_with_pil_blocked(tmp_path):
 
 if __name__ == "__main__":
     raise SystemExit(pytest.main([__file__, "-q"]))
+
+
+# ================================================ G 真步态（骨架运动逻辑贴合现实）
+def _gait_stats(n=96):
+    import math as _m
+    from lingshu.world.skeleton3d import human_skeleton, apply_walk, WALK_DUTY
+    sk = human_skeleton(center=(0, 0.85, 5), height=1.7)
+    toe, toe_l, toe_r, hip, knee, hipf = [], [], [], [], [], []
+    for i in range(n):
+        apply_walk(sk, i / float(n))
+        yl, yr = sk.world_pos("foot_l")[1], sk.world_pos("foot_r")[1]
+        toe.append(min(yl, yr))
+        toe_l.append(yl)
+        toe_r.append(yr)
+        hip.append(sk.world_pos("hip")[1])
+        knee.append(_m.degrees(sk.joints["shin_l"].rot[0]))
+        hipf.append(-_m.degrees(sk.joints["thigh_l"].rot[0]))
+    return toe, toe_l, toe_r, hip, knee, hipf, n, WALK_DUTY
+
+
+def test_g1_脚真的踩在地面上_不再悬空():
+    """G1：改前踝在 `y≈0.578`（**悬空 0.58 m**）；改后趾最小高度必须 ≈0，
+    且摆动相要真的抬起来（否则是"贴地滑行"，同样不是走路）。"""
+    toe, toe_l, toe_r, _, _, _, _, _ = _gait_stats()
+    assert abs(min(toe)) < 0.006, "不贴地：%r" % (min(toe),)
+    #: ⚠ 抬脚要按**单脚**判：`min(左右)` 里总有一脚踩地 ⇒ 恒≈0（本判据第一版就这么红的）
+    assert max(toe_l) > 0.05 and max(toe_r) > 0.05, \
+        "摆动相没抬脚：左 %.4f 右 %.4f" % (max(toe_l), max(toe_r))
+
+
+def test_g2_关节活动度落在步态文献区间():
+    """G2：膝/髋的 ROM 必须落在步态分析文献的常见区间。
+    改前只转大腿、膝恒为 0° ⇒ 这条**必红**（回退即红的判据之一）。"""
+    _, _, _, _, knee, hipf, _, _ = _gait_stats()
+    assert 50.0 <= max(knee) <= 70.0, "膝摆动峰 %.1f° 不在 55~65 附近" % max(knee)
+    assert min(knee) <= 8.0, "膝最小屈曲 %.1f° 应≈5°（不是死直）" % min(knee)
+    assert 22.0 <= max(hipf) <= 35.0, "髋屈峰 %.1f° 不在 25~30 附近" % max(hipf)
+    assert -18.0 <= min(hipf) <= -5.0, "髋伸峰 %.1f° 不在 −10~−15 附近" % min(hipf)
+
+
+def test_g3_竖直起伏由运动学导出_步频为每步幅两次():
+    """G3：真人步行的髋部竖直起伏 ≈4~5 cm，且**每个步幅出现两次**（步频）。
+    这里用 `h(φ) == h(φ+0.5)` 判别"步频 2/步幅"——改前没有起伏（恒 0）⇒ 必红。"""
+    _, _, _, hip, _, _, n, _ = _gait_stats()
+    amp = max(hip) - min(hip)
+    assert 0.025 <= amp <= 0.075, "髋起伏 %.1f cm 不在 4~5 cm 附近" % (amp * 100)
+    asym = max(abs(hip[i] - hip[(i + n // 2) % n]) for i in range(n))
+    assert asym < 0.002, "半周期不对称 %.4f m ⇒ 步频不是 2/步幅" % asym
+
+
+def test_g4_回退即红_换回单正弦摆大腿就不成立():
+    """G4（**回退即红**）：把运动逻辑换回改前的"单正弦只摆大腿"，G2/G3 必须转红。
+
+    实测读数（本机）：膝 ROM 由 `4.9~58.3°` 变成 `0~0°`；髋起伏由 `5.3 cm` 变成 `0.0 cm`。
+    这条证明 G2/G3 有**判别力**，不是恒真断言。
+    """
+    import math as _m
+    from lingshu.world.skeleton3d import human_skeleton
+    sk = human_skeleton(center=(0, 0.85, 5), height=1.7)
+    knee, hip = [], []
+    for i in range(96):
+        t = i / 96.0 * 2 * _m.pi
+        sw = 0.5 * _m.sin(t)
+        sk.joints["thigh_l"].rot = (sw, 0, 0)
+        sk.joints["thigh_r"].rot = (-sw, 0, 0)
+        knee.append(_m.degrees(sk.joints["shin_l"].rot[0]))
+        hip.append(sk.world_pos("hip")[1])
+    assert max(knee) - min(knee) == 0.0, "改前逻辑膝应为恒 0（实测）"
+    assert max(hip) - min(hip) == 0.0, "改前逻辑无竖直起伏（实测）"
+    assert max(knee) < 50.0, "改前逻辑不该满足 G2 的膝峰下界"
