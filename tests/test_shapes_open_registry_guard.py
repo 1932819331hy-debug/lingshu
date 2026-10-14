@@ -74,7 +74,10 @@ def test_a_注册生效并规范化():
 
 
 @pytest.mark.parametrize("bad", [
-    {"kind": "torus", "size": (1, 1, 1)},                    # kind 不在白名单
+    # ⚠ 2026-10-14：原样例是 `"torus"`，而本 PR 已把 torus/cylinder/cone
+    #   并入 `PART_KINDS`（自生成建模扩容）⇒ 它不再"不在白名单"。改用**真正非法**的名字，
+    #   判据不变（仍是"kind 不在白名单 ⇒ 拒收"）。
+    {"kind": "no-such-kind", "size": (1, 1, 1)},            # kind 不在白名单
     {"kind": "box", "size": (-1, 1, 1)},                     # 尺寸非正
     {"kind": "box", "size": (1, 0, 1)},                      # 尺寸为 0
     {"kind": "box", "size": (float("nan"), 1, 1)},           # 非有限
