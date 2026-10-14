@@ -18,6 +18,16 @@ import os
 import sys
 import time
 
+#: ⚠ 读数一律用 `.get(k)`（缺键记 `None`）。为什么（实测缺陷）：`poster`/`layered`
+#: 的读数是从 `model_flat` **照抄键名**来的，但 `build_document` 的 stats 只有
+#: `objects/faces_total/faces_drawn/faces_culled/faces_clipped/edges_*/hidden_runs/
+#: visible_runs/ambiguous_samples/hidden_mode` —— `emitted`/`stroke_mean`/`stroke_std`
+#: 是 `export_document` **之后** `stats.update()` 才补的 ⇒ 原来用 `st[k]` 直接取就
+#: `KeyError: 'emitted'`，**整条管线在那里被拦腰截断**（后面的渲染参照
+#: `model_render.png` 因此从未产出 ⇒ 文档里写的「前景 IoU ≥ 0.90」验收
+#: **根本没有机会被计算**）。注意第 122 行仍用 `st_flat[k]` 是**对的**：
+#: 它来自 `export_document`，键是齐的。
+
 outdir = None
 for a in sys.argv[::-1]:
     if os.path.isdir(a):
@@ -139,7 +149,7 @@ with open(os.path.join(outdir, "poster.svg"), "w", encoding="utf-8", newline="\n
     fh.write(svg_p)
 R["poster"] = dict(st_p, verify=doc_p.verify(svg_p),
                    bytes=len(svg_p.encode("utf-8")))
-jline("poster", {k: R["poster"][k] for k in ("emitted", "faces_drawn", "faces_culled",
+jline("poster", {k: R["poster"].get(k) for k in ("emitted", "faces_drawn", "faces_culled",
                                              "hidden_runs", "bytes", "stroke_mean",
                                              "stroke_std")})
 
@@ -150,7 +160,7 @@ svg_l = doc_l.to_svg()
 with open(os.path.join(outdir, "layered.svg"), "w", encoding="utf-8", newline="\n") as fh:
     fh.write(svg_l)
 R["layered"] = dict(st_l, verify=doc_l.verify(svg_l), bytes=len(svg_l.encode("utf-8")))
-jline("layered", {k: R["layered"][k] for k in ("emitted", "bytes")})
+jline("layered", {k: R["layered"].get(k) for k in ("emitted", "bytes")})
 
 
 # (d) SMIL 动画：5 关键帧环视 morph
