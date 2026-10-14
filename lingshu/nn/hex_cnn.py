@@ -248,7 +248,11 @@ def selfsup_finetune(img_arr: np.ndarray, kernel_name: str = "center_surround",
                      mask_ratio: float = 0.25, seed: int = 7) -> Dict:
     """自监督：掩码重建——随机遮蔽部分 cell，用当前核从邻域预测被遮 cell，
     以重建误差的数值梯度微调 7 参数（有限差分——梯度本身可审计）。
-    返回 {kernel, loss_curve, init_loss, final_loss}。"""
+    返回 {kernel, loss_curve, init_loss, final_loss}。
+
+    `epochs <= 0` 表示「不训练」：`loss_curve` 为空，`final_loss` 回落为
+    `init_loss`（没有训练就不存在「训练后」的读数），核保持为输入核。
+    """
     gray = (0.299 * img_arr[..., 0] + 0.587 * img_arr[..., 1]
             + 0.114 * img_arr[..., 2]).astype(np.float32) if img_arr.ndim == 3 else img_arr.astype(np.float32)
     feat, grid = image_to_grid(gray[..., None].repeat(3, axis=2), cells_across)
@@ -283,8 +287,8 @@ def selfsup_finetune(img_arr: np.ndarray, kernel_name: str = "center_surround",
         w /= (abs(w).sum() + 1e-8)                        # 归一化（核能量守恒——白箱约束）
         loss_curve.append(recon_loss(w, hole))
     return {"kernel": w, "kernel_name": kernel_name, "init_loss": round(init_loss, 5),
-            "final_loss": round(loss_curve[-1], 5), "loss_curve": loss_curve,
-            "algo": ALGO, "epochs": epochs, "lr": lr}
+            "final_loss": round(loss_curve[-1] if loss_curve else init_loss, 5),
+            "loss_curve": loss_curve, "algo": ALGO, "epochs": epochs, "lr": lr}
 
 
 def save_consolidated(kernels: Dict[str, np.ndarray], meta: Dict, path: str) -> str:
