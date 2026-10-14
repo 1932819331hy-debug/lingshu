@@ -8,14 +8,15 @@
 `total == 0` 时 `hit_rate` 返回 `None`（JSON `null`），含义是没有验证读数。
 有证据但全部未命中时，读数仍是 `0.0`。
 
-`verify_run`、`SimulationLoop`、`SevenLayerLoop` 只把有验证读数的轮次纳入
-原来的按轮平均；轮次 WAL/审计仍保留，包括 `total=0` 的轮次。
+`verify_run` 与 `SimulationLoop` 只把有验证读数的轮次纳入原来的按轮平均；
+`SevenLayerLoop` 改为对审计全量池化（`sum(hits)/sum(total)`，`total=0` 的轮次
+不进入分子与分母）。轮次 WAL/审计仍保留，包括 `total=0` 的轮次。
 推演 WAL 的 episode 带 `hits/total/pending`，可区分失分、遮蔽和缺少预测。
 推演汇总给出 `verified_ticks` 与 `unverified_ticks`，七层报告的 L5 同样给出计数。
 尚无任何有效读数的汇总及无可比较分段的提升量也返回 `None`。
 
 兼容性变化：调用者不能再把这些可能缺失的读数无条件当作 float 运算。
-有读数的数值、按轮平均方式与假设生长/回退策略保持原契约。
+有读数的数值与假设生长/回退策略保持原契约。
 认知载荷中的“最近已验证轮次命中率”明确是最近一次有效读数；完全没有有效读数
 时显示“暂无验证读数”，并附有效轮次计数。
 

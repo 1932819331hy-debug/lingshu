@@ -651,7 +651,10 @@ class SimulationLoop:
                          f"pos=({n['pos'][0]}, {n['pos'][1]}, {n['pos'][2]}) "
                          f"confidence={round(n['confidence'], 3)}")
         rate = round(self._rolling_rates[-1], 4) if self._rolling_rates else None
-        reading = rate if rate is not None else "暂无验证读数"
+        # 双契约并存：无读数时数值槽位保持 main 的 `None` 写法（tests/
+        # test_world_observation_contracts.py 断言 "命中率: None"），「暂无验证读数」
+        # 只作括号说明（tests/test_world_feedback.py 断言该标记存在）。
+        reading = f"{rate}（暂无验证读数）" if rate is None else rate
         lines += ["", f"最近已验证轮次命中率: {reading} | "
                   f"已验证轮次 {len(self._rolling_rates)}/{self.ticks_stepped} | "
                   f"节点 {g['node_count']} | "
