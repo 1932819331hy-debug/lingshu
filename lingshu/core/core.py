@@ -3072,14 +3072,24 @@ class LayeredStore:
             raise PermissionError(
                 "D-007 设计者认证失败：密钥无效或未配置 AEIS_DESIGNER_KEY（fail-closed）")
         c = self.conn.cursor()
-        c.execute("SELECT node_id, status, content_hash FROM promotion_proposals WHERE id=?",
-                  (proposal_id,))
+        c.execute("SELECT node_id, status, content_hash, requester, verified_by "
+                  "FROM promotion_proposals WHERE id=?", (proposal_id,))
         row = c.fetchone()
         if not row:
             return None
         node_id, status, bound_hash = row[0], row[1], (row[2] or "")
+        requester, verified_by = (row[3] or ""), (row[4] or "")
         if status != "verified":
             return None
+        # #565：身份互斥——终裁人不得等于提议人或复核人（C-4 / D-02「三者两两互斥」）。
+        # #118 的修复建议第1条把「终裁人是否允许与前序角色重合」显式标为**由维护者
+        # 定口径**的悬置项；同仓 A-2 流水线（`adjudicate_verifier_standard`）已按
+        # C-4/D-02 落实为 `adjudicator not in (proposer, independent_reviewer,
+        # cs_reviewer)`，本件按同一口径对齐，避免两条流水线行为不一致。
+        # 例外：库里若 `verified_by` 为空（老提案未经复核人字段），不据空值拒——
+        # 只在 `adjudicated_by` 与非空的 `requester`/`verified_by` 相撞时拒。
+        if adjudicated_by and adjudicated_by in (x for x in (requester, verified_by) if x):
+            return None  # 身份互斥：终裁人与提议/复核人两两互斥（C-4 / D-02）
         # #140：内容绑定比对（未绑定哈希的老提案（bound_hash 空）不做比对，保持向后兼容）
         node = self.get_node(node_id)
         # #167：节点存续门（fail-closed）——见 docstring。先于哈希比对：老提案
