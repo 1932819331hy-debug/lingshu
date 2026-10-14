@@ -1712,13 +1712,10 @@ class LayeredStore:
                 return False          # 不存在或本就未验证 ⇒ 无变更
             c.execute("UPDATE edges SET verified=0, last_verified=NULL WHERE id=?",
                       (edge_id,))
-        try:
-            self.log_action(
-                "edge_unverified",
-                f"撤销边 {edge_id} 的已验证标记（重新进入衰减面）",
-                outcome={"edge_id": edge_id})
-        except Exception:
-            pass
+        self.log_action(
+            "edge_unverified",
+            f"撤销边 {edge_id} 的已验证标记（重新进入衰减面）",
+            outcome={"edge_id": edge_id})
         return True
 
     # ---------- 查询 ----------
