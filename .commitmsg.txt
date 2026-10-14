@@ -1,0 +1,24 @@
+fix(scripts): #555 残留——容器（引用块/列表项）内的 HTML 块起点与结束条件均在剥容器后的内容上判定
+
+PR #555 复核指出（维护者 @FuRongJun-1999）：
+> 抽取器的 HTML 块起点判定用**原始行** lines[i]，而围栏判定用剥掉引用块
+> 标记的 head ⇒ 两者口径不一致，下列变体在改后仍会执行隐藏块：
+> - `> <div title="`（引用块内）——仍选中 HIDDEN
+> - `- <div title="`（列表项内）——仍选中 HIDDEN
+> （4 空格缩进非向量——GitHub 渲染为可见缩进代码块）
+
+修法：新增 _container_strip（剥块引用 > ＋列表项 -/*+/N. 标记）；
+① HTML 块起点判定 _html_block_start(content, prev_blank) 改在
+剥容器后的内容上跑；② HTML 块内的结束条件（⑥⑦ 空行收 / ① 闭标签 /
+②④⑤ 终串）同样在剥容器后的内容上判定——`> ` 后的空行也是空行。
+
+改前→改后实测：
+  引用块变体  chosen=print(HIDDEN_BQ) → print(VISIBLE_BQ)
+  列表项变体  chosen=print(HIDDEN_LI) → print(VISIBLE_LI)
+  正常引用块围栏（防过修） print(OK_BQ) → print(OK_BQ)（不回归）
+
+另修小缺陷：测试件 __main__ 块补 import sys（直接 python 跑不再 NameError）。
+
+守卫补 G8/G9（引用块/列表项变体必绿＋正常围栏防过修）；G7 形态锚更新
+（锚 _container_strip 与 content 口径）。合计 28 passed
+（9 新守卫 + 17 既有 repro 守卫 + 依赖闭包）。
