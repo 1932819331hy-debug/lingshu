@@ -274,7 +274,7 @@ miss["completion"]["frames"]              # []：不给轨迹
 
 seam.ref_anchor 是观测末帧的 ref 位置，seam 的 matched_record_index 与
 matched_record_tick 与 match 同名两键一致。actor 与 ref 同名时门面返回 error，error
-文案是「actor 与 ref 不得同名：帧里的 entities 会互相覆写」。
+文案是“actor 与 ref 不得同名：帧里的 entities 会互相覆写”。
 
 ### 过程重组
 
