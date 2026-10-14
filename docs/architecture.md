@@ -33,9 +33,9 @@ lingshu
 └── world  世界模型：推演循环与物理沙盒（重载可选）
 ```
 
-- **当前计数**（本仓实读，随聚合动作更新）：`lingshu` 包 **75** 个 `.py`
-  （**70** 个非 `__init__` 模块）——core 12 / nn 14 / gen 7 / world 36 / 包根 1；
-  import 冒烟 **75/75**（2026-10-14 逐模块 `import` 实跑读数；守卫只核该行的分子
+- **当前计数**（本仓实读，随聚合动作更新）：`lingshu` 包 **77** 个 `.py`
+  （**72** 个非 `__init__` 模块）——core 12 / nn 14 / gen 7 / world 38 / 包根 1；
+  import 冒烟 **77/77**（2026-10-14 逐模块 `import` 实跑读数；守卫只核该行的分子
   分母相等且等于实读 `.py` 总数，见 `tests/test_doc_module_counts_guard.py`）。
   下表 §七 各行是**逐次聚合动作的快照**（计数为该次引入时的读数），当前计数以本行为准。
 - **轻核承诺**：`core` 不因本仓的「完整」而增重——可单独安装、单独运行；
@@ -110,5 +110,7 @@ lingshu
 | 2026-10-04 | 查看自身记忆 · 查看器工具面：`tools/coggraph/view_memory.py`（一键链路：导出→推导边→会话链→命名审计→同义归并→构建查看器[→起服务]）＋ README「一键」用法成书 | 本仓（coggraph 七件之上的工具面封装） | **端到端构造性验证**：在役库全链实测 18174 节点/83016 边；只读不变量（漂移经归因＝外部引擎周期批次）；服务探针 200 与正文回读；独立复核 15 项 | `6a84004` |
 | 2026-10-06 | **世界模型 × 脑 适配器**：`lingshu/world/brain_store.py`（MCP stdio 客户端 + `BrainStore`/`BrainEngine`/`connect`；M1 读向＋M2 写向最小闭环）＋ `tests/test_brain_store.py`（隔离库端到端 10 断言）——intake 见 `docs/intake/brain-store-v0.1/` | **本仓新件**（依 0.8.0「身体×脑」对接设计四裁定之一＝适配器归身体侧；对端 `dsh-memory` 承接 spatial 直存与组合冒烟腿） | CLEAN（机械扫描 2 文件 0 命中；连接参数零本机路径字面量；端到端实证：`ingest_scene`→世界重建逐项断言，零改动对接） | `fb4b98b` |
 | 2026-10-08 | 身体侧导出 v0.2：固化物 `kernels_img0.json`（白箱固化产物，source 字段级脱敏；核数值与源逐位一致）＋ 构造性测试件 8 件（`tests/test_hex_{cnn,composite,gen,hier,ortho,search,text,train}.py`——理论稿点名证据所在面；`test_hex_text` 含 2 项已知红＝上游同跑同红）——intake 见 `docs/intake/body-export-v0.2/` | 身体侧真源（AEIS）续批；模块刷新判定＝**无过时**（52 件与上游现源管线产物逐件比对，2 处本仓既有脱敏差异保留不刷新） | CLEAN（新增面 0 命中：tests 9 / assets 1 / intake 3；扩展审计覆盖 .json；全仓复扫 8 处既有面复核记录见 intake `AUDIT.md`） | `dc1cc3b` |
+
+| 2026-10-09 | 场景消费整合 v0.1：共享场景 API + demo/local/brain CLI + 五任务/只读库/真实 MCP 验收；intake 见 `docs/intake/scenario-v0.1/` | **本仓新件**，身体侧消费入口，复用现有 core/WorldModel/MCP | 内容/隐私双清单 CLEAN；隔离合成数据，资格不升格；接口与可见性取舍交理论核 | [PR #375（提交见 PR）](https://github.com/FuRongJun-1999/lingshu/pull/375) |
 
 *登记纪律：每次聚合动作在本表追加一行（件名 / 来源 / 日期 / 双清单结论 / 提交号）。*
