@@ -417,7 +417,34 @@ def _find_margin_clamps(repo, rel):
                         "fn": enc.get(id(node), "?"),
                         "form": "max(%s, min(%s - %s, ...))"
                                 % (_norm(lo)[:26], _norm(left_x)[:26], _norm(lo)[:26])})
-        # ---------- Cap-2：边界算式**经参数**进共享 helper ----------
+        # ---------- inline 档（reversed）：#576 min(hi, max(lo, v)) ----------
+        # 旧实现只抓 max(lo, min(hi, v))；反序嵌套 min(hi, max(lo, v))
+        # 整类漏报（判死档 0 命中，只剩 suspect 兜底）。
+        for node in ast.walk(fn):
+            if not (_is_builtin(node, "min") and len(node.args) == 2):
+                continue
+            hi, inner = node.args
+            if not (_is_builtin(inner, "max") and len(inner.args) == 2):
+                continue
+            lo = inner.args[0]
+            hi_x = resolve_left(hi, env)
+            if not (isinstance(hi_x, ast.BinOp) and isinstance(hi_x.op, ast.Sub)):
+                continue
+            if not repo.same_bound(hi_x.right, lo, rel, env, cls_env, imps):
+                continue
+            left_x = resolve_left(hi_x.left, env)
+            left_val, _ = repo.value(left_x, rel, env, cls_env, 0, imps)
+            if left_val is not None:
+                tier = "fixed-bound"
+            elif isinstance(lo, (ast.Name, ast.Attribute)):
+                tier = "variable"
+            else:
+                tier = "literal"
+            out.append({"file": rel, "line": int(getattr(node, "lineno", 0)), "tier": tier,
+                        "fn": enc.get(id(node), "?"),
+                        "form": "min(%s - %s, max(%s, ...))"
+                            % (_norm(left_x)[:26], _norm(lo)[:26], _norm(lo)[:26])})
+                # ---------- Cap-2：边界算式**经参数**进共享 helper ----------
         for node in ast.walk(fn):
             if not isinstance(node, ast.Call):
                 continue

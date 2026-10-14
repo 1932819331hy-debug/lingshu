@@ -28,6 +28,8 @@
   C 四站点**已改路由**：都 `import` 共享模块，且文件内**不再有**字面 `max(0.5, min(…-0.5,…))`
     —— 抽 ② ⇒ 红
   D 扫描器**能抓新拷贝**（往临时目录注入一份 ⇒ 必须被发现）—— 抽 ④ ⇒ 红
+  E 扫描器**能抓反序形态**（注入 `min(hi, max(lo, v))` ⇒ 必须被发现，`#576` 的反序漏报形态）
+    —— 抽反序块（`_find_margin_clamps` 的 inline 档）⇒ 红
 
 运行（仓根）：python -X utf8 -m pytest tests/test_coord_contract_single_source_guard.py -q --no-header
 """
@@ -201,3 +203,22 @@ def test_d_扫描器能抓新拷贝():
     for h in real:
         assert h["file"].split("/")[-1] not in SITES, \
             "%s 仍有 clamp 拷贝：%r" % (h["file"], h)
+
+
+def test_e_扫描器能抓反序形态拷贝():
+    """E：往临时目录注入**反序**嵌套 `min(hi, max(lo, v))` ⇒ 必须被发现。
+
+    `#576` 的漏报形态：旧实现只抓 `max(lo, min(hi, v))`，反序整类判死档**零命中**。
+    本断言把「反序块」焊进回归 —— 抽掉该块 ⇒ 本断言红。
+    """
+    with tempfile.TemporaryDirectory() as td:
+        sub = os.path.join(td, "pkg")
+        os.makedirs(sub)
+        with open(os.path.join(sub, "rev_site.py"), "w", encoding="utf-8") as f:
+            f.write("def step(pos, size):\n"
+                    "    nx = min(size - 0.5, max(0.5, pos[0]))\n"
+                    "    return nx\n")
+        hits = [h for h in C.scan_clamp_copies(td)
+                if h["tier"] in ("literal", "variable")]
+        assert len(hits) == 1, "注入的反序形态没被扫出来：%r" % hits
+
