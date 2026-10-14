@@ -86,8 +86,19 @@ def validate_morph(values):
     for i, v in enumerate(values[1:], 1):
         s = path_signature(v)
         if s != sig:
-            return False, ("第 %d 个 value 与首个不同构：%s vs %s"
-                           % (i, s[:4], sig[:4]))
+            #: ⚠ 报错必须指出**第一处不同**。原来只打印 `s[:4]` 与 `sig[:4]`：
+            #: 差异若出现在第 5 项之后，两边打印出来**一模一样**
+            #: （实测见过 `[('M',2),('L',2),('L',2),('L',2)] vs 同一串`），
+            #: 拿到这条报错也**无法定位**问题。
+            j = min(len(s), len(sig))
+            for k in range(j):
+                if s[k] != sig[k]:
+                    j = k
+                    break
+            lo = max(0, j - 2)
+            return False, ("第 %d 个 value 与首个不同构：首处不同在第 %d 项"
+                           "（共 %d vs %d 项）；该处起 %s vs %s"
+                           % (i, j, len(s), len(sig), s[lo:j + 3], sig[lo:j + 3]))
     return True, ""
 
 

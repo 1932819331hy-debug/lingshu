@@ -428,6 +428,8 @@ def export_anim_document(draw_objs, cam_factory, path, keyframes=5, dur=14.0,
     # 每个部件 → 一条 path（子路径 = 各面），跨关键帧 morph
     tl = SM.Timeline(dur=dur)
     n_morph = 0
+    n_skip = 0                 #: 因拓扑变化而**不做 morph**（降级为静态）的部件数
+    skip_why = []              #: 逐条原因（供读数核对，不静默）
     for ob in draw_objs:
         if targets and ob.name not in targets:
             continue
@@ -437,18 +439,23 @@ def export_anim_document(draw_objs, cam_factory, path, keyframes=5, dur=14.0,
         if any(not d for d in ds):
             continue
         ok, why = SM.validate_morph(ds)
-        if not ok:
-            raise ValueError("部件 %r 的关键帧路径不同构：%s（面序/点数在环视中变化）"
-                             % (ob.name, why))
         # 颜色：取第一帧的面色（填充不随环视变）
         col = _object_fill(ob, docs[0][0], st)
         lay_id = ob.layer if ob.layer in out._by_id else "body"
         lay = out.layer(lay_id, label=lay_id)
-        lay.children.append(tl.morph(ds, dur=dur, fill_mode="freeze").xml())
+        if ok:
+            lay.children.append(tl.morph(ds, dur=dur, fill_mode="freeze").xml())
+            n_morph += 1
+        else:
+            #: ⚠ 拓扑在环视中变了（点数/面序/可见段变化）⇒ **该部件不做 morph**，
+            #: 只把第一帧的路径当**静态**元素发出去，并**计入读数** `morph_skipped`
+            #: （不静默丢、也不因为一个部件把整份 `anim.svg` 炸掉 —— 实测原来就是 raise，
+            #: 结果 `anim.svg` **根本没被产出**）。
+            n_skip += 1
+            skip_why.append({"object": ob.name, "reason": why})
         out.path(ds[0], layer=lay, fill=col, stroke=st.get("ink", PALETTE["ink"]),
                  stroke_width=st.get("lw_contour", 2.0), fill_rule="nonzero",
                  stroke_linejoin="round")
-        n_morph += 1
     # SMIL 只保留"整幅动画"，清掉 build_document 留下的静态子元素以免重复
     for lay in out._layers:
         lay.elements = [e for e in lay.elements if e[0] == "path"]
@@ -456,6 +463,7 @@ def export_anim_document(draw_objs, cam_factory, path, keyframes=5, dur=14.0,
     with open(path, "w", encoding="utf-8", newline="\n") as fh:
         fh.write(svg)
     return out, {"path": path, "bytes": len(svg.encode("utf-8")), "morphed": n_morph,
+                 "morph_skipped": n_skip, "morph_skipped_detail": skip_why,
                  "keyframes": keyframes, "dur": dur,
                  "emitted": out.stats()["emitted"], "anim_items": len(tl)}
 
@@ -690,11 +698,35 @@ def export_builtin_lineart_svg(path, source="SCENE", bake=True, frame=1,
             dr = getattr(fr, "drawing", None)
             if dr is not None:
                 strokes += len(dr.strokes)
-    res = bpy.ops.wm.grease_pencil_export_svg(filepath=path, resolution=int(resolution),
-                                              scale=float(scale))
+    #: ⚠ 这个算子在不同 Blender 版本上接受的 kwargs **不一样**：实测 5.2 **既没有**
+    #: `resolution` 也**没有** `scale`（先只丢一个 ⇒ 报错会从 `resolution` 变成
+    #: `scale`，白跑一轮）。所以**按算子的真实属性集**决定传什么，不猜签名；
+    #: 丢掉哪些 kwarg **记进读数**（不静默吞）。
+    _want = {"resolution": int(resolution), "scale": float(scale)}
+    _use, _dropped = {}, []
+    try:
+        _props = {p.identifier for p in
+                  bpy.ops.wm.grease_pencil_export_svg.get_rna_type().properties}
+    except Exception as _exc:                                     # noqa: BLE001
+        _props = None
+        _dropped.append("introspect-failed:%s: %s" % (type(_exc).__name__, _exc))
+    for _k, _v in _want.items():
+        if _props is None or _k in _props:
+            _use[_k] = _v
+        else:
+            _dropped.append(_k)
+    try:
+        res = bpy.ops.wm.grease_pencil_export_svg(filepath=path, **_use)
+    except TypeError as _exc:                                     # 兜底：只留 filepath
+        _dropped.append("retry-bare:%s" % _exc)
+        res = bpy.ops.wm.grease_pencil_export_svg(filepath=path)
+    _degraded = ("丢了 %s（算子属性集 %s）" % (", ".join(_dropped), sorted(_props))
+                 if _dropped else None)
     txt = open(path, "r", encoding="utf-8").read() if os.path.isfile(path) else ""
     return {"ret": str(res), "strokes": strokes, "bytes": len(txt.encode("utf-8")),
-            "paths": txt.count("<path"), "svg_head": txt[:220]}
+            "paths": txt.count("<path"), "svg_head": txt[:220],
+            "signature_degraded": _degraded,
+            "kwargs_used": sorted(_use)}
 
 
 def read_render_alpha(path, threshold=0.5):
