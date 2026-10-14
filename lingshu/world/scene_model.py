@@ -22,6 +22,7 @@ from __future__ import annotations
 
 import json
 import math
+import sqlite3
 import warnings
 from dataclasses import dataclass, field
 from typing import Dict, List, Optional, Tuple
@@ -374,6 +375,7 @@ def ingest_scene(agent, scene_desc, store=None, tag: str = "spatial",
                 if entity.name == a:
                     entity.relations.append((b, kind))
     written = []
+    _pending_states = []          # [(name, state, node_id)] —— 延迟到循环后一次提交
     for entity in entities:
         name, cat, state = entity.name, entity.category, entity.state
         x, y, z = entity.pos
@@ -410,18 +412,42 @@ def ingest_scene(agent, scene_desc, store=None, tag: str = "spatial",
         # 状态写入 state_attributes（store 直接更新）。
         # 状态未入账不阻断导入（节点已建，世界仍可加载），但必须可观测：
         # 否则节点正文写着状态、重建世界却回落 neutral，两边静默矛盾。
-        try:
-            store.conn.execute(
-                "UPDATE nodes SET state_attributes=? WHERE id=?",
-                (json.dumps({"state": state}), node.id))
-            store.conn.commit()
-        except Exception as exc:                                  # noqa: BLE001
-            warnings.warn(
-                "场景实体 %s 的状态 %r 未写入脑侧台账（%s: %s）；"
-                "记忆节点已创建，重建世界时该实体状态会回落为 neutral"
-                % (name, state, type(exc).__name__, exc),
-                RuntimeWarning, stacklevel=2)
+        # ★优化（本笔）：旧实现**每个实体**一次 `execute` + `commit()`（N 次 fsync）。
+        # 现改为**先登记、循环后一次 `executemany` + 一次提交**；批量失败时
+        # **回落到逐条路径**（保留原有的逐实体告警文案与「不阻断导入」语义）。
+        # ⇒ 常见路径省 N−1 次提交；失败路径逐位等同旧实现。
+        _pending_states.append((name, state, node.id))
         written.append(node.id)
+    if _pending_states:
+        try:
+            store.conn.executemany(
+                "UPDATE nodes SET state_attributes=? WHERE id=?",
+                [(json.dumps({"state": _st}), _nid)
+                 for _nm, _st, _nid in _pending_states])
+            store.conn.commit()
+        except Exception:                                         # noqa: BLE001
+            # 批量失败 ⇒ 回退到逐条（旧路径）：先把可能已开的隐式事务丢掉，
+            # 再逐条重试并逐条告警——粒度和文案与改动前逐位一致。
+            try:
+                store.conn.rollback()
+            except (AttributeError, sqlite3.Error):
+                # best-effort 清事务：脑侧 store 的 `conn` 是 `_ConnShim`（无
+                # `rollback`，AttributeError 属**常态**而非异常）；真 sqlite 连接
+                # 无活动事务时 rollback 为 no-op。故此处收窄到这两种预期失败，
+                # 不放宽成 `except Exception`（那会把「库读坏」这类真错静默吞掉）。
+                pass
+            for _nm, _st, _nid in _pending_states:
+                try:
+                    store.conn.execute(
+                        "UPDATE nodes SET state_attributes=? WHERE id=?",
+                        (json.dumps({"state": _st}), _nid))
+                    store.conn.commit()
+                except Exception as exc:                          # noqa: BLE001
+                    warnings.warn(
+                        "场景实体 %s 的状态 %r 未写入脑侧台账（%s: %s）；"
+                        "记忆节点已创建，重建世界时该实体状态会回落为 neutral"
+                        % (_nm, _st, type(exc).__name__, exc),
+                        RuntimeWarning, stacklevel=2)
     return written
 
 

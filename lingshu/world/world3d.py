@@ -629,11 +629,11 @@ class World3D:
 
         # 画家算法：按相机深度降序（远先画）
         for obj in sorted(self.objects, key=lambda o: -o.depth(cam)):
-            self._draw_object(draw, obj, cam, screen_w, screen_h, horizon_px)
+            self._draw_object(draw, obj, cam, screen_w, screen_h)
         return img
 
     def _draw_object(self, draw, obj: Object3D, cam: Camera3D,
-                     screen_w: int, screen_h: int, horizon_px: float) -> None:
+                     screen_w: int, screen_h: int) -> None:
         """绘制单个物体——有形状库则按部件组合绘制（里程碑1.3），否则回退单图元。"""
         # 里程碑1.3：语义-几何绑定（物品到语义的还原——部件组合形状）
         try:
