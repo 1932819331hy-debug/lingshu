@@ -659,6 +659,38 @@ class World3D:
                            background=background, ground_color=ground_color,
                            ssaa=tier["ssaa"])
 
+    def render_svg(self, screen_w: int = 800, screen_h: int = 600,
+                   camera: Camera3D = None, background: Tuple[int, int, int] = (20, 24, 40),
+                   ground_color: Tuple[int, int, int] = (30, 34, 50),
+                   stats: Optional[Dict] = None, backend=None) -> str:
+        """与 `render` 同参同序的**矢量出口**：返回 SVG 文档字符串。
+
+        · 绘制序列复用 `_paint`（与位图出口同一份代码）⇒ 画家序/可见面剔除/近平面
+          裁剪同构；SVG 按文档顺序绘制，"远先画"天然成立，**不另做排序**；
+        · `screen_w/screen_h` 与位图同判 `MAX_SCREEN_DIM`（#416，见 `_check_screen_dim`）；
+        · 传了 `stats`（dict）时**原地写入** `SVGBackend.stats()`：退化输入被跳过时
+          调用方看得见（不静默——跳过的原因与次数都在里面，`skipped` 非空不算失败）；
+        · `backend` 给了就**用它**替掉内置 `SVGBackend`（须与 `ImageDraw` 同形）；
+          缺省 `None` ⇒ 行为与不传**完全一致**（可测，见守卫 test_mesh3d_svg_backend_guard）。
+          用途：分层 SVG 等外部后端复用同一条绘制序列，不必各自复制一遍 `_paint`。
+          注入的后端有 `to_svg()` ⇒ 返回其字符串；没有 ⇒ 原样返回后端对象
+          （便于调用方自己取用），此时返回类型不是 `str`，调用方自负。
+        """
+        self._check_screen_dim(screen_w, screen_h)
+        if backend is None:
+            try:
+                from .svg_backend import SVGBackend
+            except ImportError:
+                from .svg_backend import SVGBackend
+            backend = SVGBackend(screen_w, screen_h, background=background)
+        cam = camera or self.camera
+        self._paint(backend, cam, screen_w, screen_h, ground_color)
+        if stats is not None and hasattr(backend, "stats"):
+            stats.update(backend.stats())
+        if hasattr(backend, "to_svg"):
+            return backend.to_svg()
+        return backend
+
     def _draw_contact_shadow(self, draw, obj, cam: Camera3D,
                              screen_w: int, screen_h: int, ground_color) -> None:
         """把落地物体在地面平面上的足迹画成一块压暗的椭圆（blob shadow）。
