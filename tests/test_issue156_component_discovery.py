@@ -93,7 +93,11 @@ STDLIB_ALLOWED = frozenset({
     # 临时文件（tempfile：2026-10-13 新增 world/anim.py 引入——GIF 导出采用
     # 「写同目录 tmp → 回读自校验 → os.replace 原子替换」，故需要它；
     # 标准库。守卫按设计判红「未知裸名」，此处补分类而非放宽判据）
-    "tempfile",
+    # 自生成建模/物理/呈现（本批新增模块）引入的标准库裸名：
+    #   tempfile←world/anim.py 之外的 GIF 落盘、array←world/mesh3d.py 的深度缓冲、
+    #   xml←world/mesh_svg.py 的 SVG 解析。皆标准库；守卫按设计判红「未知裸名」，
+    #   此处**补分类而非放宽判据**。
+    "tempfile", "array", "xml",
     # 命令行 / 子进程
     "argparse", "subprocess",
 })

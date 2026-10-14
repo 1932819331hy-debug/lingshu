@@ -2011,6 +2011,21 @@ def install_prediction_wrappers(*, verify=True):
     if verify:
         assert_wrapper_pair()
         assert_coord_frame()          # 另一条轴：坐标口径契约（P3）
+    # `lingshu.world.physics` 的物理运动预测层：**同一入口**里组合（幂等），
+    # 不新增第二处模块级绑定语句（与 P3 坐标契约同一条纪律）。
+    # 顺序：最外层 ⇒ 只在"内层没有确定语义"的模式上出手（见 physics_predict.WEAK_MODES）。
+    # ⚠ **缺省关**（opt-in：`LINGSHU_PHYSICS_LAYER=1`）。原因**不是**"没做完"，是实测的硬门：
+    #   缺省开后 `-k "world or shapes or mesh"` 出现 **3 条新增红**（A/B 已判定因果，
+    #   读数见 `_evidence/factory/raw/physics-layer-ab.txt`）：
+    #       tests/test_pursuit_prediction.py::test_chaser_of_random_target_moves_center_with_wide_bound
+    #       tests/test_world_observation_contracts.py::test_long_occlusion_preserves_last_measured_direction
+    #       tests/test_world_observation_contracts.py::test_multistep_forecast_is_verified_only_at_its_target_tick
+    #   而 9 个 bench 场景读数**逐位不变**。⇒ 本层是"**可选**能力"，不是"缺省能力"；
+    #   要让它缺省生效，必须先让上述 3 条契约在物理层存在时也成立（待办）。
+    import os as _os
+    if _os.environ.get("LINGSHU_PHYSICS_LAYER") == "1":
+        from .physics_predict import compose as _compose_physics_layer
+        _compose_physics_layer(_WM_FACTORY)
     UnifiedWorldModel.perceive = _WM_FACTORY["perceive"]
     UnifiedWorldModel.generate = _WM_FACTORY["generate"]
     globals()["_wm_guard_trip"] = _WM_FACTORY["guard_trip"]
