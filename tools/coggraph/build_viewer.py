@@ -311,16 +311,27 @@ def main(argv=None):
     def canon(x):
         return alias_to_canon.get(x, x)
 
+    # #618：折叠损耗必须可见，不再静默丢边。两类损耗分别计数——
+    #   L1 自环丢弃（折叠后 s==t；真源 export 侧无 s==t 防护，可自带 a->a）；
+    #   L2 同键合并（两条真关系折叠后撞 (s,t,type,derived) 同键，并成一条）。
+    #   L3 别名节点剔除（下方 vnodes 过滤）是 #410 的刻意设计，不属损耗、不告警。
     all_edges, seen_edge = [], set()
+    selfloop_dropped, dup_merged = 0, 0
     for e in g["edges"] + d_edges:
         s, t = canon(e["s"]), canon(e["t"])
         if s == t:
+            selfloop_dropped += 1
             continue
         k = (s, t, e["type"], bool(e.get("derived")))
         if k in seen_edge:
+            dup_merged += 1
             continue
         seen_edge.add(k)
         all_edges.append({"s": s, "t": t, "type": e["type"], "derived": bool(e.get("derived"))})
+    if selfloop_dropped or dup_merged:
+        print("折叠损耗：自环丢弃 %d 条 / 同键合并 %d 条（同义折叠后 s==t 或同键重复被剔除，"
+              "计数见 viewer_graph.json 顶层 dropped_selfloop / merged_edges）"
+              % (selfloop_dropped, dup_merged))
 
     deg = collections.Counter()
     for e in all_edges:
@@ -383,9 +394,11 @@ def main(argv=None):
     layer_count = collections.Counter(n["layer"] for n in vnodes)
     doc = (HTML.replace("%%LAYER_COLOR%%", json.dumps(LAYER_COLOR))
                .replace("%%RULE_COLOR%%", json.dumps(RULE_COLOR)))
+    # #618：损耗计数恒写（含 0），供下游与 meta.counts.edges 对账（顶层口径同 derived，见 #413）。
     vgraph = {"meta": g["meta"], "nodes": vnodes, "edges": vedges,
               "layer_count": dict(layer_count), "edge_type_count": dict(et_count),
-              "derived": d_edge_count, "merged_aliases": merged_alias_count}
+              "derived": d_edge_count, "merged_aliases": merged_alias_count,
+              "dropped_selfloop": selfloop_dropped, "merged_edges": dup_merged}
 
     os.makedirs(args.out, exist_ok=True)
     with io.open(os.path.join(args.out, "index.html"), "w", encoding="utf-8", newline="\n") as f:
