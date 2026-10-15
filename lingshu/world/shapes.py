@@ -351,6 +351,13 @@ def load_shapes(path: str, source: str = None) -> Tuple[int, int]:
       {"schema": "lingshu.shapes/1",
        "source": "blender/HEX01",
        "shapes": {"<category>": [ {"kind","pos","size","color"}, ... ], ...}}
+
+    `pos_origin`（#575）：契约上是**必需字段**（#468 声明）——`"bbox_center"` = 内置口径
+    （部件 `pos` 归零到包围盒中心）；`"anchor"` = 外部枢轴口径（`pos` 相对关节枢轴、原样）。
+    **当前实现**在缺失时发 `DeprecationWarning` 并**回落 `bbox_center`**——不再像改前那样
+    **静默**归零（静默归零会把枢轴锚点挪走、机构错位），但也不阻断既有调用方；只有当取值
+    既非 `bbox_center` 也非 `anchor` 时才 `raise ValueError`。
+
     结构不符或任一件非法 ⇒ raise 且**不写任何类别**（先全量校验再落库，避免半截）。
     """
     with open(path, encoding="utf-8") as f:
@@ -363,7 +370,16 @@ def load_shapes(path: str, source: str = None) -> Tuple[int, int]:
         raise ValueError("shapes 描述缺 shapes 对象或为空")
     src = source or doc.get("source") or os.path.basename(path)
     #: "bbox_center" = 内置口径（归零到包围盒中心）；"anchor" = 外部枢轴口径（原样）
-    pos_origin = doc.get("pos_origin", "bbox_center")
+    # #575：`pos_origin` 应显式声明（见 docstring）。缺失时**告警并回落** `bbox_center`
+    # ——不再静默归零，但也不阻断既有调用方；取值非法才 raise。
+    pos_origin = doc.get("pos_origin")
+    if pos_origin is None:
+        import warnings
+        warnings.warn(
+            "pos_origin 缺失，已按 bbox_center 处理——"
+            "外部导入件应显式声明 pos_origin（#575）",
+            DeprecationWarning, stacklevel=2)
+        pos_origin = "bbox_center"
     if pos_origin not in ("bbox_center", "anchor"):
         raise ValueError("pos_origin 取值非法：%r（须为 bbox_center | anchor）" % pos_origin)
     staged = {}
