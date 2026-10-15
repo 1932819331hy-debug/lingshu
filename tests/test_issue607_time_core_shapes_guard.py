@@ -314,19 +314,30 @@ def test_g3_peeled_helper_unit():
 
 # ------------------------------------------------- G4 仓内全量：exit 0 锁基线
 def test_g4_repo_full_run_exit_zero_locks_baseline():
-    """全仓实跑：出货 baseline 下 exit 0、new==0，命中总数锁定为新基线 17
-    （#607 词表收紧使 physics.py +6 条 R3，已逐条人工复核登记——见 baseline #607 段）。"""
+    """全仓实跑：出货 baseline 下 exit 0、new==0，命中总数锁定为**当前基线值**。
+
+    变更史（均按本仓程序：先逐条复核豁免表、再更新断言）：
+      · 17 条：2026-10-15 #607 词表收紧使 physics.py +6 条 R3（见 baseline #607 段）。
+      · 23 条：2026-10-16 **物理仿真深化 + 碰撞箱**（`drag2`/`slope_friction`/`rolling`/`collision`
+        + `Environment`/`simulate` + AABB/OBB-SAT/MTV/CCD）在 `physics.py` 行号之上插入大量代码
+        ⇒ 既有条目全部 stale、同一违规以新行号出现。**逐条复核 20 条新命中**后确认全部属既有两类豁免
+        （R1 = 物理阻尼/振子**闭式解**与 `_log_cosh` softplus；R3 = **运动学外推**，`tau` 是流逝时间
+        非保持率），`(file,rule)` 多重集 = base 17 + 本笔 6，**无一条被删除** ⇒ **不是放宽判据**。
+    """
     res = run_lint("--json")
     assert res.returncode == 0
     data = payload(res)
     assert data["new_violations"] == []
-    assert data["summary"]["total"] == 17, data["summary"]
+    assert data["summary"]["total"] == 23, data["summary"]
     assert data["stale_baseline_entries"] == []
-    # 新基线的增量恰是 physics.py 的 6 条 R3（原 467/471/475/482/485/931；#662 在
-    # _check_samples 补时间 isfinite 校验插入 6 行 ⇒ 全部 +6，见 baseline #662 重编号段）
-    physics_r3 = sorted(h["line"] for h in data["registered_violations"]
-                        if h["file"] == "lingshu/world/physics.py" and h["rule"] == "R3")
-    assert physics_r3 == [473, 477, 481, 488, 491, 937], physics_r3
+    #: ★改为**形态锚**（照本件 docstring 的声明"锚的是登记存在性而非物理行号本身"）：
+    #: 行号会随 physics.py 的插入/删除漂移，钉死行号会让守卫在**合法重编号**时误报。
+    physics_r3 = [h for h in data["registered_violations"]
+                  if h["file"] == "lingshu/world/physics.py" and h["rule"] == "R3"]
+    assert len(physics_r3) == 11, sorted(h["line"] for h in physics_r3)   # #607 的 6 条 + 本笔 5 条
+    physics_r1 = [h for h in data["registered_violations"]
+                  if h["file"] == "lingshu/world/physics.py" and h["rule"] == "R1"]
+    assert len(physics_r1) == 9, sorted(h["line"] for h in physics_r1)    # 物理阻尼 8 条 + `_log_cosh` 1 条
 
 
 def test_g4_baseline_documents_607_retest():
@@ -334,11 +345,13 @@ def test_g4_baseline_documents_607_retest():
     行号随 #662 的 +6 插入同步移位，锚的是登记存在性而非物理行号本身）。"""
     text = BASELINE.read_text(encoding="utf-8")
     assert "#607" in text
-    for line_no in (473, 477, 481, 488, 491, 937):
-        assert "lingshu/world/physics.py:%d:R3" % line_no in text, line_no
+    #: ★形态锚（不钉物理行号）：physics.py 的 R3 条目数 = #607 的 6 条 + 本笔 5 条
+    r3_lines = [l for l in text.split("\n")
+                if l.startswith("lingshu/world/physics.py:") and l.split(":")[2].split()[0] == "R3"]
+    assert len(r3_lines) == 11, r3_lines
     entries, errors = T.parse_baseline(text)
     assert errors == []
-    assert len(entries) == 17
+    assert len(entries) == 23
     # 每条登记都要有性质注释（与既有守卫 test_time_core_lint.py 同一口径）
     for raw in text.split("\n"):
         if raw.lstrip().startswith("lingshu/"):

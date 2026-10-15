@@ -119,7 +119,7 @@
     {
      "file": "scene_simulator.py",
      "src": "aeis.scene_simulator",
-     "sha256": "f1fc508797ab3848",
+     "sha256": "5dc27acc4cc22dd2",
      "rewrites": 4,
      "sanitized": 0,
      "patches": 0,
@@ -673,6 +673,13 @@
    "base_commit": "eb497f2ab2d067bc97fcca32281bab5a93e5c7e8",
    "note": "重建于最新 main（S3 公开面整改 + CI 首跑三红处置后续）；sha256 核验 LF 归一后的工作树文件。",
    "previous_sha256": {"scene_model.py": "0cce56055028e004", "world_learner.py": "80943255192950d9", "world_model.py": "690041d299ed421c", "core.py": "af7c93c0842ca661"}
+  },
+  "issues_20261016_physics_collision": {
+   "date": "2026-10-16",
+   "kind": "local_fork_modification",
+   "base_commit": "d7b112c8f8248795948aacd443af6c8f577a37ba",
+   "note": "物理仿真深化（drag2/slope_friction/rolling/collision + Environment/simulate + 环境层 + 环境感知预测）+ 碰撞箱（AABB/OBB-SAT/MTV/CCD）与防穿模接线；sha256 核验 LF 归一后的工作树文件。",
+   "previous_sha256": {"scene_simulator.py": "f1fc508797ab3848"}
   },
   "inference_window_update": {
    "date": "2026-10-12",

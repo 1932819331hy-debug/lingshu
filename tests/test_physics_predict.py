@@ -32,8 +32,12 @@
 """
 from __future__ import annotations
 
+import json
 import math
+import os
 import random
+import subprocess
+import sys
 
 import pytest
 
@@ -309,3 +313,387 @@ def test_F3_layer_takes_over_weak_mode():
     assert len(rec["predicted"]) == 3 and rec["predicted"] != [0.0, 5.0, 0.0]
     assert out["physics"]["taken"] == 1
     assert out["physics"]["schema"] == PP.PHYSICS_LAYER_SCHEMA
+
+
+# ================================================ G 环境感知（物理深化 B · 主线）
+#
+# 三件事，缺一件这组就红：
+#   G1 新三类（drag2 / slope_friction / rolling）能被判出并进预测链（`physics:<kind>`）；
+#   G2 **不给 env ⇒ 与改动前的口径逐字段一致**（键集 + kind + 候选点逐位）—— 硬判据。
+#      ⚠ 参照**必须来自冻结基线**（`_evidence/lead/phys/base/<tree>` 的**独立子进程**），
+#        不能用"同一个活库再算一遍"——那样 `now == old` 对**任何发生在 classify 内部的改动
+#        恒真**（复核 M6/M7 实测：84/84 全绿而行为已变）。子进程只调**基线**的
+#        `classify/predict_at`（样本由本进程构造后传入 ⇒ 差异只可能来自 classify 本身）。
+#   G3 给了 env ⇒ 走 `physics.simulate`，预测与 `environment_truth` 对得上；
+#   G4/G5 定点变异：把环境接线抽掉 / 把 env 透传抽掉 ⇒ G3/G1 必须转红。
+
+#: 介质：β = c/m = 0.5 ⇒ 终端速度 v_t = √(g/β) ≈ 4.4287
+_ENV_MED = P.make_environment(medium={"drag_c": 0.5, "mass": 1.0}, up=1)
+#: 地形：20° 斜面，μ_s=0.15 / μ_k=0.1（临界角 ≈ 8.53° > 20° ⇒ 不锁定）
+_ENV_TER = P.make_environment(terrain={"slope_deg": 20.0, "mu_s": 0.15, "mu_k": 0.1}, up=1)
+
+_TH = math.radians(20.0)
+_U = (math.cos(_TH), -math.sin(_TH), 0.0)          # 下坡方向（incline_axis=0）
+_A_SLIDE = P.DEFAULT_G * (math.sin(_TH) - 0.1 * math.cos(_TH))
+_A_ROLL = P.DEFAULT_G * math.sin(_TH) / (1.0 + 2.0)   # β = 2.0
+_SLOPE_P0 = (0.0, 5.0, 0.0)
+_SLOPE_V0 = 0.5
+_Y0_UP = 10.0                                       # drag2 的起始高度（up 轴）
+_D2_V0 = 0.5                                        # 起始下落速度（向下为正）
+_GHZ = 10.0
+_GN = 25                                            # 0.0 .. 2.4 s
+
+
+def _ghist(fn, n=_GN, hz=_GHZ, eid="e"):
+    """造观测史（观测面 = history 的 entities[eid].pos 三元组）。"""
+    hist = []
+    for k in range(n):
+        p = fn(k / hz)
+        hist.append({"tick": k,
+                     "entities": {eid: {"pos": {"x": p[0], "y": p[1], "z": p[2]}}}})
+    return hist
+
+
+def _gpos_drag2(t):
+    """二次阻力下的**下落**轨迹（up 轴坐标 = 起始高度 − 下落位移）。"""
+    return (0.0, _Y0_UP - P.drag2_truth(1.0, 0.5, y0=0.0, v0=_D2_V0, t=t)["y"], 0.0)
+
+
+def _gpos_slope(t, a):
+    """斜面一维运动（沿下坡方向 u）的**闭式**位置。"""
+    s = _SLOPE_V0 * t + 0.5 * a * t * t
+    return tuple(_SLOPE_P0[i] + s * _U[i] for i in range(3))
+
+
+_NEW3 = {
+    "drag2": (_gpos_drag2, _ENV_MED),
+    "slope_friction": (lambda t: _gpos_slope(t, _A_SLIDE), _ENV_TER),
+    "rolling": (lambda t: _gpos_slope(t, _A_ROLL), _ENV_TER),
+}
+
+
+#: 冻结基线树（改动前的 `physics.py`）。可用 `LINGSHU_BASE_TREE` 覆盖。
+# abspath = <phys>/tree/<tree>/tests/test_physics_predict.py ⇒ 上溯 4 层到 <phys>
+_PHYS_DIR = os.path.dirname(os.path.dirname(os.path.dirname(
+    os.path.dirname(os.path.abspath(__file__)))))
+_BASE_TREE = os.environ.get(
+    "LINGSHU_BASE_TREE",
+    os.path.join(_PHYS_DIR, "base", "FuRongJun-1999-lingshu-124ea43"))
+
+#: 子进程里跑的**基线**复算（只依赖基线的 classify/predict_at；样本由父进程传入）
+_BASE_SCRIPT = r"""
+import json, sys
+payload = json.load(sys.stdin)
+from lingshu.world import physics as P
+samples = [(float(t), tuple(float(x) for x in p)) for t, p in payload["samples"]]
+got = P.classify(samples, up=1)
+res = got.get("residuals") or {}
+out = {"classify_keys": sorted(got.keys()),
+       "residual_keys": sorted(res.keys()),
+       "model_keys": sorted((got.get("model") or {}).keys()),
+       "kind": got["kind"], "reason": got["reason"],
+       "residuals": {k: float(v) for k, v in res.items()}}
+if got["kind"] == "static" or float(got["model"].get("residual_rms", 1e9)) > 0.25:
+    out["candidates"] = None
+else:
+    last = float(max(payload["ticks"])); hz = float(payload["tick_hz"])
+    out["candidates"] = [[int(last) + k, list(P.predict_at(got["model"], (last + k) / hz)[0])]
+                         for k in range(1, int(payload["horizon"]) + 1)]
+print(json.dumps(out))
+"""
+
+
+def _samples_and_ticks(history, eid, tick_hz):
+    """观测史 → `(samples, ticks)`（与改动前的 `physics_candidates` 同路构造）。"""
+    from lingshu.world import motion as MO
+    pts = MO.observed_positions(history, eid, None)
+    samples = []
+    for tick, pos in pts:
+        if isinstance(pos, dict) and "pos" in pos:
+            pos = pos["pos"]
+        if isinstance(pos, dict):
+            samples.append((float(tick), (float(pos["x"]), float(pos["y"]), float(pos["z"]))))
+        else:
+            samples.append((float(tick), (float(pos[0]), float(pos[1]), float(pos[2]))))
+    ticks = [r["tick"] for r in history if (r.get("entities") or {}).get(eid) is not None]
+    return [(t / tick_hz, p) for t, p in samples], ticks
+
+
+def _baseline_run(samples, ticks, horizon, tick_hz):
+    """在**冻结基线树**里独立子进程复算 `classify`（样本由本进程传入）。
+
+    ⚠ 必须清掉 `PYTHONPATH`（否则活库会通过它漏进子进程）并把 cwd 设为基线树根；
+    基线树不存在 ⇒ `pytest.skip`（如实报 SKIP，不假装通过）。
+    """
+    if not os.path.isdir(_BASE_TREE):
+        pytest.skip("冻结基线树不存在：%s（设 LINGSHU_BASE_TREE 指过去）" % _BASE_TREE)
+    env = dict(os.environ)
+    env.pop("PYTHONPATH", None)
+    env["PYTHONHASHSEED"] = "0"
+    payload = {"samples": samples, "ticks": ticks, "horizon": horizon, "tick_hz": tick_hz}
+    proc = subprocess.run([sys.executable, "-c", _BASE_SCRIPT], input=json.dumps(payload),
+                          capture_output=True, text=True, encoding="utf-8", errors="replace",
+                          cwd=_BASE_TREE, env=env, timeout=180)
+    assert proc.returncode == 0, "基线子进程失败：%s" % (proc.stderr[-2000:],)
+    return json.loads(proc.stdout.strip().splitlines()[-1])
+
+
+def _live_classify(samples):
+    """活库的 `classify`（同一份样本 ⇒ 与基线可比）。"""
+    return P.classify(samples, up=1)
+
+
+def _legacy_candidates(history, eid, horizon, tick_hz):
+    """**改动前的口径**：由**冻结基线子进程**复算（不再"同一个活库算两遍"）。
+
+    与改动前的 `physics_candidates` 逐字同路：`classify`（**不给 env**）+ `predict_at`。
+    """
+    samples, ticks = _samples_and_ticks(history, eid, tick_hz)
+    base = _baseline_run(samples, ticks, horizon, tick_hz)
+    cands = base["candidates"]
+    return {"kind": base["kind"], "reason": base["reason"], "residuals": base["residuals"],
+            "candidates": (None if cands is None
+                           else [(int(t), tuple(p)) for t, p in cands]),
+            "_base": base}
+
+
+@pytest.mark.parametrize("kind", sorted(_NEW3))
+def test_G1_new_kinds_are_judged_in_prediction_chain(kind):
+    """G1 新三类可判出，并走 `physics:<kind>`；预测点 vs **闭式真值** 到紧容差。"""
+    from lingshu.world import physics_predict as PP
+    fn, env = _NEW3[kind]
+    hist = _ghist(fn)
+    got = PP.physics_candidates(hist, "e", 3, tick_hz=_GHZ, env=env)
+    assert got is not None, "新类 %r 未被判出（本层没接管）" % kind
+    assert got["kind"] == kind, "%r 被判成 %r（%s）" % (kind, got["kind"], got["reason"])
+    assert got["env_aware"] is True
+    t_end = (_GN - 1 + 3) / _GHZ
+    dev = P.vlen(P.vsub(got["candidates"][-1][1], fn(t_end)))
+    assert dev < 1e-9, "%s 预测偏离闭式真值 %.3e" % (kind, dev)
+
+
+@pytest.mark.parametrize("kind", sorted(_NEW3))
+def test_G1b_new_kinds_appear_as_physics_mode(kind):
+    """G1b `mode` 命名沿用 `physics:<kind>`（接进预测链的对外口径）。"""
+    from lingshu.world import physics_predict as PP
+    fn, env = _NEW3[kind]
+
+    class Fake:
+        history = _ghist(fn)
+        tick_hz = _GHZ
+        physics_env = env
+
+    def inner(self, horizon=1, use_patterns=True):
+        return {"horizon": horizon,
+                "predictions": {"e": {"mode": "bounded_stochastic", "predicted": [0.0, 0.0, 0.0]}}}
+
+    out = PP.wrap_generate(inner)(Fake(), 3)
+    rec = out["predictions"]["e"]
+    assert rec["mode"] == "physics:%s" % kind, rec
+    assert out["physics"]["env_aware"] is True
+    assert out["physics"]["env_source"] == ["physics_env"]
+
+
+def test_G2_no_env_is_field_identical_to_legacy():
+    """G2 **不给 env ⇒ 与改动前逐字段一致**（键集 + kind + 候选点 + 残差）—— 硬判据。"""
+    from lingshu.world import physics_predict as PP
+    for fn in (_proj_history, lambda: _ghist(_gpos_drag2)):
+        hist = fn()
+        now = PP.physics_candidates(hist, "ball" if fn is _proj_history else "e", 3,
+                                    tick_hz=_GHZ)
+        old = _legacy_candidates(hist, "ball" if fn is _proj_history else "e", 3, _GHZ)
+        # 键集：**不得**多出 env_aware / env_used / simulated / env_evidence
+        assert sorted(now.keys()) == ["candidates", "kind", "reason", "residuals"], now.keys()
+        assert now["kind"] == old["kind"]
+        assert now["candidates"] == old["candidates"], "候选点必须逐位一致"
+        assert now["residuals"] == old["residuals"]
+        assert now["reason"] == old["reason"]
+
+
+def _live_vs_base_field_set(hist, eid):
+    """跑一次 live 与 base 的字段集对照（G2c/G6/G7 共用）。"""
+    samples, ticks = _samples_and_ticks(hist, eid, _GHZ)
+    return _live_classify(samples), _baseline_run(samples, ticks, 3, _GHZ)
+
+
+def test_G6_mutation_new_kinds_in_first_pass_turns_red(monkeypatch):
+    """G6/复核 **M6**：把新三类塞进 `classify` 的**初筛循环**（无 env 也拟合）⇒ G2c **必红**。
+
+    实测（复核者原报）：`residuals` 对 14/16 样本多出 `drag2` 键，且耗时 2.65s→8.01s。
+    这里用 monkeypatch 复现同一行为，断言"键集确实漂了"（即 G2c 的断言在此态下会失败）。
+    """
+    orig = P.classify
+
+    def m6(samples, gravity=P.DEFAULT_G, up=1, rel_gain=1.6, abs_tol=1e-9,
+           gravity_tol=0.10, env=None):
+        got = dict(orig(samples, gravity=gravity, up=up, rel_gain=rel_gain, abs_tol=abs_tol,
+                        gravity_tol=gravity_tol, env=env))
+        res = dict(got.get("residuals") or {})
+        for kind in ("drag2", "slope_friction", "rolling"):        # ← M6：无 env 也拟合
+            try:
+                m = P.fit_model(kind, samples, gravity=gravity, up=up)
+                res[kind] = float(m["residual_rms"])
+            except P.PhysicsError:
+                continue
+        got["residuals"] = res
+        return got
+    monkeypatch.setattr(P, "classify", m6)
+    live, base = _live_vs_base_field_set(_proj_history(), "ball")
+    assert sorted(live["residuals"].keys()) != base["residual_keys"], (
+        "M6 未造成键集漂移 ⇒ G2c 失去判别力")
+    assert "drag2" in live["residuals"] and "drag2" not in base["residual_keys"]
+
+
+def test_G7_mutation_env_used_key_turns_red(monkeypatch):
+    """G7/复核 **M7**：`env_n=None` → `make_environment()`（不给 env 也返回 `env_used`）⇒ G2c **必红**。"""
+    orig = P.classify
+
+    def m7(samples, gravity=P.DEFAULT_G, up=1, rel_gain=1.6, abs_tol=1e-9,
+           gravity_tol=0.10, env=None):
+        got = dict(orig(samples, gravity=gravity, up=up, rel_gain=rel_gain, abs_tol=abs_tol,
+                        gravity_tol=gravity_tol, env=env))
+        if "env_used" not in got:                                   # ← M7
+            got["env_used"] = P.make_environment(up=up)
+        return got
+    monkeypatch.setattr(P, "classify", m7)
+    live, base = _live_vs_base_field_set(_proj_history(), "ball")
+    assert "env_used" in live, "M7 未注入 env_used ⇒ G2c 失去判别力"
+    assert "env_used" not in base["classify_keys"]
+    assert sorted(live.keys()) != base["classify_keys"], "键集应已漂移（G2c 在此转红）"
+
+
+def test_G2c_classify_field_set_frozen_against_baseline():
+    """G2c（★真·假绿修复）：`classify` 的**全字段**与**冻结基线**一致。
+
+    覆盖三件（复核 M6/M7 的靶）：
+      · `residuals` 的**键集**——M6（把新三类塞进初筛循环 ⇒ 无 env 也拟合）会让它多出
+        `drag2`/`slope_friction`/`rolling` ⇒ **必红**；
+      · `classify()` 返回体的**键集**（含 `env_used` 的**有无**）——M7（`env_n=None` →
+        `make_environment()` ⇒ 返回体多出 `env_used`）⇒ **必红**；
+      · `kind` / `reason` / 各残差**数值**逐项一致（紧容差 1e-12）。
+    """
+    for eid, hist in (("ball", _proj_history()), ("e", _ghist(_gpos_drag2))):
+        samples, ticks = _samples_and_ticks(hist, eid, _GHZ)
+        live = _live_classify(samples)
+        base = _baseline_run(samples, ticks, 3, _GHZ)
+        assert sorted(live.keys()) == base["classify_keys"], (
+            "classify 返回体键集变了：live=%s base=%s" % (sorted(live.keys()), base["classify_keys"]))
+        assert "env_used" not in live, "不给 env 时**不得**返回 env_used（复核 M7 的靶）"
+        assert "env_used" not in base["classify_keys"]
+        assert sorted(live["residuals"].keys()) == base["residual_keys"], (
+            "residuals 键集变了：live=%s base=%s"
+            % (sorted(live["residuals"].keys()), base["residual_keys"]))
+        assert live["kind"] == base["kind"]
+        assert live["reason"] == base["reason"]
+        for k, v in base["residuals"].items():
+            assert abs(float(live["residuals"][k]) - float(v)) <= 1e-12, (k, v)
+
+
+def test_G2b_no_env_keeps_inner_diag_key_set():
+    """G2b 缺省下 `out["physics"]` 的键集与改动前**逐字段一致**（只多一层空转）。"""
+    from lingshu.world import physics_predict as PP
+
+    class Fake:
+        history = _proj_history()
+        tick_hz = _GHZ
+
+    def inner(self, horizon=1, use_patterns=True):
+        return {"horizon": horizon,
+                "predictions": {"ball": {"mode": "bounded_stochastic", "predicted": [0.0, 0.0, 0.0]}}}
+
+    out = PP.wrap_generate(inner)(Fake(), 3)
+    assert sorted(out["physics"].keys()) == ["model_kinds", "schema", "skipped_inner_modes",
+                                            "taken"], out["physics"].keys()
+    assert out["physics"]["taken"] == 1
+    assert out["predictions"]["ball"]["mode"] == "physics:projectile"
+
+
+def test_G3_env_aware_prediction_matches_environment_truth():
+    """G3 给了 env ⇒ 走 `simulate`（闭式），预测与 `environment_truth` 对得上。"""
+    from lingshu.world import physics_predict as PP
+    t_end = (_GN - 1 + 3) / _GHZ
+    # drag2
+    got = PP.physics_candidates(_ghist(_gpos_drag2), "e", 3, tick_hz=_GHZ, env=_ENV_MED)
+    assert got["simulated"]["closed_form"] is True and got["simulated"]["integrated"] is False
+    tr = P.environment_truth(_ENV_MED, "drag2", y0=0.0, v0=_D2_V0, t=t_end)
+    dev = P.vlen(P.vsub(got["candidates"][-1][1], (0.0, _Y0_UP - tr["y"], 0.0)))
+    assert dev < 1e-9, "drag2 与 environment_truth 偏差 %.3e" % dev
+    # slope_friction
+    got = PP.physics_candidates(_ghist(lambda t: _gpos_slope(t, _A_SLIDE)), "e", 3,
+                                tick_hz=_GHZ, env=_ENV_TER)
+    assert got["simulated"]["closed_form"] is True
+    tr = P.environment_truth(_ENV_TER, "slope_friction", v0=_SLOPE_V0, t=t_end)
+    dev = P.vlen(P.vsub(got["candidates"][-1][1], _gpos_slope(t_end, tr["accel"])))
+    assert dev < 1e-9, "slope_friction 与 environment_truth 偏差 %.3e" % dev
+    # rolling（β=2.0；`rolling_truth` 没有 shape= 形参，实心球用 beta=SOLID_SPHERE_BETA）
+    got = PP.physics_candidates(_ghist(lambda t: _gpos_slope(t, _A_ROLL)), "e", 3,
+                                tick_hz=_GHZ, env=_ENV_TER)
+    assert got["simulated"]["closed_form"] is True
+    tr = P.environment_truth(_ENV_TER, "rolling", v0=_SLOPE_V0, beta=2.0, t=t_end)
+    dev = P.vlen(P.vsub(got["candidates"][-1][1], _gpos_slope(t_end, tr["accel"])))
+    assert dev < 1e-9, "rolling 与 environment_truth 偏差 %.3e" % dev
+
+
+def test_G4_env_evidence_is_readable():
+    """G4 候选集带**可读依据**：逐类残差 + 该 env 允许哪些新类 + 选中项。"""
+    from lingshu.world import physics_predict as PP
+    got = PP.physics_candidates(_ghist(_gpos_drag2), "e", 3, tick_hz=_GHZ, env=_ENV_MED)
+    ev = got["env_evidence"]
+    assert ev["picked"] == "drag2"
+    assert ev["env_allowed_kinds"] == ["drag2"]
+    assert ev["env_context"] == "medium"
+    assert ev["residuals"].get("drag2") is not None
+    got2 = PP.physics_candidates(_ghist(lambda t: _gpos_slope(t, _A_ROLL)), "e", 3,
+                                 tick_hz=_GHZ, env=_ENV_TER)
+    assert got2["env_evidence"]["env_allowed_kinds"] == ["slope_friction", "rolling"]
+    assert got2["env_evidence"]["env_context"] == "terrain"
+
+
+def test_G5_mutation_dropping_env_wiring_turns_G3_red(monkeypatch):
+    """G5 定点变异①：把**环境接线**抽掉（`resolve_env` 恒回 None）⇒ 环境感知必须失效。
+
+    跑的是与 G3 同一条断言体：真实现下通过，变异后必须抛 `AssertionError`。
+    """
+    from lingshu.world import physics_predict as PP
+    _assert_env_aware_works()
+
+    monkeypatch.setattr(PP, "resolve_env", lambda obj: None, raising=True)
+    with pytest.raises(AssertionError):
+        _assert_env_aware_works()
+
+
+def test_G6_mutation_dropping_env_passthrough_turns_G1_red(monkeypatch):
+    """G6 定点变异②：把 **env 透传**抽掉（`classify` 不收 env）⇒ 新三类判不出。
+
+    这正是"改了 physics.py 但没接线"的形态 —— 三类会被判成 accelerated（数学同形）。
+    """
+    from lingshu.world import physics_predict as PP
+    real = PP.classify_entity
+
+    def no_env(history, eid, window=None, up=1, tick_hz=1.0, env=None):
+        return real(history, eid, window=window, up=up, tick_hz=tick_hz, env=None)
+
+    monkeypatch.setattr(PP, "classify_entity", no_env, raising=True)
+    for kind, (fn, env) in _NEW3.items():
+        got = PP.physics_candidates(_ghist(fn), "e", 3, tick_hz=_GHZ, env=env)
+        assert got is None or got["kind"] != kind, \
+            "抽掉 env 透传后仍判出 %r ⇒ G1 无判别力" % kind
+
+
+def _assert_env_aware_works():
+    """G3 的断言体（供真实现与变异两路共用）。"""
+    from lingshu.world import physics_predict as PP
+
+    class Fake:
+        history = _ghist(_gpos_drag2)
+        tick_hz = _GHZ
+        physics_env = _ENV_MED
+
+    def inner(self, horizon=1, use_patterns=True):
+        return {"horizon": horizon,
+                "predictions": {"e": {"mode": "bounded_stochastic", "predicted": [0.0, 0.0, 0.0]}}}
+
+    out = PP.wrap_generate(inner)(Fake(), 3)
+    rec = out["predictions"]["e"]
+    assert rec["mode"] == "physics:drag2", rec
+    assert out["physics"]["env_aware"] is True and out["physics"]["env_source"] == ["physics_env"]
