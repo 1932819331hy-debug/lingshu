@@ -66,7 +66,7 @@ Blender 侧真值是多面数网格（wmtest 三件实测 2028 / 344 / 2044 面�
 --------
 （系统 python3 未装 pytest；本机 pytest 9.1.1 在 _pr-prep venv 内）
     cd <repo>  # wm-verify/lingshu
-    /home/sixtyseven67/DSH/测试/测试/_pr-prep/.venv/bin/python -m pytest \
+    <venv-python> -m pytest \
         tests/test_mesh_gen_selfmodel_guard.py -q --no-header
 脚本模式（不依赖 pytest，本文件自带 _main）：
     python3 -X utf8 tests/test_mesh_gen_selfmodel_guard.py

@@ -44,7 +44,7 @@
     ⇒ **回退即红**。同时把对照图与读数落盘到 `_evidence/shade-paint/`。
 
 ============================================================================ 运行命令
-    cd /home/sixtyseven67/DSH/测试/测试/wm-verify/lingshu
+    cd <仓根>
     python3 -X utf8 -m pytest tests/test_issue427_shade_paint_guard.py -q
     # 需要 pytest；本机未预装，可用（已验证）：
     #   python3 -m pip install --target _evidence/shade-paint/.pytestlib pytest

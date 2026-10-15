@@ -3,8 +3,8 @@
 
 运行命令
 --------
-    cd /home/sixtyseven67/DSH/测试/测试/wm-verify/lingshu
-    /home/sixtyseven67/DSH/测试/测试/_pr-prep/.venv/bin/python -m pytest \
+    cd <仓根>
+    <venv-python> -m pytest \
         tests/test_physics_predict.py -q
 
 断言组（抽掉某一组修复 ⇒ 哪组红）
