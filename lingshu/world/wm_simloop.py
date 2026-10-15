@@ -609,7 +609,12 @@ class SimulationLoop:
                                     if eid in state["conditions"]}
             self.wm.history = [{**frame, "entities": {eid: pos for eid, pos in frame["entities"].items()
                                                        if eid in self.wm.nodes}}
-                               for frame in state["history"]]
+                               for frame in state.get("history") or []]
+            # 轨迹缓冲不随载荷持久化（它只是观测历史按 eid 的投影）。不重建时
+            # 生成端的 static/smooth 判据读到空缓冲，"两侧预测一致"这条经验恢复
+            # 契约就会被判据自身的记账差异打破（实测：smooth_blocked 由
+            # speed_near_zero 变成 not_enough_samples）。载荷缺 "history" 时保持空。
+            self.wm.restore_trajectory_from_history()
             self.wm.tick = state["tick"]
             self.wm.size = state["size"]
             self.wm._motion_estimates = {eid: tuple(value) for eid, value in state["motion_estimates"].items()

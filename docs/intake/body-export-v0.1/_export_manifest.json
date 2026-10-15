@@ -76,6 +76,11 @@
      "unresolved_top": []
     },
     {
+     "file": "motion_groups.py",
+     "origin": "lingshu_native_development",
+     "sha256": "c6822da32c1353f4"
+    },
+    {
      "file": "multiview.py",
      "src": "aeis.multiview",
      "sha256": "b32ed5d636f3b6d3",
@@ -237,7 +242,7 @@
     {
      "file": "wm_simloop.py",
      "src": "aeis.wm_simloop",
-     "sha256": "1dd67b8ba586520a",
+     "sha256": "e6bc5e245f1cdd94",
      "rewrites": 8,
      "sanitized": 0,
      "patches": 0,
@@ -274,7 +279,7 @@
     {
      "file": "world_model.py",
      "src": "aeis.world_model",
-     "sha256": "c14149c2a73525de",
+     "sha256": "690041d299ed421c",
      "rewrites": 4,
      "sanitized": 0,
      "patches": 0,
@@ -283,6 +288,16 @@
      "unresolved_top": [],
      "integration_base_sha256": "d8c018b9645c1c35",
      "base_sha256": "4e7c7ad0ffcfea85"
+    },
+    {
+     "file": "process_ops.py",
+     "origin": "lingshu_native_development",
+     "sha256": "59cde8f925fac077"
+    },
+    {
+     "file": "world_process.py",
+     "origin": "lingshu_native_development",
+     "sha256": "950f3d9669ffaf5c"
     }
    ],
    "private_hits": []
@@ -314,7 +329,7 @@
     {
      "file": "core.py",
      "src": "aeis.core",
-     "sha256": "392eaa3a000ce3c3",
+     "sha256": "ea7bf6822e0cdb84",
      "rewrites": 34,
      "sanitized": 2,
      "patches": 2,
@@ -671,5 +686,92 @@
     "note": "Retain Unified relations with insufficient mixed evidence; align measured-stop evidence with learner."
    }
   }
+ },
+ "world_memory_first_batch": {
+  "date": "2026-10-12",
+  "base_commit": "cb3a6ea2dbd9771d685b2bf5c1fe398abe69e419",
+  "scope": [
+   "F01",
+   "F02",
+   "F03",
+   "F05"
+  ],
+  "report": "docs/world_memory_first_batch.md",
+  "previous_sha256": {
+   "lingshu/world/multiview.py": "9ff083b49d899a0e",
+   "lingshu/world/scene_model.py": "06a6086ae7e87497",
+   "lingshu/world/vprim.py": "40c9d7f730314571",
+   "lingshu/world/wm_simloop.py": "aa84dde49ad8c837",
+   "lingshu/world/world3d.py": "7b7527deb009dd70",
+   "lingshu/world/world_model.py": "97a0f817684fa51e",
+   "lingshu/core/core.py": "f8c30b183d430416"
+  }
+ },
+ "second_third_batch": {
+  "date": "2026-10-13",
+  "base_commit": "5603e28",
+  "scope": [
+   "F04",
+   "F06",
+   "F07",
+   "F08"
+  ],
+  "report": "docs/second_third_batch_validation.md",
+  "previous_sha256": {
+   "lingshu/core/core.py": "bec07819468eab69",
+   "lingshu/nn/hex_composite.py": "111796661833fe52",
+   "lingshu/nn/hex_gen.py": "eaee7d3ff6191edd",
+   "lingshu/nn/hex_query.py": "8143c596b26d4a70",
+   "lingshu/world/scene_simulator.py": "8128017c055a8f6d",
+   "lingshu/world/seven_layer_loop.py": "5fbc5033eb3f2d42",
+   "lingshu/world/world3d.py": "41a18b0b0e93506f"
+  }
+ },
+ "world_process_first_batch": {
+  "date": "2026-10-13",
+  "base_commit": "894493b",
+  "kind": "lingshu_native_development",
+  "origin": "本仓原生开发（非 AEIS 导出件；不伪造上游来源）",
+  "scope": [
+   "时间会意",
+   "示教迁移",
+   "运动组合体"
+  ],
+  "report": "docs/world_process_usage.md",
+  "previous_sha256": {
+   "lingshu/core/core.py": "2c8a0f7e65774494"
+  },
+  "verified_records": "本批模块指纹只登记在 blocks.core.files[core.py] 与 blocks.world.files[world_process.py, motion_groups.py]：verify_manifest.py 逐条核验；本键不重复登记，避免第二份未被核验的指纹。",
+  "unverified_artifacts": [
+   "tests/test_world_process_core.py",
+   "tools/demo_world_process.py",
+   "docs/world_process_usage.md",
+   "README.md",
+   "docs/architecture.md"
+  ]
+ },
+ "world_process_second_batch": {
+  "date": "2026-10-14",
+  "base_commit": "2c2e5d9",
+  "kind": "lingshu_native_development",
+  "origin": "本仓原生开发（非 AEIS 导出件；不伪造上游来源）",
+  "scope": [
+   "事件回声",
+   "过程补全",
+   "过程重组"
+  ],
+  "report": "docs/world_process_usage.md",
+  "previous_sha256": {
+   "lingshu/core/core.py": "ed7b3a3ff79416b4",
+   "lingshu/world/world_process.py": "c660faf3f4666ae6"
+  },
+  "verified_records": "本批模块指纹只登记在 blocks.core.files[core.py] 与 blocks.world.files[process_ops.py, world_process.py]：verify_manifest.py 逐条核验；本键不重复登记，避免第二份未被核验的指纹。",
+  "unverified_artifacts": [
+   "tests/test_world_process_core.py",
+   "tools/demo_world_process.py",
+   "docs/world_process_usage.md",
+   "README.md",
+   "docs/architecture.md"
+  ]
  }
 }

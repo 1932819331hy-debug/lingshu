@@ -51,6 +51,21 @@
     绝对路径 → MALFORMED ＞ 越界路径 → MALFORMED ＞ 文件不在盘 → MISSING ＞
     指纹形状 → MALFORMED ＞ MATCH / MISMATCH。
 
+来源字段（附加上报 · 不改判定）
+    条目可带 `src`（导出源，如 `aeis.xxx`）或 `origin`（本仓原生开发标记）。
+    工具按二者存在与否把每条分成四类并**只作上报**：
+
+      origin-only  有 `origin`、无 `src`（原生开发件）
+      src-only     有 `src`、无 `origin`（导出件）
+      both         两者都有（来源自相矛盾，须由调用方判为缺陷）
+      neither      两者都无
+
+    分类**不参与** MATCH/MISMATCH 判定，也**不改变**任何退出码（判定仍只看 sha256
+    形状与实算值、路径可信度、文件在盘）。「`origin` 的值必须是某个原生标记」这类
+    语义由调用方（守卫测试）自行钉死，本工具与具体标记值无关。
+    输出字段：`details[].declared_origin` / `details[].src` / `details[].origin_class`，
+    以及 `manifests[].origins` 与 `summary.origins` 的四个计数。
+
 退出码（四码 · 规格作者确认）
     0  成功：所有清单可解析，且无 MISSING、无 MALFORMED；非 strict 下 MISMATCH
        **不算失败**（清单未声明指纹指向哪一侧，属既有事实）。`--strict` 且零 MISMATCH
@@ -112,6 +127,13 @@ EXIT_DEFECT = 1
 EXIT_USAGE = 2
 EXIT_STRICT_MISMATCH = 3
 
+# 来源四分类（附加上报，不参与判定；见模块头「来源字段」）
+ORIGIN_ONLY = "origin-only"
+ORIGIN_SRC_ONLY = "src-only"
+ORIGIN_BOTH = "both"
+ORIGIN_NEITHER = "neither"
+ORIGIN_CLASSES = (ORIGIN_ONLY, ORIGIN_SRC_ONLY, ORIGIN_BOTH, ORIGIN_NEITHER)
+
 STATUS_MATCH = "MATCH"
 STATUS_MISMATCH = "MISMATCH"
 STATUS_MISSING = "MISSING"
@@ -140,9 +162,33 @@ def configure_stdout() -> None:
             pass
 
 
+def empty_origins() -> dict:
+    return {name: 0 for name in ORIGIN_CLASSES}
+
+
 def empty_summary() -> dict:
     return {"manifests": 0, "entries": 0, "match": 0, "mismatch": 0,
-            "missing": 0, "malformed": 0, "unparseable": 0}
+            "missing": 0, "malformed": 0, "unparseable": 0,
+            "origins": empty_origins()}
+
+
+def text_field(item: dict, key: str):
+    """条目里的非空字符串字段（`origin`/`src` 同口径）；否则 None。"""
+    value = item.get(key)
+    if isinstance(value, str) and value.strip():
+        return value.strip()
+    return None
+
+
+def origin_class(declared_origin, src) -> str:
+    """按 `origin`/`src` 存在与否分四类（只作上报，不参与判定）。"""
+    if declared_origin and src:
+        return ORIGIN_BOTH
+    if declared_origin:
+        return ORIGIN_ONLY
+    if src:
+        return ORIGIN_SRC_ONLY
+    return ORIGIN_NEITHER
 
 
 def write_json(payload: dict) -> None:
@@ -208,7 +254,8 @@ def normalize_relpath(raw: str) -> str:
 def iter_records(payload):
     """按冻结的路径解析规则产出 `(records, defects)`。
 
-    `records`：`(raw_path, recorded_sha256, recorded_bytes, absolute)` 元组列表。
+    `records`：`(raw_path, recorded_sha256, recorded_bytes, absolute, declared_origin,
+    src)` 元组列表；后两项只用于来源分类上报。
     `defects`：**结构损坏**的原因串列表（容器类型错 / 条目非对象 / 缺 `file` 或
     `file` 非字符串）。`absolute` 为真时 `raw_path` 只用于内部判定，绝不进输出（输出脱敏）。
 
@@ -240,7 +287,8 @@ def iter_records(payload):
                                    % (block, idx))
                     continue
                 records.append(("lingshu/%s/%s" % (block, name), item.get("sha256"),
-                                item.get("bytes"), is_unsafe_absolute(name)))
+                                item.get("bytes"), is_unsafe_absolute(name),
+                                text_field(item, "origin"), text_field(item, "src")))
         return records, defects
 
     for key in ("artifacts", "tests"):
@@ -259,17 +307,26 @@ def iter_records(payload):
                 defects.append("%s[%d].file 缺失或非字符串" % (key, idx))
                 continue
             records.append((name, item.get("sha256"), item.get("bytes"),
-                            is_unsafe_absolute(name)))
+                            is_unsafe_absolute(name), text_field(item, "origin"),
+                            text_field(item, "src")))
     return records, defects
 
 
 def classify(root: Path, root_resolved: Path, raw_path: str, recorded_sha,
-             recorded_bytes, absolute_entry: bool) -> dict:
-    """判定单条登记，返回确定性 detail 字典（绝不写入绝对路径）。"""
+             recorded_bytes, absolute_entry: bool, declared_origin=None,
+             src=None) -> dict:
+    """判定单条登记，返回确定性 detail 字典（绝不写入绝对路径）。
+
+    来源字段（`declared_origin`/`src`/`origin_class`）随条目带上，只作上报，
+    不参与本条 status 判定（见模块头「来源字段」）。
+    """
     detail = {
         "path": REDACTED_ABSOLUTE if absolute_entry else normalize_relpath(raw_path),
         "status": None,
         "reason": None,
+        "declared_origin": declared_origin,
+        "src": src,
+        "origin_class": origin_class(declared_origin, src),
         "recorded_sha256": recorded_sha if isinstance(recorded_sha, str) else None,
         "actual_sha256": None,
         "recorded_bytes": recorded_bytes if isinstance(recorded_bytes, int) else None,
@@ -341,6 +398,7 @@ def inspect_manifest(root: Path, manifest_path: Path) -> dict:
         "missing": 0,
         "malformed": 0,
         "sha256_lengths": [],
+        "origins": empty_origins(),
         "details": [],
     }
     try:
@@ -355,8 +413,8 @@ def inspect_manifest(root: Path, manifest_path: Path) -> dict:
 
     root_resolved = root.resolve()
     records, defects = iter_records(payload)
-    details = [classify(root, root_resolved, raw, sha, size, absolute)
-               for raw, sha, size, absolute in records]
+    details = [classify(root, root_resolved, raw, sha, size, absolute, origin, src)
+               for raw, sha, size, absolute, origin, src in records]
     details.sort(key=lambda item: item["path"])
 
     # 长度分布 = 所有「登记值确为字符串」的条目长度集合（与文本模式同一口径）
@@ -369,6 +427,9 @@ def inspect_manifest(root: Path, manifest_path: Path) -> dict:
     block["missing"] = sum(1 for item in details if item["status"] == STATUS_MISSING)
     block["malformed"] = sum(1 for item in details if item["status"] == STATUS_MALFORMED)
     block["sha256_lengths"] = sorted(lengths)
+    block["origins"] = {name: sum(1 for item in details
+                                  if item["origin_class"] == name)
+                        for name in ORIGIN_CLASSES}
     block["details"] = details
 
     # #408：结构损坏（容器类型错 / 条目非对象 / 缺 file）或零条目不得静默当「全通过」。
@@ -389,6 +450,8 @@ def collect(root: Path):
     for key in ("entries", "match", "mismatch", "missing", "malformed"):
         summary[key] = sum(b[key] for b in blocks)
     summary["unparseable"] = sum(1 for b in blocks if "error" in b)
+    summary["origins"] = {name: sum(b["origins"][name] for b in blocks)
+                          for name in ORIGIN_CLASSES}
     return blocks, summary
 
 
@@ -406,6 +469,11 @@ def decide_exit(summary: dict, strict: bool) -> int:
     if strict and summary["mismatch"]:
         return EXIT_STRICT_MISMATCH
     return EXIT_OK
+
+
+def _origin_line(origins: dict) -> str:
+    return "  origins: " + " ".join("%s=%d" % (name, origins[name])
+                                    for name in ORIGIN_CLASSES)
 
 
 def _length_distribution(block: dict) -> str:
@@ -447,7 +515,10 @@ def render_text(blocks, summary, exit_code, quiet) -> str:
                          % (block["entries"], block["match"], block["mismatch"],
                             block["missing"], block["malformed"]))
             lines.append("  sha256 lengths: %s" % _length_distribution(block))
+            lines.append(_origin_line(block["origins"]))
             lines.extend(_bytes_lines(block))
+    lines.append("ORIGINS " + " ".join("%s=%d" % (name, summary["origins"][name])
+                                         for name in ORIGIN_CLASSES))
     lines.append("SUMMARY manifests=%d entries=%d match=%d mismatch=%d missing=%d "
                  "malformed=%d unparseable=%d exit_code=%d"
                  % (summary["manifests"], summary["entries"], summary["match"],

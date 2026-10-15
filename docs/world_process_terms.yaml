@@ -1,0 +1,23 @@
+- term: 时间会意
+  meaning: 从观测历史识别由关系变化组成的过程
+  en: temporal process recognition
+
+- term: 示教迁移
+  meaning: 将观测轨迹转换为相对坐标，再绑定到新角色
+  en: demonstration transfer
+
+- term: 运动组合体
+  meaning: 在观察窗口内共同平移的实体集合
+  en: motion group
+
+- term: 事件回声
+  meaning: 从事件序列学习事件间的延迟关联
+  en: event echo
+
+- term: 过程补全
+  meaning: 根据观测前缀生成已记录过程的后续轨迹
+  en: process completion
+
+- term: 过程重组
+  meaning: 绑定角色并连接已记录过程，生成新的轨迹
+  en: process composition
