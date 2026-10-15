@@ -66,7 +66,7 @@ HTML = """<!doctype html>
  <label><input type="checkbox" id="iso"> 孤立节点</label>
  <label><input type="checkbox" id="dashed" checked> 推导边（虚线）</label>
  <label><input type="checkbox" id="hubn" checked> 枢纽/桶节点</label>
- <label><input type="checkbox" id="anch" checked> 只看已锚定（隐藏隔离区）</label>
+ <label><input type="checkbox" id="anch" checked> 只看已锚定（未锚定/未审计一律隐藏）</label>
 </div>
 <div id="cy"></div>
 <div id="detail"></div>
@@ -111,7 +111,12 @@ function build(){
   for(const n of G.nodes){
     if(!lay.has(n.layer)) continue;
     if(n.hub && !showHub) continue;
-    if(onlyAnch && n.ncls === '隔离区') continue;
+    // #629（本端已裁＝fail-closed）：旧判据 `n.ncls === '隔离区'` 是单值相等 ⇒
+    // 「未审计」（ncls===''，naming_report 长度闸/未收录标题根本无 row）与
+    // 「已通过审计」同值，默认勾选下越短越可见。改为「未锚定即隐藏」：只有
+    // 明确判为 强规范锚/已锚定 的节点可见；alias候选/隔离区/'' 一律隐藏，
+    // 与「隔离区」语义及 S3 口径一致。取消勾选仍可看全量。
+    if(onlyAnch && n.ncls !== '强规范锚' && n.ncls !== '已锚定') continue;
     if(n.degree===0 && !showIso) continue;
     if(q && !(n.title||'').toLowerCase().includes(q) && !n.id.toLowerCase().includes(q)) continue;
     keep.add(n.id);
