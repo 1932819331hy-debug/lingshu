@@ -181,6 +181,49 @@ def _dumps_tags(tags, ensure_ascii: bool = False) -> str:
 
 
 # =============================================================================
+# JSON 列序列化闸（唯一真源 · issue #494）
+# =============================================================================
+#
+# #378 只把「代理码点拒写」落在 `nodes.tags` 一列（`_dumps_tags`，递归深度一层）。
+# 而 `nodes` 表另有三列是 JSON 文本：`state_attributes` / `semantic_coordinates`
+# / `spatial_coordinates`。它们的写点当时仍是**裸** `json.dumps`（默认
+# `ensure_ascii=True`）⇒ 孤立代理（unpaired surrogate，如 `"\ud83d"`）被**静默
+# 转义**成字面量 `\ud83d` 文本入库：SQLite 不报错、`json.loads` 往返也不报错，
+# 于是毒行潜伏；直到读回后再以 `ensure_ascii=False` 序列化写回（`_write_influence`
+# / `insight_verify`）或写 UTF-8 文件/日志时才抛
+# `UnicodeEncodeError: surrogates not allowed` ⇒ 单条毒行炸掉整条写回/导出链。
+#
+# 本闸把 #378 的判据（含 U+D800–U+DFFF 任一码点即拒，fail-closed，`ValueError`）
+# 从 tags 一列扩到上述三列的统一序列化真源。**只拒绝，不洗白**（不做静默替换/
+# 剥离——那会把污染源洗白、掩盖上游解码错误）。`ensure_ascii` 缺省保持 `True`
+# （与 `to_row` 既有裸调一致，不改存储编码口径；那是 #181 的面）。
+
+def _reject_surrogates(value, where: str) -> None:
+    """递归检查 value（dict 的键与值 / list / tuple / set / str）是否含
+    UTF-16 代理码点 U+D800–U+DFFF；含则 ValueError（fail-closed）。"""
+    stack = [value]
+    while stack:
+        cur = stack.pop()
+        if isinstance(cur, str):
+            if any(0xD800 <= ord(ch) <= 0xDFFF for ch in cur):
+                raise ValueError(
+                    "#494 拒绝含 UTF-16 代理码点的 %s 值（无法 UTF-8 编码，"
+                    "会毒化检索/导出，且读回再序列化即抛 UnicodeEncodeError）: %r"
+                    % (where, cur))
+        elif isinstance(cur, dict):
+            stack.extend(cur.keys())
+            stack.extend(cur.values())
+        elif isinstance(cur, (list, tuple, set, frozenset)):
+            stack.extend(cur)
+
+
+def _dumps_json(value, ensure_ascii: bool = True, where: str = "JSON 列") -> str:
+    """`nodes` 表 JSON 列的统一序列化真源（#494）：先过代理码点闸，再 json.dumps。"""
+    _reject_surrogates(value, where)
+    return json.dumps(value, ensure_ascii=ensure_ascii)
+
+
+# =============================================================================
 # 数值入参闸（唯一真源 · lingshu #185）
 # =============================================================================
 
@@ -455,7 +498,7 @@ class STNode:
         """
         return (
             self.id, self.content, self.modality,
-            json.dumps(self.spatial_coordinates),
+            _dumps_json(self.spatial_coordinates, where="spatial_coordinates"),
             _finite_or(self.temporal_coordinate, self.created_at),
             self.condition_space.to_json(),
             _finite_clamp(self.importance, 0.0, 1.0),
@@ -463,8 +506,8 @@ class STNode:
             self.layer.value, self.access_count,
             self.last_access, self.created_at,
             _dumps_tags(self.tags),
-            json.dumps(self.semantic_coordinates),
-            json.dumps(self.state_attributes),
+            _dumps_json(self.semantic_coordinates, where="semantic_coordinates"),
+            _dumps_json(self.state_attributes, where="state_attributes"),
             self.entity_id
         )
 
@@ -1581,7 +1624,8 @@ class LayeredStore:
                     elif k.startswith("neural_"):
                         se["neural"][k[len("neural_"):]] = v
                 c.execute("UPDATE nodes SET spatial_coordinates=?, semantic_coordinates=? WHERE id=?",
-                          (json.dumps(sp), json.dumps(se), nid))
+                          (_dumps_json(sp, where="spatial_coordinates"),
+                           _dumps_json(se, where="semantic_coordinates"), nid))
                 migrated += 1
             if migrated:
                 self._write_structure_record(
@@ -4202,7 +4246,7 @@ class LayeredStore:
                 sa = {}
         sa[key] = infl
         c.execute("UPDATE nodes SET state_attributes=? WHERE id=?",
-                  (json.dumps(sa, ensure_ascii=False), node_id))
+                  (_dumps_json(sa, ensure_ascii=False, where="state_attributes"), node_id))
         self.conn.commit()
 
     @staticmethod
@@ -4398,7 +4442,8 @@ class LayeredStore:
             new_imp = 0.9
         c = self.conn.cursor()
         c.execute("UPDATE nodes SET state_attributes=?, tags=?, importance=? WHERE id=?",
-                  (json.dumps(sa, ensure_ascii=False), _dumps_tags(tags, ensure_ascii=False),
+                  (_dumps_json(sa, ensure_ascii=False, where="state_attributes"),
+                   _dumps_tags(tags, ensure_ascii=False),
                    new_imp, insight_id))
         self.conn.commit()
         return {"node_id": insight_id, "level": level, "status": status,
@@ -9047,7 +9092,7 @@ class SpacetimeMemoryEngine:
                 se["protocol"]["relation"].append("causal" if changed else "sequential")
                 c = self.store.conn.cursor()
                 c.execute("UPDATE nodes SET semantic_coordinates=? WHERE id=?",
-                          (json.dumps(se), node.id))
+                          (_dumps_json(se, where="semantic_coordinates"), node.id))
                 self.store.conn.commit()
         if entity_id:
             self._last_frame[entity_id] = node.id
@@ -9272,7 +9317,7 @@ class SpacetimeMemoryEngine:
                 merged[bucket] = val
         c = self.store.conn.cursor()
         c.execute("UPDATE nodes SET semantic_coordinates=? WHERE id=?",
-                  (json.dumps(merged), node_id))
+                  (_dumps_json(merged, where="semantic_coordinates"), node_id))
         self.store.conn.commit()
         return True
 
