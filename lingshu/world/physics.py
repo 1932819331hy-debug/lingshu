@@ -65,13 +65,27 @@ __all__ = [
     "agm", "elliptic_k", "jacobi_cn", "pendulum_exact_angle",
     "PENDULUM_EXACT_MAX_DEG", "PENDULUM_EXACT_MAX_ERR",
     "truth_residuals",
+    # 环境作用动力学（物理深化 v1）
+    "ENV_SCHEMA", "SOLID_SPHERE_BETA",
+    "make_environment", "simulate", "environment_truth", "environment_model",
+    "fit_drag2", "fit_slope_friction", "fit_rolling",
+    "drag2_truth", "slope_friction_truth", "rolling_truth",
+    "collide_1d", "collision_truth",
+    # 碰撞箱 / 防穿模内核（冻结接口 v1）
+    "COLLISION_SCHEMA",
+    "aabb_of", "aabb_overlap", "aabb_mtv",
+    "obb_of", "obb_overlap", "obb_mtv",
+    "sweep_aabb", "sweep_obb", "resolve_penetration", "collision_proxy_truth",
+    "intersection_length", "MAX_INTEGRATION_STEPS",
 ]
 
 #: 模型文档 schema
 PHYSICS_SCHEMA = "wmfactory.physics/1"
 
 #: 模型闭集
-MODEL_KINDS = ("static", "uniform", "accelerated", "projectile", "damped", "circular")
+MODEL_KINDS = ("static", "uniform", "accelerated", "projectile", "damped", "circular",
+               # ↓ 环境作用动力学（物理深化 · 冻结接口 v1）：**只追加、既有 6 类顺序不动**
+               "drag2", "slope_friction", "rolling")
 
 #: 标准重力（m/s²）
 DEFAULT_G = 9.80665
@@ -448,14 +462,31 @@ _FITTERS = {
     "projectile": lambda s, **kw: fit_projectile(s, kw.get("gravity", DEFAULT_G), kw.get("up", 1)),
     "damped": lambda s, **kw: fit_damped(s, kw.get("up", 1)),
     "circular": lambda s, **kw: fit_circular(s, kw.get("up", 1)),
+    "drag2": lambda s, **kw: fit_drag2(s, up=kw.get("up", 1), gravity=kw.get("gravity", DEFAULT_G),
+                                       beta=kw.get("beta"), mass=kw.get("mass"),
+                                       drag_c=kw.get("drag_c")),
+    "slope_friction": lambda s, **kw: fit_slope_friction(
+        s, up=kw.get("up", 1), gravity=kw.get("gravity", DEFAULT_G),
+        slope_deg=kw.get("slope_deg"), mu_k=kw.get("mu_k"), mu_s=kw.get("mu_s"),
+        env=kw.get("env")),
+    "rolling": lambda s, **kw: fit_rolling(
+        s, up=kw.get("up", 1), gravity=kw.get("gravity", DEFAULT_G),
+        slope_deg=kw.get("slope_deg"), beta=kw.get("beta"),
+        i_over_mr2=kw.get("i_over_mr2"), radius=kw.get("radius"), mass=kw.get("mass"),
+        env=kw.get("env")),
 }
 
 
-def fit_model(kind, samples, gravity=DEFAULT_G, up=1):
-    """按 kind 拟合；未知 kind / 样本不足 ⇒ `PhysicsError`（不静默降级到简单模型）。"""
+def fit_model(kind, samples, gravity=DEFAULT_G, up=1, **kw):
+    """按 kind 拟合；未知 kind / 样本不足 ⇒ `PhysicsError`（不静默降级到简单模型）。
+
+    `**kw` 供**新类**传场景上下文（可辨识性所需）：`slope_deg` / `mu_k` / `mu_s` /
+    `beta` / `i_over_mr2` / `mass` / `drag_c` / `radius` / `env`。
+    既有 6 类忽略多余 kw ⇒ 行为逐位不变。
+    """
     if kind not in MODEL_KINDS:
         raise PhysicsError("未知模型 kind %r（闭集 %s）" % (kind, ", ".join(MODEL_KINDS)))
-    return _FITTERS[kind](samples, gravity=gravity, up=up)
+    return _FITTERS[kind](samples, gravity=gravity, up=up, **kw)
 
 
 # =========================================================== 预测
@@ -493,6 +524,48 @@ def predict_at(model, t):
         vh = (-model["radius"] * model["omega"] * math.sin(th),
               model["radius"] * model["omega"] * math.cos(th))
         return p, _unhv(vh, model["v_up"], up)
+    if k == "drag2":
+        # 二次阻力闭式（沿 up 一维）+ 横向匀速漂移
+        up = _axis_of(model.get("up", 1))
+        g = _positive_num(model.get("gravity", DEFAULT_G), "model['gravity']")
+        beta = _positive_num(model["beta"], "model['beta']")
+        vt = math.sqrt(g / beta)
+        v_up0 = float(model["v0"][up])                 # up 轴口径（向上为正）
+        if abs(v_up0) >= vt:
+            raise PhysicsError("predict_at(drag2)：|v0[up]|=%r 须 < 终端速度 v_t=%.6f"
+                               % (v_up0, vt))
+        v_down0 = -v_up0                               # 下落坐标（正=向下）
+        u0 = math.atanh(v_down0 / vt)
+        u = u0 + g * tau / vt
+        s_down = (vt * vt / g) * (_log_cosh(u) - _log_cosh(u0))
+        drift = model.get("drift") or model["v0"]
+        p, v = [0.0, 0.0, 0.0], [0.0, 0.0, 0.0]
+        for i in range(3):
+            if i == up:
+                p[i] = float(model["p0"][i]) - s_down  # 下落 ⇒ up 轴坐标减小
+                v[i] = -vt * math.tanh(u)
+            else:
+                p[i] = float(model["p0"][i]) + float(drift[i]) * tau
+                v[i] = float(drift[i])
+        return tuple(p), tuple(v)
+    if k in ("slope_friction", "rolling"):
+        # 斜面闭式（沿下坡一维 + 面内横向匀速漂移）；locked ⇒ 不动
+        up = _axis_of(model.get("up", 1))
+        u_dir = model.get("incline_dir")
+        if u_dir is None:
+            th = float(model.get("slope_rad", 0.0))
+            ax = int(model.get("incline_axis", 0))
+            u_dir = [0.0, 0.0, 0.0]
+            u_dir[ax] = math.cos(th)
+            u_dir[up] = -math.sin(th)
+        a = 0.0 if model.get("locked") else float(model.get("accel", 0.0))
+        v_s0 = float(model.get("v_s0", sum(float(model["v0"][i]) * u_dir[i] for i in range(3))))
+        s = v_s0 * tau + 0.5 * a * tau * tau
+        v_s = v_s0 + a * tau
+        drift = model.get("drift") or (0.0, 0.0, 0.0)
+        p = tuple(float(model["p0"][i]) + u_dir[i] * s + float(drift[i]) * tau for i in range(3))
+        v = tuple(u_dir[i] * v_s + float(drift[i]) for i in range(3))
+        return p, v
     raise PhysicsError("predict_at：未知模型 kind %r" % (k,))
 
 
@@ -640,7 +713,8 @@ def _gain_ok(new_r, best_r, floor, gain):
     return new_r * gain <= best_r
 
 
-def classify(samples, gravity=DEFAULT_G, up=1, rel_gain=1.6, abs_tol=1e-9, gravity_tol=0.10):
+def classify(samples, gravity=DEFAULT_G, up=1, rel_gain=1.6, abs_tol=1e-9, gravity_tol=0.10,
+             env=None):
     """从观测历史判别该用哪个模型，并**给出选择依据**（数字，不是形容词）。
 
     1. **静止**：全样本相对均值的 rms <= `abs_tol` ⇒ static。
@@ -666,7 +740,15 @@ def classify(samples, gravity=DEFAULT_G, up=1, rel_gain=1.6, abs_tol=1e-9, gravi
       已低于本 bench 的判据分辨率 `fixed_threshold = 0.5`。它是可调参数，
       敏感性读数（在哪个 dev 上翻转）见 gate 的 C5。
 
-    返回 `{"kind", "reason", "model", "residuals": {kind: rms}, "evidence": {…}}`。
+    6. **环境作用类（`drag2` / `slope_friction` / `rolling`）只在给了 `env` 时参与竞争**：
+       `env.medium` ⇒ 允许 `drag2`（β 由介质给出）；`env.terrain` ⇒ 允许 `slope_friction`
+       与 `rolling`。**不给 `env` 时它们一律不参与** ⇒ 既有 6 类的判定结果**逐位不变**
+       （这也是可辨识性要求：坡度/介质未知时，新类与既有类数学同形，无法区分）。
+       terrain 且观测静止且 `tanθ <= μ_s` ⇒ 判为 `slope_friction` 且 `locked=True`
+       （"静摩擦锁定"是比"静止"更强的物理断言）。
+
+    返回 `{"kind", "reason", "model", "residuals": {kind: rms}, "evidence": {…}}`；
+    给了 `env` 时额外带 `"env_used"`。
     """
     ts = _check_samples(samples, 1)
     if len(ts) == 1:
@@ -684,8 +766,23 @@ def classify(samples, gravity=DEFAULT_G, up=1, rel_gain=1.6, abs_tol=1e-9, gravi
             continue
     ev = {"rel_gain": rel_gain, "abs_tol": abs_tol, "gravity_tol": gravity_tol}
     order = []
+    env_n = _normalize_env_arg(env) if env is not None else None
     base = res.get("static", float("inf"))
     if base <= abs_tol:
+        ter = env_n["terrain"] if env_n is not None else None
+        if ter is not None and ter["locks"]:
+            n = float(len(samples))
+            p0 = tuple(sum(float(s[1][i]) for s in samples) / n for i in range(3))
+            locked = _sim_model_from_state(
+                {"p0": p0, "v0": (0.0, 0.0, 0.0), "t_ref": ts[0]}, env_n, None)[0]
+            locked["locked"] = True
+            locked["residual_rms"] = base
+            return {"kind": "slope_friction", "model": locked,
+                    "reason": ("观测静止（rms=%.3e <= abs_tol=%.1e）且 tanθ=%.4f <= μ_s=%.4f"
+                               "（临界角 %.2f°）=> 判为**斜面静摩擦锁定**"
+                               % (base, abs_tol, math.tan(ter["slope_rad"]), ter["mu_s"],
+                                  ter["critical_deg"])),
+                    "residuals": res, "evidence": ev, "env_used": env_n}
         return {"kind": "static", "model": models["static"],
                 "reason": "观测相对均值的 rms=%.3e <= abs_tol=%.1e => 静止" % (base, abs_tol),
                 "residuals": res, "evidence": ev}
@@ -733,10 +830,89 @@ def classify(samples, gravity=DEFAULT_G, up=1, rel_gain=1.6, abs_tol=1e-9, gravi
         else:
             ev["%s_rejected" % kind] = ("rms %.3e 未能比 %s 的 %.3e 好 %.1f 倍"
                                         % (res[kind], best, best_r, rel_gain))
-    return {"kind": best, "model": models[best],
-            "reason": "在 %s 中按残差+简约性偏好选中 %r（rms=%.3e）"
-                      % (" -> ".join(order) or "?", best, best_r),
-            "residuals": res, "evidence": ev}
+    if env_n is not None:
+        # ---- 环境作用类：只在给了 env 上下文时参与竞争（可辨识性；见 docstring 第 6 条）----
+        # 接入判据与既有 `projectile` **同一体例**：不是"残差显著更小"（那会被数值地板挡死：
+        # 常加速度数据上 `accelerated` 本来就拟合到机器精度），而是
+        #   「**环境给出了物理同一性** + 新类拟合不比既有最好差 1.5 倍」⇒ 采信更强的物理断言。
+        new_res, new_models = {}, {}
+        med, ter = env_n["medium"], env_n["terrain"]
+        if med is not None and ter is None:
+            try:
+                m_new = fit_drag2(samples, up=up, gravity=gravity, beta=med["drag_beta"],
+                                  mass=med["mass"], drag_c=med["drag_c"])
+                new_models["drag2"] = m_new
+                new_res["drag2"] = float(m_new["residual_rms"])
+            except PhysicsError as exc:
+                ev["drag2_fit_error"] = str(exc)
+        if ter is not None:
+            for kind in ("slope_friction", "rolling"):
+                try:
+                    m_new = fit_model(kind, samples, gravity=gravity, up=up,
+                                      slope_deg=ter["slope_deg"], mu_k=ter["mu_k"],
+                                      mu_s=ter["mu_s"], env=env_n)
+                    new_models[kind] = m_new
+                    new_res[kind] = float(m_new["residual_rms"])
+                except PhysicsError as exc:
+                    ev["%s_fit_error" % kind] = str(exc)
+        for kind, r in sorted(new_res.items()):
+            res[kind] = r
+            models[kind] = new_models[kind]
+        near = 1.5 * max(best_r, abs_tol)          # 与 projectile 的 1.5 倍同口径
+        chosen, why = None, None
+        if ter is not None:
+            a_slide = gravity * (math.sin(ter["slope_rad"]) - ter["mu_k"] * math.cos(ter["slope_rad"]))
+            a_meas = new_models["slope_friction"]["accel"] if "slope_friction" in new_models else None
+            ev["slope_slide_accel"] = a_slide
+            if a_meas is not None:
+                ev["slope_measured_accel"] = a_meas
+                ev["slope_accel_rel_dev"] = (abs(a_meas - a_slide) / abs(a_slide)
+                                             if abs(a_slide) > _EPS else float("inf"))
+            consistent = (a_meas is not None
+                          and abs(a_meas - a_slide) <= max(abs_tol, 0.05 * abs(a_slide))
+                          and new_res.get("slope_friction", float("inf")) <= near)
+            if consistent:
+                chosen = "slope_friction"
+                why = ("env.terrain 的 μ_k=%.4f 预言 a_slide=%.6f，实测沿坡加速度 a=%.6f "
+                       "相对偏差 %.4f <= 0.05，且拟合 rms=%.3e 不比 %s 的 %.3e 差 1.5 倍"
+                       "=> 判为**斜面滑动**（μ_k 由地形给出并被数据证实）"
+                       % (ter["mu_k"], a_slide, a_meas,
+                          abs(a_meas - a_slide) / abs(a_slide) if abs(a_slide) > _EPS else 0.0,
+                          new_res["slope_friction"], best, best_r))
+            elif "rolling" in new_res and new_res["rolling"] <= near:
+                chosen = "rolling"
+                why = ("地形 μ_k=%.4f 预言的滑动加速度 a_slide=%.6f 与实测 a=%s 不相容（偏差 %.4f > 0.05）"
+                       "，而纯滚动 a=g·sinθ/(1+β) 拟合 rms=%.3e 不比 %s 的 %.3e 差 1.5 倍 "
+                       "=> 判为**纯滚动**（β=%.4f）"
+                       % (ter["mu_k"], a_slide,
+                          ("%.6f" % a_meas) if a_meas is not None else "None",
+                          (abs(a_meas - a_slide) / abs(a_slide)) if (a_meas is not None and abs(a_slide) > _EPS) else float("inf"),
+                          new_res["rolling"], best, best_r, new_models["rolling"]["beta"]))
+        elif "drag2" in new_res and new_res["drag2"] <= near:
+            chosen = "drag2"
+            why = ("env.medium 给出 β=c/m=%.6f（终端速度 v_t=%.6f），drag2 拟合 rms=%.3e "
+                   "不比 %s 的 %.3e 差 1.5 倍 => 判为**二次阻力下落**（介质参数由环境给出）"
+                   % (med["drag_beta"], med["terminal_v"], new_res["drag2"], best, best_r))
+        if chosen is not None:
+            ev["%s_accepted" % chosen] = why
+            order.append(chosen)
+            return {"kind": chosen, "model": models[chosen],
+                    "reason": "在 %s 中按残差+物理同一性选中 %r（rms=%.3e；环境上下文参与竞争）"
+                              % (" -> ".join(order) or "?", chosen, new_res[chosen]),
+                    "residuals": res, "evidence": ev, "env_used": env_n}
+        for kind in sorted(new_res):
+            ev["%s_rejected" % kind] = ("rms %.3e 或与环境的物理预言不相容 => 不采信"
+                                        % (new_res[kind],))
+        ev["env_context_used"] = ("给了 env（%s）但环境作用类未被采信 => 维持 %r"
+                                  % ("medium+terrain" if (med and ter) else
+                                     ("medium" if med else "terrain"), best))
+    out = {"kind": best, "model": models[best],
+           "reason": "在 %s 中按残差+简约性偏好选中 %r（rms=%.3e）"
+                     % (" -> ".join(order) or "?", best, best_r),
+           "residuals": res, "evidence": ev}
+    if env_n is not None:
+        out["env_used"] = env_n
+    return out
 
 
 def truth_residuals(model, samples):
@@ -752,6 +928,1438 @@ def truth_residuals(model, samples):
     return {"n": len(ts), "max_pos_err": worst,
             "rms_pos_err": math.sqrt(acc / len(ts)),
             "residual_rms_reported": model.get("residual_rms")}
+
+
+# =========================================================== 环境作用动力学（物理深化 · 冻结接口 v1）
+# 三类**有环境作用**的时间模型 + 碰撞事件族 + 环境上下文 `Environment` + `simulate`。
+# 每类都有闭式解析真值（`*_truth`），判据可机械核对。
+# 诚实边界（写在这里，报告里照抄）：
+#   · `drag2` 只在**沿 up 轴的一维**上有闭式解；横向分量按**匀速漂移**处理（无阻力），
+#     三维二次阻力无闭式 ⇒ 需要时走 `simulate(..., dt=…)` 的**定步长近似**（回报 integrated=True）。
+#   · `slope_friction` 只支持**恒定坡度**；`mu_k` 由数据解出，坡度必须**显式给出**（否则与
+#     `accelerated` 数学同形、不可辨识 ⇒ 拒绝拟合，fail-closed）。
+#   · `rolling` 只支持**无滑滚动**（纯滚动条件 `v = ω r`）；`beta = I/(m r²)` 由数据解出或显式传入。
+#   · `slope_friction` 与 `rolling` 在"只有位置观测"时**互相别名**（同一个常加速度 a 既可解释成
+#     `mu_k` 也可解释成 `beta`）⇒ `classify` 只在**给了 terrain 上下文**时让它们参与竞争。
+#   · `collision` 是**事件**不是时间模型 ⇒ **不进** `MODEL_KINDS`。
+
+#: 环境上下文 schema
+ENV_SCHEMA = "wmfactory.physics-env/1"
+
+#: 实心球 `I/(m r²)`
+SOLID_SPHERE_BETA = 2.0 / 5.0
+
+
+def _finite_num(x, where):
+    if isinstance(x, bool) or not isinstance(x, (int, float)) or not math.isfinite(float(x)):
+        raise PhysicsError("%s 须为有限数，得到 %r" % (where, x))
+    return float(x)
+
+
+def _positive_num(x, where):
+    v = _finite_num(x, where)
+    if v <= 0.0:
+        raise PhysicsError("%s 须 > 0，得到 %r" % (where, x))
+    return v
+
+
+def _log_cosh(u):
+    """数值稳定的 `ln cosh(u)`（大 |u| 时 `cosh` 会溢出）。"""
+    a = abs(float(u))
+    return a + math.log1p(math.exp(-2.0 * a)) - math.log(2.0)
+
+
+def _fit_rms(model, samples):
+    """模型 vs 样本的 3 维 RMS，口径与既有 `_per_axis` 一致：`sqrt(Σ‖Δp‖²/(3n))`。
+
+    ⚠ 必须**统一在这里算**：`_per_axis` 返回的第二个值**已经是 rms**（不是 RSS），
+    早期版本对新类又开了一次方 ⇒ 残差被压成 `sqrt(rms)`（实测 3.964e-09 vs 真值 0），
+    进而让"1.5 倍近似"判据误拒（这正是 classify 里 slope_friction 被判成 accelerated 的原因）。
+    """
+    acc = 0.0
+    for t, pos in samples:
+        q, _v = predict_at(model, t)
+        acc += sum((q[i] - float(pos[i])) ** 2 for i in range(3))
+    return math.sqrt(acc / (3.0 * len(samples)))
+
+
+# ----------------------------------------------------------- 环境上下文
+def _normalize_medium(medium):
+    if medium is None:
+        return None
+    if not isinstance(medium, dict):
+        raise PhysicsError("medium 须为 dict（{'drag_c':…, 'mass':…}），得到 %r"
+                           % (type(medium).__name__,))
+    return {"drag_c": _positive_num(medium.get("drag_c"), "medium['drag_c']"),
+            "mass": _positive_num(medium.get("mass"), "medium['mass']")}
+
+
+def _normalize_terrain(terrain, up):
+    if terrain is None:
+        return None
+    if not isinstance(terrain, dict):
+        raise PhysicsError("terrain 须为 dict（{'slope_deg':…, 'mu_s':…, 'mu_k':…}），得到 %r"
+                           % (type(terrain).__name__,))
+    slope_deg = _finite_num(terrain.get("slope_deg"), "terrain['slope_deg']")
+    if not (0.0 <= slope_deg < 90.0):
+        raise PhysicsError("terrain['slope_deg'] 须在 [0, 90) 度，得到 %r" % (slope_deg,))
+    mu_s = _finite_num(terrain.get("mu_s", 0.0), "terrain['mu_s']")
+    mu_k = _finite_num(terrain.get("mu_k", 0.0), "terrain['mu_k']")
+    if mu_s < 0.0 or mu_k < 0.0:
+        raise PhysicsError("摩擦系数须 >= 0，得到 mu_s=%r mu_k=%r" % (mu_s, mu_k))
+    axis = terrain.get("incline_axis", 0)
+    if isinstance(axis, bool) or not isinstance(axis, int) or axis not in (0, 1, 2) or axis == up:
+        raise PhysicsError("terrain['incline_axis'] 须为 0/1/2 且 != up(%d)，得到 %r" % (up, axis))
+    th = math.radians(slope_deg)
+    u = [0.0, 0.0, 0.0]
+    u[axis] = math.cos(th)          # 下坡方向：水平沿 +axis
+    u[up] = -math.sin(th)           #             竖直沿 −up
+    n = [0.0, 0.0, 0.0]
+    n[axis] = math.sin(th)          # 斜面法线（指向"上方"）
+    n[up] = math.cos(th)
+    return {"slope_deg": slope_deg, "slope_rad": th, "mu_s": mu_s, "mu_k": mu_k,
+            "incline_axis": axis, "incline_dir": tuple(u), "normal": tuple(n),
+            "critical_deg": math.degrees(math.atan(mu_s)),
+            "locks": bool(math.tan(th) <= mu_s)}
+
+
+def make_environment(*, gravity=DEFAULT_G, up=1, medium=None, terrain=None):
+    """构造**环境上下文**（重力 / 介质 / 地形），供 `simulate` 与 `environment_truth` 使用。
+
+    · `medium`：`{"drag_c": c, "mass": m}` ⇒ 二次阻力（`drag2`）所需参数（`beta = c/m`）；
+    · `terrain`：`{"slope_deg": θ, "mu_s": μs, "mu_k": μk}` ⇒ 斜面 + 静/动摩擦；
+      可选 `"incline_axis"`（下坡的水平轴，默认 0 ⇒ +x；不得等于 `up`）；
+    · **缺省 `medium=None, terrain=None` ⇒ 各向同性真空平地**（`is_vacuum_flat=True`），
+      此时 `simulate` 的行为与既有 `predict_at` **逐字段一致**（向后兼容的硬判据）。
+
+    返回（键名冻结，另两位队友照此接）::
+
+        {"schema": ENV_SCHEMA, "gravity": g, "up": up, "g_vec": (…),
+         "medium": {"drag_c","mass","drag_beta","terminal_v"}|None,
+         "terrain": {"slope_deg","slope_rad","mu_s","mu_k","incline_axis",
+                     "incline_dir","normal","critical_deg","locks"}|None,
+         "drag_beta": c/m|None, "is_vacuum_flat": bool}
+    """
+    g = _positive_num(gravity, "gravity")
+    up = _axis_of(up)
+    med = _normalize_medium(medium)
+    ter = _normalize_terrain(terrain, up)
+    env = {"schema": ENV_SCHEMA, "gravity": g, "up": up,
+           "g_vec": tuple(-g if i == up else 0.0 for i in range(3)),
+           "medium": med, "terrain": ter,
+           "is_vacuum_flat": (med is None and ter is None)}
+    if med is not None:
+        med = dict(med)
+        med["drag_beta"] = med["drag_c"] / med["mass"]
+        med["terminal_v"] = math.sqrt(g / med["drag_beta"])
+        env["medium"] = med
+        env["drag_beta"] = med["drag_beta"]
+    else:
+        env["drag_beta"] = None
+    return env
+
+
+def _normalize_env_arg(env):
+    """`env` 允许是 `make_environment` 的返回、`None`（⇒ 真空平地）或已是归一化 dict。"""
+    if env is None:
+        return make_environment()
+    if not isinstance(env, dict):
+        raise PhysicsError("env 须为 make_environment 的返回或 None，得到 %r"
+                           % (type(env).__name__,))
+    if env.get("schema") == ENV_SCHEMA:
+        return env
+    return make_environment(gravity=env.get("gravity", DEFAULT_G), up=env.get("up", 1),
+                            medium=env.get("medium"), terrain=env.get("terrain"))
+
+
+# ----------------------------------------------------------- drag2：二次阻力
+def drag2_truth(mass, drag_c, gravity=DEFAULT_G, y0=0.0, v_s0=None, t=None, up=1, v0=None):
+    """二次流体阻力的**闭式真值**（沿 up 轴一维）。
+
+    ⚠ 约定（与 PHYSICS-BRIEF 表格**逐字一致**）：`y` / `v` 是"**下落坐标**"标量
+    （**正 = 向下**），ODE 写成 `v̇ = g − (c/m)·v|v|`：
+
+        v_t = √(m g / c)                        # 终端速度（标量，恒正）
+        v(t) = v_t·tanh(g t / v_t + u0)          # u0 = atanh(v0/v_t) ⇒ v(0) = v0
+        y(t) = y0 + (v_t²/g)·[ln cosh(u0 + g t/v_t) − ln cosh(u0)]   # y(0) = y0
+        t99  = (v_t/g)·atanh(0.99)
+
+    与 `up` 轴的换算（`predict_at` 用这一支，up 轴本身是**向上为正**）：
+    `pos[up] = p0[up] − (y(t) − y0)`、`vel[up] = −v(t)`；给了 `t` 时同时回报
+    `y_up = −y`、`v_up = −v` 便于直接对拍。
+
+    ⚠ 边界：只沿 up 轴一维；`|v0| >= v_t` 的状态在该 ODE 下不可达 ⇒ `PhysicsError`。
+    """
+    up = _axis_of(up)
+    g = _positive_num(gravity, "gravity")
+    m = _positive_num(mass, "mass")
+    c = _positive_num(drag_c, "drag_c")
+    y0 = _finite_num(y0, "y0")
+    # 命名口径（#①）：`v_s0` 标量（沿 up 轴**下落**方向，正=向下）是规范名，`v0` 数值别名
+    v_s0 = _resolve_slide_v0(v_s0, v0, where="沿 up 轴下落方向")
+    v0 = v_s0
+    beta = c / m
+    vt = math.sqrt(g / beta)
+    if abs(v0) >= vt:
+        raise PhysicsError("drag2_truth：|v0| 须 < 终端速度 v_t=%.6f（该状态在此 ODE 下不可达），"
+                           "得到 v0=%r" % (vt, v0))
+    u0 = math.atanh(v0 / vt)
+    out = {"mass": m, "drag_c": c, "drag_beta": beta, "gravity": g, "up": up,
+           "terminal_v": vt, "characteristic_time": vt / g,
+           "t99": (vt / g) * math.atanh(0.99),
+           "t999": (vt / g) * math.atanh(0.999),
+           "u0": u0, "y0": y0, "v_s0": v_s0, "v0": v_s0}
+    if t is not None:
+        t = _finite_num(t, "t")
+        u = u0 + g * t / vt
+        out["t"] = t
+        out["v"] = vt * math.tanh(u)                       # 下落速度（正=向下）
+        out["y"] = y0 + (vt * vt / g) * (_log_cosh(u) - _log_cosh(u0))
+        out["v_up"] = -out["v"]                            # up 轴口径（向上为正）
+        out["y_up"] = -out["y"]
+    return out
+
+
+def _drag2_beta_scan(samples, up, g, beta_lo, beta_hi, beta_steps, tau_probe=41):
+    """`beta = c/m` 未知时的**确定性**二维扫描（beta 对数等分 × τ0 粗扫 + 三分细化）。
+
+    内层对给定 `(beta, τ0)` 的 `y0` 是**线性**的（`y = y0 + A(τ)`）⇒ 取均值即可。
+    """
+    ys = [-float(s[1][up]) for s in samples]      # 下落坐标（正=向下）
+    ts = [float(s[0]) for s in samples]
+    t0 = ts[0]
+    tau = [t - t0 for t in ts]
+
+    def cost(beta, u0):
+        vt = math.sqrt(g / beta)
+        c0 = _log_cosh(u0)
+        shape = [(vt * vt / g) * (_log_cosh(u0 + g * x / vt) - c0) for x in tau]
+        y0 = sum(y - sh for y, sh in zip(ys, shape)) / float(len(ys))
+        return sum((y0 + sh - y) ** 2 for y, sh in zip(ys, shape)), y0
+
+    best = (float("inf"), None, None)
+    for i in range(beta_steps + 1):
+        frac = i / float(beta_steps)
+        beta = beta_lo * (beta_hi / beta_lo) ** frac
+        vt = math.sqrt(g / beta)
+        # τ0 由 u0 参数化：u0 在 ±atanh(0.999) 内取 tau_probe 个候选
+        lim = math.atanh(0.999)
+        for j in range(tau_probe):
+            u0 = -lim + 2.0 * lim * j / float(tau_probe - 1)
+            c, y0 = cost(beta, u0)
+            if c < best[0]:
+                best = (c, beta, u0)
+    # 三分细化（beta 与 u0 各 40 轮，确定性）
+    c, beta, u0 = best
+    lo, hi = beta_lo, beta_hi
+    for _ in range(40):
+        m1 = lo + (hi - lo) / 3.0
+        m2 = hi - (hi - lo) / 3.0
+        if cost(m1, u0)[0] <= cost(m2, u0)[0]:
+            hi = m2
+        else:
+            lo = m1
+    beta = 0.5 * (lo + hi)
+    lim = math.atanh(0.999)
+    lo, hi = -lim, lim
+    for _ in range(60):
+        m1 = lo + (hi - lo) / 3.0
+        m2 = hi - (hi - lo) / 3.0
+        if cost(beta, m1)[0] <= cost(beta, m2)[0]:
+            hi = m2
+        else:
+            lo = m1
+    u0 = 0.5 * (lo + hi)
+    c, y0 = cost(beta, u0)
+    return beta, u0, y0, c
+
+
+def fit_drag2(samples, up=1, gravity=DEFAULT_G, beta=None, mass=None, drag_c=None,
+              beta_min=1e-3, beta_max=4.0, beta_steps=160):
+    """二次阻力模型（沿 up 轴一维 + 横向**匀速漂移**）。
+
+    · 给了 `beta`（或 `mass`+`drag_c`）⇒ 只扫 `u0`（`y0` 线性）；
+    · 都没给 ⇒ `beta` 在 `[beta_min, beta_max]` **对数等分**扫描（确定性，区间写死）。
+    """
+    ts = _check_samples(samples, 3)
+    up = _axis_of(up)
+    g = _positive_num(gravity, "gravity")
+    if beta is None and mass is not None and drag_c is not None:
+        beta = _positive_num(drag_c, "drag_c") / _positive_num(mass, "mass")
+    if beta is not None:
+        beta = _positive_num(beta, "beta")
+        if beta_min <= 0.0 or beta_max <= beta_min:
+            raise PhysicsError("fit_drag2：须 0 < beta_min < beta_max")
+        # 固定 beta：只扫 u0
+        ys = [-float(s[1][up]) for s in samples]      # 下落坐标（正=向下）
+        t0 = ts[0]
+        tau = [t - t0 for t in ts]
+        vt = math.sqrt(g / beta)
+
+        def cost(u0):
+            c0 = _log_cosh(u0)
+            shape = [(vt * vt / g) * (_log_cosh(u0 + g * x / vt) - c0) for x in tau]
+            y0 = sum(y - sh for y, sh in zip(ys, shape)) / float(len(ys))
+            return sum((y0 + sh - y) ** 2 for y, sh in zip(ys, shape)), y0
+
+        lim = math.atanh(0.999)
+        lo, hi = -lim, lim
+        for _ in range(80):
+            m1 = lo + (hi - lo) / 3.0
+            m2 = hi - (hi - lo) / 3.0
+            if cost(m1)[0] <= cost(m2)[0]:
+                hi = m2
+            else:
+                lo = m1
+        u0 = 0.5 * (lo + hi)
+        rss, y0 = cost(u0)
+    else:
+        if not (0.0 < beta_min < beta_max) or beta_steps < 8:
+            raise PhysicsError("fit_drag2：须 0 < beta_min < beta_max 且 beta_steps >= 8")
+        beta, u0, y0, rss = _drag2_beta_scan(samples, up, g, beta_min, beta_max, beta_steps)
+    vt = math.sqrt(g / beta)
+    if abs(math.tanh(u0)) >= 1.0 - 1e-12:
+        raise PhysicsError("fit_drag2：拟合退化（初速达到终端速度）")
+    v_up = -vt * math.tanh(u0)                    # up 轴口径（向上为正）⇒ 下落为负
+    p0 = [float(samples[0][1][i]) for i in range(3)]
+    p0[up] = -y0                                  # y0 是下落坐标 ⇒ up 轴取负
+    # 横向：匀速漂移（无阻力；docstring 已声明边界）
+    drift = [0.0, 0.0, 0.0]
+    idx = [i for i in range(3) if i != up]
+    for i in idx:
+        xs = [float(s[1][i]) for s in samples]
+        c = polyfit(ts, xs, 1)
+        drift[i] = c[1]
+        p0[i] = c[0]
+    v0 = [0.0, 0.0, 0.0]
+    v0[up] = v_up
+    for i in idx:
+        v0[i] = drift[i]
+    n = len(ts)
+    model = {"schema": PHYSICS_SCHEMA, "kind": "drag2", "up": up, "gravity": g,
+             "beta": beta, "terminal_v": vt, "mass": (mass if mass is not None else None),
+             "drag_c": (beta * float(mass) if mass is not None else None),
+             "p0": tuple(p0), "v0": tuple(v0), "drift": tuple(drift), "u0": u0,
+             "t_ref": ts[0], "n_samples": n}
+    model["residual_rms"] = _fit_rms(model, samples)
+    return model
+
+
+# ----------------------------------------------------------- slope_friction：斜面库仑摩擦
+def slope_friction_truth(slope_deg, mu_k=0.0, mu_s=None, v_s0=None, gravity=DEFAULT_G,
+                         t=None, up=1, incline_axis=0, v0=None, p0=None, incline_dir=None):
+    """斜面库仑摩擦**闭式真值**（恒定坡度；一维沿下坡方向，`s` = **沿坡路径长度**）。
+
+    参数命名（#① 冻结口径，三个 API 统一）
+    ------------------------------------
+    · **`v_s0`（标量，沿下坡方向的初速）是规范名**；`v0` 只在"是数值"时作为**别名**接受
+      （传三维序列给 `v_s0` 或传数值给三维 `v0` 的位置一律 `PhysicsError`，不静默猜测）。
+    · 三维位置/速度一律用 `p0` / `v0`（序列）。
+
+    物理与读数
+    ---------
+    `a = g(sinθ − μ_k cosθ)`；`s(t) = v_s0 t + ½ a t²`；`v(t) = v_s0 + a t`；
+    临界角 `θ_c = atan(μ_s)`；**静摩擦锁定** `locks = (tanθ <= μ_s)`。
+
+    ⚠ 锁定态口径（#② 冻结）：`locks` 是**静摩擦判据**（对"静止的物体"）。真正的
+    "被地形托住、不动"是 `held = locks and v_s0 <= 0`，此时**恒有 `s ≡ 0`、`v ≡ 0`**
+    （`stop_dist = stop_time = 0`、`motion_state="held"`）。
+    若 `locks` 为真但 `v_s0 > 0`（物体已在滑），走**动摩擦**：`held=False`、
+    `motion_state ∈ {"sliding","stopping"}`——静摩擦管不住已在运动的物体，这是物理事实，
+    不是口径漂移（读数里 `held`/`sliding`/`stops` 三件都显式给出，不再靠 `stop_dist=None` 猜）。
+    """
+    up = _axis_of(up)
+    g = _positive_num(gravity, "gravity")
+    slope_deg = _finite_num(slope_deg, "slope_deg")
+    if not (0.0 <= slope_deg < 90.0):
+        raise PhysicsError("slope_deg 须在 [0, 90) 度，得到 %r" % (slope_deg,))
+    th = math.radians(slope_deg)
+    mu_k = _finite_num(mu_k, "mu_k")
+    if mu_k < 0.0:
+        raise PhysicsError("mu_k 须 >= 0，得到 %r" % (mu_k,))
+    mu_s = mu_k if mu_s is None else _finite_num(mu_s, "mu_s")
+    if mu_s < 0.0:
+        raise PhysicsError("mu_s 须 >= 0，得到 %r" % (mu_s,))
+    v_s0 = _resolve_slide_v0(v_s0, v0)
+    a = g * (math.sin(th) - mu_k * math.cos(th))
+    locks = bool(math.tan(th) <= mu_s)
+    held = bool(locks and v_s0 <= 0.0)
+    if held:
+        state = "held"
+    elif v_s0 > 0.0 and a < 0.0:
+        state = "stopping"
+    else:
+        state = "sliding"
+    out = {"slope_deg": slope_deg, "slope_rad": th, "mu_k": mu_k, "mu_s": mu_s,
+           "gravity": g, "up": up, "incline_axis": incline_axis,
+           "accel": a, "theta_c_deg": math.degrees(math.atan(mu_s)),
+           "locks": locks, "held": held, "v_s0": v_s0, "motion_state": state,
+           "sliding": bool(state in ("sliding", "stopping")),
+           "stops": bool(a < 0.0 and v_s0 > 0.0 and not held)}
+    if held:
+        out["stop_dist"] = 0.0
+        out["stop_time"] = 0.0
+    elif a < 0.0 and v_s0 > 0.0:
+        out["stop_dist"] = (v_s0 * v_s0) / (2.0 * abs(a))
+        out["stop_time"] = v_s0 / abs(a)
+    else:
+        out["stop_dist"] = None       # 不会停（持续加速 / 无位移）
+        out["stop_time"] = None
+    u = list(incline_dir) if incline_dir is not None else None
+    if u is None:
+        u = [0.0, 0.0, 0.0]
+        u[incline_axis] = math.cos(th)
+        u[up] = -math.sin(th)
+    out["incline_dir"] = tuple(u)
+    if t is not None:
+        t = _finite_num(t, "t")
+        s_along = 0.0 if held else (v_s0 * t + 0.5 * a * t * t)
+        v_along = 0.0 if held else (v_s0 + a * t)
+        out["t"] = t
+        out["s"] = s_along
+        out["v"] = v_along
+        out["disp"] = tuple(u[i] * s_along for i in range(3))
+        out["s_axis"] = out["disp"][incline_axis]
+        if p0 is not None:
+            base = _vec3(p0, "p0")
+            out["p"] = tuple(base[i] + out["disp"][i] for i in range(3))
+    return out
+
+
+def _resolve_slide_v0(v_s0, v0, where="沿下坡方向"):
+    """`v_s0`（标量，规范名）与 `v0`（数值别名）的**唯一**解析点（#① 冻结口径）。
+
+    `where` 只影响报错文案（drag2 的 1-D 轴是"沿 up 轴下落方向"，斜面是"下坡方向"）。
+    """
+    if v_s0 is not None:
+        if isinstance(v_s0, (list, tuple)):
+            raise PhysicsError("v_s0 是**标量**（%s的初速）；三维初速请用 v0=(x,y,z)，"
+                               "得到 %r" % (where, v_s0))
+        out = _finite_num(v_s0, "v_s0")
+        if v0 is not None and not isinstance(v0, (int, float)):
+            raise PhysicsError("v0 与 v_s0 同时给出且 v0 是序列 ⇒ 口径冲突；只给其一")
+        return out
+    if v0 is None:
+        return 0.0
+    if isinstance(v0, (list, tuple)):
+        raise PhysicsError("v0 是**三维向量**；%s的标量初速请用 v_s0=…（得到 %r）"
+                           % (where, v0))
+    return _finite_num(v0, "v0")
+
+
+def fit_slope_friction(samples, up=1, gravity=DEFAULT_G, slope_deg=None, mu_k=None,
+                       mu_s=None, incline_axis=0, env=None):
+    """斜面库仑摩擦拟合：**坡度必须已知**（`slope_deg` 或 `env.terrain`），否则拒绝。
+
+    给定 θ 后 `a` 与 `μ_k` 是**一一对应**的（`μ_k = (g sinθ − a)/(g cosθ)`），
+    而 `(p0, v0, a)` 对位置是**线性**的（二次多项式 LS）⇒ 全程闭式 LS，无扫描。
+    ⚠ 边界：只支持恒定坡度 + 一维滑动（横向匀速漂移）；坡度未知时与 `accelerated` 同形、不可辨识。
+    """
+    ts = _check_samples(samples, 3)
+    up = _axis_of(up)
+    g = _positive_num(gravity, "gravity")
+    ter = _normalize_terrain(env.get("terrain"), up) if isinstance(env, dict) else None
+    if slope_deg is None and ter is not None:
+        slope_deg = ter["slope_deg"]
+    if slope_deg is None:
+        raise PhysicsError("fit_slope_friction：必须显式给 slope_deg（或 env.terrain）"
+                           "——坡度未知时与 accelerated 数学同形、不可辨识")
+    slope_deg = _finite_num(slope_deg, "slope_deg")
+    th = math.radians(slope_deg)
+    if abs(math.cos(th)) <= _EPS:
+        raise PhysicsError("fit_slope_friction：slope_deg 不能是 90 度")
+    # 一维化：把位置/速度/加速度都投影到**下坡方向**（其余分量按匀速漂移处理）
+    u = list(ter["incline_dir"]) if ter is not None else None
+    if u is None:
+        u = [0.0, 0.0, 0.0]
+        u[incline_axis] = math.cos(th)
+        u[up] = -math.sin(th)
+    c, _rms0 = _per_axis(samples, ts, 2)          # 第二项已是 rms；统一用 _fit_rms 复核
+    # ⚠ 必须投影：up 轴坐标沿下坡是**减小**的（a_up = a·(−sinθ)），直接用 a_up 会把
+    #    μ_k 解错（实测 a_up=−1.6025 而沿坡 a=+3.2050）。
+    a_fit = sum(2.0 * c[i][2] * u[i] for i in range(3))
+    mu_fit = (g * math.sin(th) - a_fit) / (g * math.cos(th))
+    if mu_fit < 0.0:
+        raise PhysicsError("fit_slope_friction：解出 μ_k=%.6f < 0（坡度/加速度不相容）" % mu_fit)
+    if mu_k is not None:
+        _finite_num(mu_k, "mu_k")
+    mu_s_out = mu_k if mu_s is None else _finite_num(mu_s, "mu_s")
+    if mu_s_out is None:
+        mu_s_out = mu_fit
+    p0 = tuple(float(samples[0][1][i]) for i in range(3))
+    v0_full = tuple(c[i][1] for i in range(3))
+    v_s = sum(v0_full[i] * u[i] for i in range(3))
+    drift = [v0_full[i] - v_s * u[i] for i in range(3)]
+    n = len(ts)
+    model = {"schema": PHYSICS_SCHEMA, "kind": "slope_friction", "up": up, "gravity": g,
+             "slope_deg": slope_deg, "slope_rad": th, "mu_k": mu_fit, "mu_s": mu_s_out,
+             "incline_axis": (ter["incline_axis"] if ter is not None else incline_axis),
+             "incline_dir": tuple(u), "accel": a_fit, "v_s0": v_s, "drift": tuple(drift),
+             # ⚠ `locked` 的**唯一**口径 = 静摩擦锁定（`locks ∧ v_s0 <= 0`），与
+             #   `slope_friction_truth.held` / `_sim_model_from_state` 一致；
+             #   "拟合出的加速度≈0"（匀速滑动）**不是** locked ⇒ 另立 `fitted_zero_accel`。
+             #   （复核探针：μ_k=tan20°、v_s0=1.5 ⇒ a=0 的**匀速滑动**曾被旧式 `|a_fit|<=1e-12`
+             #    标成 locked=True，而 truth 说 held=False/sliding ⇒ 双语义冲突。）
+             "locked": bool(ter is not None and ter["locks"] and v_s <= 0.0),
+             "fitted_zero_accel": bool(abs(a_fit) <= _EPS),
+             "p0": p0, "v0": v0_full,
+             "t_ref": ts[0], "n_samples": n}
+    model["residual_rms"] = _fit_rms(model, samples)
+    return model
+
+
+# ----------------------------------------------------------- rolling：纯滚动
+def rolling_truth(slope_deg, beta=SOLID_SPHERE_BETA, gravity=DEFAULT_G, v_s0=None,
+                  t=None, radius=None, mass=None, up=1, incline_axis=0, v0=None,
+                  p0=None, incline_dir=None):
+    """纯滚动**闭式真值**：`a = g sinθ/(1+β)`，`β = I/(m r²)`（实心球 `2/5` ⇒ `a = 5/7·g sinθ`）。
+
+    · 与同坡度**滑动**对比：`a_roll = g sinθ/(1+β) < a_slide_max = g sinθ`（β>0 ⇒ 更慢）；
+    · 能量分配：平动占 `1/(1+β)`、转动占 `β/(1+β)`（总动能 `½ m v²(1+β)`）；
+    · 纯滚动条件：`v = ω r`（给了 `radius` 才报 `omega`/`pure_rolling`）；
+    · 命名同 `slope_friction_truth`：**`v_s0` 标量是规范名**，`v0` 仅在为数值时作别名。
+
+    ⚠ 边界：只支持无滑滚动；`β` 与 `μ_k` 在纯位置观测下互相别名（见模块头）。
+    """
+    up = _axis_of(up)
+    g = _positive_num(gravity, "gravity")
+    slope_deg = _finite_num(slope_deg, "slope_deg")
+    if not (0.0 <= slope_deg < 90.0):
+        raise PhysicsError("slope_deg 须在 [0, 90) 度，得到 %r" % (slope_deg,))
+    th = math.radians(slope_deg)
+    beta = _finite_num(beta, "beta")
+    if beta < 0.0:
+        raise PhysicsError("beta = I/(m r²) 须 >= 0，得到 %r" % (beta,))
+    v_s0 = _resolve_slide_v0(v_s0, v0)
+    a = g * math.sin(th) / (1.0 + beta)
+    out = {"slope_deg": slope_deg, "slope_rad": th, "beta": beta, "gravity": g, "up": up,
+           "accel": a, "slide_accel": g * math.sin(th),
+           "slower_than_slide": bool(a < g * math.sin(th)),
+           "trans_fraction": 1.0 / (1.0 + beta), "rot_fraction": beta / (1.0 + beta),
+           "v_s0": v_s0, "motion_state": "rolling"}
+    if radius is not None:
+        r = _positive_num(radius, "radius")
+        out["radius"] = r
+        out["omega0"] = v_s0 / r
+        out["pure_rolling_ok"] = True          # 定义：纯滚动 ⇒ v = ω r 恒成立
+    if mass is not None:
+        out["mass"] = _positive_num(mass, "mass")
+    u = list(incline_dir) if incline_dir is not None else None
+    if u is None:
+        u = [0.0, 0.0, 0.0]
+        u[incline_axis] = math.cos(th)
+        u[up] = -math.sin(th)
+    out["incline_dir"] = tuple(u)
+    if t is not None:
+        t = _finite_num(t, "t")
+        v = v_s0 + a * t
+        out["t"] = t
+        out["s"] = v_s0 * t + 0.5 * a * t * t
+        out["v"] = v
+        out["disp"] = tuple(u[i] * out["s"] for i in range(3))
+        out["s_axis"] = out["disp"][incline_axis]
+        if p0 is not None:
+            base = _vec3(p0, "p0")
+            out["p"] = tuple(base[i] + out["disp"][i] for i in range(3))
+        if radius is not None:
+            out["omega"] = v / out["radius"]
+            out["pure_rolling_residual"] = abs(v - out["omega"] * out["radius"])
+    return out
+
+
+def fit_rolling(samples, up=1, gravity=DEFAULT_G, slope_deg=None, beta=None,
+                i_over_mr2=None, radius=None, mass=None, incline_axis=0, env=None):
+    """纯滚动拟合：坡度必须已知（否则与 `slope_friction`/`accelerated` 不可辨识）。
+
+    给定 θ：由二次 LS 得 `a` ⇒ `β = g sinθ/a − 1`（闭式）；给了 `beta` 则直接用。
+    ⚠ 边界：只支持无滑滚动；`β` 与 `μ_k` 在纯位置观测下**互相别名**（见模块头）。
+    """
+    ts = _check_samples(samples, 3)
+    up = _axis_of(up)
+    g = _positive_num(gravity, "gravity")
+    ter = _normalize_terrain(env.get("terrain"), up) if isinstance(env, dict) else None
+    if slope_deg is None and ter is not None:
+        slope_deg = ter["slope_deg"]
+    if slope_deg is None:
+        raise PhysicsError("fit_rolling：必须显式给 slope_deg（或 env.terrain）——"
+                           "坡度未知时与 slope_friction/accelerated 不可辨识")
+    slope_deg = _finite_num(slope_deg, "slope_deg")
+    th = math.radians(slope_deg)
+    if math.sin(th) <= _EPS:
+        raise PhysicsError("fit_rolling：slope_deg 须 > 0（平地无滚动驱动）")
+    if beta is None:
+        beta = i_over_mr2
+    u = list(ter["incline_dir"]) if ter is not None else None
+    if u is None:
+        u = [0.0, 0.0, 0.0]
+        u[incline_axis] = math.cos(th)
+        u[up] = -math.sin(th)
+    c, _rms0 = _per_axis(samples, ts, 2)
+    a_fit = sum(2.0 * c[i][2] * u[i] for i in range(3))   # 投影到下坡方向（同 slope_friction）
+    if beta is None:
+        if a_fit <= _EPS:
+            raise PhysicsError("fit_rolling：拟合加速度 a=%.6f <= 0（无滚动物理）" % a_fit)
+        beta = g * math.sin(th) / a_fit - 1.0
+        if beta < 0.0:
+            raise PhysicsError("fit_rolling：解出 beta=%.6f < 0（坡度/加速度不相容）" % beta)
+    else:
+        beta = _finite_num(beta, "beta")
+        if beta < 0.0:
+            raise PhysicsError("fit_rolling：beta 须 >= 0，得到 %r" % (beta,))
+        a_fit = g * math.sin(th) / (1.0 + beta)
+    p0 = tuple(float(samples[0][1][i]) for i in range(3))
+    v0_full = tuple(c[i][1] for i in range(3))
+    v_s = sum(v0_full[i] * u[i] for i in range(3))
+    drift = [v0_full[i] - v_s * u[i] for i in range(3)]
+    n = len(ts)
+    model = {"schema": PHYSICS_SCHEMA, "kind": "rolling", "up": up, "gravity": g,
+             "slope_deg": slope_deg, "slope_rad": th, "beta": beta,
+             "incline_axis": (ter["incline_axis"] if ter is not None else incline_axis),
+             "incline_dir": tuple(u), "accel": a_fit, "v_s0": v_s, "drift": tuple(drift),
+             "radius": radius, "mass": mass, "omega0": (v_s / float(radius)) if radius else None,
+             "p0": p0, "v0": v0_full,
+             "t_ref": ts[0], "n_samples": n}
+    model["residual_rms"] = _fit_rms(model, samples)
+    return model
+
+
+# ----------------------------------------------------------- 碰撞（事件族，不进 MODEL_KINDS）
+def collide_1d(m1, v1, m2, v2, e=1.0):
+    """一维两体碰撞（恢复系数 `e`）⇒ `(v1', v2', info)`。
+
+    `v1' = ((m1 − e·m2)·v1 + (1+e)·m2·v2)/(m1+m2)`（`v2'` 对称）。
+    `info` 必报 `momentum_before/after`、`energy_before/after`、`delta_e`（= 动能变化，<= 0），
+    以及 `reduced_mass`、`rel_v_before/after`、`predicted_delta_e`。
+    `e=1` 弹性（动能守恒）/ `e=0` 完全非弹（共速）。`e ∉ [0,1]` ⇒ `PhysicsError`（fail-closed）。
+    """
+    m1 = _positive_num(m1, "m1")
+    m2 = _positive_num(m2, "m2")
+    v1 = _finite_num(v1, "v1")
+    v2 = _finite_num(v2, "v2")
+    e = _finite_num(e, "e")
+    if not (0.0 <= e <= 1.0):
+        raise PhysicsError("恢复系数 e 须在 [0, 1]，得到 %r" % (e,))
+    M = m1 + m2
+    v1p = ((m1 - e * m2) * v1 + (1.0 + e) * m2 * v2) / M
+    v2p = ((m2 - e * m1) * v2 + (1.0 + e) * m1 * v1) / M
+    mu_r = m1 * m2 / M
+    p_before = m1 * v1 + m2 * v2
+    p_after = m1 * v1p + m2 * v2p
+    ke_before = 0.5 * m1 * v1 * v1 + 0.5 * m2 * v2 * v2
+    ke_after = 0.5 * m1 * v1p * v1p + 0.5 * m2 * v2p * v2p
+    dv = v1 - v2
+    info = {"m1": m1, "v1": v1, "m2": m2, "v2": v2, "e": e,
+            "v1_after": v1p, "v2_after": v2p,
+            "momentum_before": p_before, "momentum_after": p_after,
+            "momentum_delta": p_after - p_before,
+            "energy_before": ke_before, "energy_after": ke_after,
+            "delta_e": ke_after - ke_before, "energy_loss": ke_before - ke_after,
+            "reduced_mass": mu_r, "rel_v_before": dv, "rel_v_after": v1p - v2p,
+            "predicted_delta_e": -0.5 * mu_r * (1.0 - e * e) * dv * dv,
+            "elastic": bool(e == 1.0), "perfectly_inelastic": bool(e == 0.0)}
+    return v1p, v2p, info
+
+
+def collision_truth(m1, v1, m2, v2, e=1.0):
+    """碰撞**闭式真值**：`collide_1d` 的读数 + 两条独立守恒律（动量守恒 / ΔE 公式）。
+
+    判据（guard 里机械核对）：
+      · `momentum_after == momentum_before`（应为 0 偏差）；
+      · `delta_e == −½·μ_r·(1−e²)·Δv²`（能量损失闭式）；
+      · `e=1 ⇒ delta_e == 0`；`e=0 ⇒ v1' == v2'`（共速）。
+    """
+    v1p, v2p, info = collide_1d(m1, v1, m2, v2, e)
+    out = dict(info)
+    out["momentum_identity_err"] = out["momentum_after"] - out["momentum_before"]
+    out["delta_e_formula_err"] = out["delta_e"] - out["predicted_delta_e"]
+    out["common_velocity"] = (v1p + v2p) / 2.0 if info["perfectly_inelastic"] else None
+    return out
+
+
+# =========================================================== 碰撞箱 / 防穿模内核（冻结接口 v1）
+# 用户诉求：「修复**碰撞箱**问题，避免世界模型自己多面数建模和**运动时的穿模**」。
+# 这一节给物理引擎补上**三维碰撞检测与求解**：AABB / OBB(SAT 15 轴) / MTV / **连续检测（CCD 扫掠）**。
+# 诚实边界（写在这里，报告里照抄）：
+#   · OBB 只支持**凸**箱体（SAT 对凸体成立）；`rot` 允许任意 3x3 有限矩阵（内部按平行六面体投影，
+#     各候选轴**先归一化**再投影；行非正交时不再叫"旋转"，但检测语义仍自洽）。
+#   · `sweep_obb` **无闭式** ⇒ 用"扫掠 AABB 保守包络 + 子步长细化"，**`conservative=True`**：
+#     包络不命中 ⇒ 一定不命中（无假阴性）；命中时回报的 `toi` 是"首个采样到重叠的时刻"（**上界**），
+#     并附 `toi_lo`（上一个不重叠采样）⇒ 真值必落在 `[toi_lo, toi_hi]` 内。
+#   · **不做**网格级三角面精确相交；不做旋转动力学/角动量；不做摩擦/接触冲量（只有位移推离）。
+#   · "贴着不算重叠"（`>=` 视为分离）是**全节统一口径**，避免抖动；`aabb_of` 空输入 fail-closed。
+
+#: 碰撞代理 schema
+COLLISION_SCHEMA = "wmfactory.collision-proxy/1"
+
+#: 叉积轴退化阈值（平行边 ⇒ 叉积 ≈ 0 ⇒ 跳过该候选轴）
+_SAT_DEGENERATE = 1e-9
+
+#: 推离后允许的浮点余量（只用于 `resolve_penetration`，避免舍入导致"推完还重叠"）
+_SEPARATION_EPS = 1e-9
+
+#: 定步长积分的**步数上限**（fail-closed：超限抛错，**不静默截断**）。
+#: 依据（复核实测）：成本线性（20k→0.05s、40k→0.07s、80k→0.14s）⇒ 小 `dt` + 大 `span`
+#: 能把进程挂住；上限 2e5 步约 0.35~0.5 s，超限说明调用方该换闭式或放大 `dt`。
+MAX_INTEGRATION_STEPS = 200000
+
+
+def _is_obb(box):
+    return isinstance(box, dict) and box.get("rot") is not None
+
+
+def _box_frame(box):
+    """任意箱 → `(center, half, axes)`；`axes` 为 3 条**单位**轴（AABB ⇒ 标准基）。"""
+    if not isinstance(box, dict):
+        raise PhysicsError("箱体须为 dict（aabb_of/obb_of 的返回），得到 %r" % (type(box).__name__,))
+    center = _vec3(box.get("center"), "box['center']")
+    half = _vec3(box.get("half"), "box['half']")
+    if any(h < 0.0 for h in half):
+        raise PhysicsError("box['half'] 须 >= 0，得到 %r" % (half,))
+    rot = box.get("rot")
+    if rot is None:
+        return center, half, ((1.0, 0.0, 0.0), (0.0, 1.0, 0.0), (0.0, 0.0, 1.0))
+    if (not isinstance(rot, (list, tuple)) or len(rot) != 3
+            or any(not isinstance(r, (list, tuple)) or len(r) != 3 for r in rot)):
+        raise PhysicsError("box['rot'] 须为 3x3（行主序），得到 %r" % (rot,))
+    axes = []
+    for r in rot:
+        v = _vec3(r, "box['rot'] 行")
+        n = vlen(v)
+        if n <= _EPS:
+            raise PhysicsError("box['rot'] 出现零行（不是基），得到 %r" % (r,))
+        axes.append(vscale(v, 1.0 / n))          # 归一化后再投影（对非正交矩阵也自洽）
+    return center, half, tuple(axes)
+
+
+def _proj_radius(half, axes, L):
+    """箱体在**单位**轴 `L` 上的投影半径：`Σ |half_i · (axis_i·L)|`。"""
+    return sum(abs(half[i] * vdot(axes[i], L)) for i in range(3))
+
+
+def _world_aabb(box):
+    """任意箱（AABB/OBB）→ 世界轴对齐包围盒 `(lo, hi)`。"""
+    center, half, axes = _box_frame(box)
+    ext = [sum(abs(half[i] * axes[i][j]) for i in range(3)) for j in range(3)]
+    return (tuple(center[j] - ext[j] for j in range(3)),
+            tuple(center[j] + ext[j] for j in range(3)))
+
+
+def aabb_of(points):
+    """点集 → 轴对齐包围盒 `{"lo","hi","center","half"}`。
+
+    空输入 ⇒ `PhysicsError`（**fail-closed**：不返回"零点箱"——零点箱会被误当成合法碰撞体，
+    进而让"没穿模"变成假象）。坐标须有限（NaN/±Inf ⇒ `PhysicsError`）。
+    """
+    pts = list(points) if points is not None else []
+    if not pts:
+        raise PhysicsError("aabb_of：points 为空（不返回零点箱，fail-closed）")
+    lo = [float("inf")] * 3
+    hi = [float("-inf")] * 3
+    for p in pts:
+        q = _vec3(p, "aabb_of.points[]")
+        for i in range(3):
+            if q[i] < lo[i]:
+                lo[i] = q[i]
+            if q[i] > hi[i]:
+                hi[i] = q[i]
+    return {"schema": COLLISION_SCHEMA, "lo": tuple(lo), "hi": tuple(hi),
+            "center": tuple((lo[i] + hi[i]) / 2.0 for i in range(3)),
+            "half": tuple((hi[i] - lo[i]) / 2.0 for i in range(3)), "rot": None}
+
+
+def aabb_overlap(a, b):
+    """两箱（AABB 或 OBB，OBB 取其世界 AABB）是否**重叠**；**贴着不算重叠**。
+
+    口径：三轴**全部**满足 `la[i] < hb[i] and lb[i] < ha[i]` 才算重叠；
+    任一轴 `>=`（相切/分离）⇒ 不相交（避免"刚好贴着"被判成接触而抖动）。
+    """
+    la, ha = _world_aabb(a)
+    lb, hb = _world_aabb(b)
+    for i in range(3):
+        if la[i] >= hb[i] or lb[i] >= ha[i]:
+            return False
+    return True
+
+
+def aabb_mtv(a, b):
+    """最小平移向量 ⇒ `(单位轴, 深度)`；不相交 ⇒ `None`。
+
+    `深度 = min(a.hi−b.lo, b.hi−a.lo)`（沿该轴的**逃逸距离**），轴由 a 指向 b
+    （把 b 沿 +轴推、或把 a 沿 −轴推，都能分离）。
+
+    ⚠ 为什么不用"交集长度"`min(a.hi,b.hi)−max(a.lo,b.lo)`（见 `intersection_length()`）：**包含情形**下它不够分离。
+    实测 A=[−5,5]³ ⊃ B=[−1,1]³：交集长度=2，推 2 后 B=[1,3] **仍在 A 内**；
+    逃逸距离=6=a.half+b.half ⇒ 推 6 才分离。守卫用"推离后不再重叠"机械核对这一点。
+    """
+    la, ha = _world_aabb(a)
+    lb, hb = _world_aabb(b)
+    best_depth, best_axis, best_sign = float("inf"), None, 1.0
+    for i in range(3):
+        if la[i] >= hb[i] or lb[i] >= ha[i]:
+            return None
+        pos = ha[i] - lb[i]              # 把 b 沿 +i 推出去
+        neg = hb[i] - la[i]              # 把 b 沿 −i 推出去
+        depth, sign = (pos, 1.0) if pos <= neg else (neg, -1.0)
+        if depth < best_depth:
+            best_depth, best_axis, best_sign = depth, i, sign
+    axis = [0.0, 0.0, 0.0]
+    axis[best_axis] = best_sign
+    return (tuple(axis), best_depth)
+
+
+def intersection_length(a, b):
+    """**交集长度口径**（读数对照用，可选量）：`min(a.hi,b.hi) − max(a.lo,b.lo)` 各轴取最小。
+
+    ⚠ 与 `aabb_mtv` 的 `depth`（**逃逸距离** `min(a.hi−b.lo, b.hi−a.lo)`）**不是一回事**：
+    部分重叠时两者相等；**包含**时逃逸距离更大（实测 A=[−5,5]³ ⊃ B=[−1,1]³：交集长度 2、逃逸 6）。
+    按交集长度推离**分离不了**（B=[1,3] 仍在 A 内）⇒ 该量**只作读数/诊断**，不要拿去做 `resolve`。
+    不相交 ⇒ `0.0`。
+    """
+    la, ha = _world_aabb(a)
+    lb, hb = _world_aabb(b)
+    best = float("inf")
+    for i in range(3):
+        ov = min(ha[i], hb[i]) - max(la[i], lb[i])
+        if ov <= 0.0:
+            return 0.0
+        best = min(best, ov)
+    return best
+
+
+def obb_of(points=None, *, aabb=None, rot=None):
+    """点集（或已有 AABB）+ 旋转 ⇒ OBB `{"center","half","rot"}`。
+
+    `rot=None` ⇒ 轴对齐（等价 AABB）。`rot` 为 3x3 行主序矩阵（行 = 箱体局部轴）。
+    ⚠ 边界：SAT 对**凸**体成立；行不要求严格正交，但会**归一化**后使用（见 `_box_frame`）。
+    """
+    if aabb is None:
+        if points is None:
+            raise PhysicsError("obb_of：points 与 aabb 至少给一个")
+        aabb = aabb_of(points)
+    center = _vec3(aabb.get("center"), "aabb['center']")
+    half = _vec3(aabb.get("half"), "aabb['half']")
+    if any(h < 0.0 for h in half):
+        raise PhysicsError("aabb['half'] 须 >= 0，得到 %r" % (half,))
+    if rot is None:
+        rot_n = None
+    else:
+        _c, _h, axes = _box_frame({"center": center, "half": half, "rot": rot})
+        rot_n = tuple(tuple(x) for x in axes)
+    return {"schema": COLLISION_SCHEMA, "center": center, "half": half, "rot": rot_n,
+            "lo": tuple(center[i] - half[i] for i in range(3)),
+            "hi": tuple(center[i] + half[i] for i in range(3))}
+
+
+def _sat_axes(A, B):
+    """SAT 候选轴：A 的 3 轴 + B 的 3 轴 + 9 条叉积轴（退化轴跳过），全部单位化。"""
+    _ca, _ha, ax = A
+    _cb, _hb, bx = B
+    out = []
+    for v in list(ax) + list(bx):
+        out.append(v)                                   # 已是单位轴
+    for u in ax:
+        for v in bx:
+            c = vcross(u, v)
+            n = vlen(c)
+            if n > _SAT_DEGENERATE:                     # 平行边 ⇒ 叉积退化 ⇒ 跳过
+                out.append(vscale(c, 1.0 / n))
+    return out
+
+
+def _sat_report(a, b):
+    """SAT 结果 ⇒ `(overlap: bool, best_axis, best_depth, min_sep)`。
+
+    `min_sep` = 所有候选轴上 `|Δc·L| − (rA+rB)` 的最小值（>= 0 ⇒ 存在分离轴 ⇒ 不相交）。
+    """
+    A = _box_frame(a)
+    B = _box_frame(b)
+    d = vsub(B[0], A[0])
+    best_axis, best_depth, min_sep = None, float("inf"), float("inf")
+    for L in _sat_axes(A, B):
+        r = _proj_radius(A[1], A[2], L) + _proj_radius(B[1], B[2], L)
+        p = vdot(d, L)
+        sep = abs(p) - r
+        if sep < min_sep:
+            min_sep = sep
+        if sep >= 0.0:                                  # 贴着(==0)不算重叠
+            return False, None, float("inf"), min_sep
+        depth = -sep                                    # = rA+rB−|Δc·L|（逃逸距离）
+        if depth < best_depth:
+            best_axis = L if p >= 0.0 else vscale(L, -1.0)   # 轴由 A 指向 B
+            best_depth = depth
+    return True, best_axis, best_depth, min_sep
+
+
+def obb_overlap(a, b):
+    """OBB 相交判定：**SAT 15 轴**（A 的 3 / B 的 3 / 9 条叉积轴；叉积退化跳过）。
+
+    ⚠ 凸体才有分离轴定理；OBB 是凸的 ⇒ 成立。**贴着不算重叠**（`sep >= 0` ⇒ 不相交）。
+    """
+    return _sat_report(a, b)[0]
+
+
+def obb_mtv(a, b):
+    """OBB 的 MTV ⇒ `(单位轴, 深度)`；不相交 ⇒ `None`。
+
+    深度取 SAT 各候选轴上的**最小逃逸距离** `rA+rB−|Δc·L|`（包含情形同样是"推出去"的距离，
+    不是交集长度）；轴由 A 指向 B。
+    """
+    overlap, axis, depth, _sep = _sat_report(a, b)
+    if not overlap:
+        return None
+    return (axis, depth)
+
+
+def _aabb_dict(lo, hi):
+    return {"schema": COLLISION_SCHEMA, "lo": tuple(lo), "hi": tuple(hi),
+            "center": tuple((lo[i] + hi[i]) / 2.0 for i in range(3)),
+            "half": tuple((hi[i] - lo[i]) / 2.0 for i in range(3)), "rot": None}
+
+
+def _no_hit(normal=(0.0, 0.0, 0.0)):
+    return {"hit": False, "toi": None, "normal": normal, "depth": 0.0}
+
+
+def sweep_aabb(a, va, b, vb, dt):
+    """两 AABB 在 `[0, dt]` 内的**连续碰撞检测**（CCD）⇒ 防穿透。签名即冻结接口
+    `sweep_aabb(a, va, b, vb, dt)`（a/b 为箱体 dict，va/vb 为速度向量，dt 为时间跨度）。
+
+    做法（**闭式**）：把 b 视为静止、a 以相对速度 `v = va − vb` 运动；把 b 按 a 的半宽**膨胀**
+    成 Minkowski 箱，再做**射线 vs 膨胀箱**的 slab 求交 ⇒ 进入/离开时刻。
+
+    返回 `{"hit","toi","normal","depth","axis","entry","exit","depth_at_dt"}`：
+      · `toi ∈ [0, dt]`；**起始已重叠 ⇒ `toi = 0.0`**（并给当时的 `depth` = MTV 深度）；
+      · 命中（拦在穿越前）⇒ `depth = 0.0`（接触瞬间无嵌入），`depth_at_dt` = 若不拦则 dt 时刻的嵌入深度；
+      · `normal` = 让 a **离开** b 的单位方向（沿进入面法线）。
+    """
+    if not isinstance(a, dict) or not isinstance(b, dict):
+        raise PhysicsError("sweep_aabb：a/b 须为箱体 dict（aabb_of/obb_of 的返回）")
+    va = _vec3(va, "va")
+    vb = _vec3(vb, "vb")
+    dt = _finite_num(dt, "dt")
+    if dt < 0.0:
+        raise PhysicsError("sweep_aabb：dt 须 >= 0，得到 %r" % (dt,))
+    la, ha = _world_aabb(a)
+    lb, hb = _world_aabb(b)
+    ca = [(la[i] + ha[i]) / 2.0 for i in range(3)]
+    ra = [(ha[i] - la[i]) / 2.0 for i in range(3)]
+    cb = [(lb[i] + hb[i]) / 2.0 for i in range(3)]
+    rb = [(hb[i] - lb[i]) / 2.0 for i in range(3)]
+    v = [va[i] - vb[i] for i in range(3)]
+    if aabb_overlap(a, b):                               # 起始已重叠 ⇒ toi = 0
+        mtv = aabb_mtv(a, b)
+        axis, depth = mtv if mtv is not None else ((1.0, 0.0, 0.0), 0.0)
+        return {"hit": True, "toi": 0.0, "normal": vscale(axis, -1.0), "depth": depth,
+                "axis": axis, "entry": 0.0, "exit": None, "depth_at_dt": depth}
+    t_entry, t_exit, axis_i, sign = 0.0, dt, None, 1.0
+    for i in range(3):
+        lo = cb[i] - rb[i] - ra[i]                       # 膨胀箱（Minkowski 和）
+        hi = cb[i] + rb[i] + ra[i]
+        if abs(v[i]) <= _EPS:
+            if ca[i] < lo or ca[i] > hi:
+                return _no_hit()
+            continue
+        t1 = (lo - ca[i]) / v[i]
+        t2 = (hi - ca[i]) / v[i]
+        if t1 > t2:
+            t1, t2 = t2, t1
+        # ★修复（相切起步漏检）：`t_entry` 初值 0.0 且此处原用严格 `>` ⇒
+        #   当**起始恰好相切**（gap=0、相对速度朝对方）时 t1 == 0.0 不满足
+        #   `t1 > t_entry` ⇒ `axis_i` 保持 None ⇒ 末尾 `axis_i is None` 直接判
+        #   `_no_hit()` ⇒ 漏检。复现：两实体精确停在接触点后，下一 tick 相对
+        #   速度 18 m/s 相向却报 hit=False ⇒ **又互相穿过**。
+        #   修法：首次建立 entry 的轴也要被记住（`axis_i is None`）。
+        if t1 > t_entry or axis_i is None:
+            t_entry, axis_i, sign = t1, i, (-1.0 if v[i] > 0.0 else 1.0)
+        if t2 < t_exit:
+            t_exit = t2
+        if t_entry > t_exit:
+            return _no_hit()
+    if axis_i is None or t_entry > dt or t_exit < 0.0:
+        return _no_hit()
+    toi = max(0.0, t_entry)
+    normal = [0.0, 0.0, 0.0]
+    normal[axis_i] = sign
+    # 若不拦，dt 时刻会嵌入多深（读数用；"穿模"判据的核心数字）
+    end_a = tuple(ca[i] + va[i] * dt for i in range(3))
+    end_b = tuple(cb[i] + vb[i] * dt for i in range(3))
+    depth_at_dt = 0.0
+    for i in range(3):
+        gap = abs(end_a[i] - end_b[i]) - (ra[i] + rb[i])
+        if gap < 0.0:
+            depth_at_dt = max(depth_at_dt, -gap)
+    return {"hit": True, "toi": toi, "normal": tuple(normal), "depth": 0.0,
+            "axis": tuple(normal), "entry": t_entry, "exit": t_exit,
+            "depth_at_dt": depth_at_dt}
+
+
+def _moved(box, v, t):
+    """箱体沿 `v` 走 `t` 后的副本（center 平移；rot/half 不变）。"""
+    center = _vec3(box["center"], "box['center']")
+    out = dict(box)
+    out["center"] = tuple(center[i] + float(v[i]) * float(t) for i in range(3))
+    if box.get("rot") is None:
+        out["lo"] = tuple(out["center"][i] - float(box["half"][i]) for i in range(3))
+        out["hi"] = tuple(out["center"][i] + float(box["half"][i]) for i in range(3))
+    return out
+
+
+def sweep_obb(a, va, b, vb, dt, *, substeps=16):
+    """OBB 扫掠（**保守近似**）：扫掠 AABB 包络 + 子步长细化。
+
+    OBB 相对运动下的首次接触时刻**无闭式**（旋转不变但形状投影随姿态变），故：
+      1. 两 OBB 各取世界 AABB ⇒ 做 `sweep_aabb`；**不命中 ⇒ 一定不命中**（无假阴性）；
+      2. 命中则在 `[包络 toi, dt]` 上取 `substeps` 个采样点做 `obb_overlap`，
+         找**首个**重叠采样；再在该采样与上一个不重叠采样之间二分细化 ⇒ 给出区间 `[toi_lo, toi_hi]`。
+    返回额外键：`conservative=True`、`substeps=n`、`toi_lo`、`toi_hi`、`envelope_toi`、`refined`。
+    ⚠ **永不假阴性**：包络不命中 ⇒ 一定不命中；包络命中 ⇒ 至少给保守 TOI（子步长没采到时
+    退化为"按包络 entry 拦截"`refined=False`，早拦属安全侧）。细化成功时
+    `toi = toi_hi`（首个采样到重叠的时刻 = 真值**上界**），真值必在 `[toi_lo, toi_hi]` 内。
+    """
+    if isinstance(substeps, bool) or not isinstance(substeps, int) or substeps < 1:
+        raise PhysicsError("sweep_obb：substeps 须为 >= 1 的整数，得到 %r" % (substeps,))
+    dt = _finite_num(dt, "dt")
+    va = _vec3(va, "va")
+    vb = _vec3(vb, "vb")
+    la, ha = _world_aabb(a)
+    lb, hb = _world_aabb(b)
+    env = sweep_aabb(_aabb_dict(la, ha), va, _aabb_dict(lb, hb), vb, dt)
+    if not env["hit"]:
+        return {"hit": False, "toi": None, "normal": env["normal"], "depth": 0.0,
+                "conservative": True, "substeps": substeps, "toi_lo": None, "toi_hi": None,
+                "envelope_toi": None}
+    # ★采样窗口 = **包络的 [entry, exit]**（不是 [toi, dt]！）
+    #   理由：OBB ⊆ 其 AABB ⇒ 真实接触时刻必落在 AABB 的重叠区间 [entry, exit] 内。
+    #   早期版本从 toi 采到 dt，16 个子步会**整段跨过薄板**（实测子弹穿 0.1 薄板 ⇒
+    #   hit=False ⇒ "保守"承诺被打破）。窄窗口采样后同一用例命中。
+    e_lo = env.get("entry")
+    e_hi = env.get("exit")
+    t_lo = max(0.0, e_lo if e_lo is not None else (env["toi"] or 0.0))
+    t_hi = min(dt, e_hi if e_hi is not None else dt)
+    if t_hi < t_lo:
+        t_hi = t_lo
+    prev, first = t_lo, None
+    for k in range(substeps + 1):
+        t = t_lo + (t_hi - t_lo) * k / float(substeps)
+        if obb_overlap(_moved(a, va, t), _moved(b, vb, t)):
+            first = t
+            break
+        prev = t
+    if first is None:
+        # ★**保守兜底（fail-safe）**：包络命中但子步长没采到 ⇒ 按包络进入时刻**拦**，
+        #   不报"没碰"。包络 entry <= 真实接触时刻 ⇒ 早拦是安全侧；这样 `sweep_obb`
+        #   **永不假阴性**（envelope 不命中 ⇒ 一定不命中；命中 ⇒ 至少给保守 TOI）。
+        return {"hit": True, "toi": t_lo, "normal": env["normal"],
+                "depth": 0.0, "conservative": True, "substeps": substeps,
+                "toi_lo": t_lo, "toi_hi": t_hi, "envelope_toi": t_lo, "refined": False,
+                "note": "包络命中但子步长未采到重叠 ⇒ 按包络 entry 保守拦截（安全侧）"}
+    lo, hi = prev, first
+    for _ in range(32):                                  # 二分细化（确定性）
+        mid = 0.5 * (lo + hi)
+        if obb_overlap(_moved(a, va, mid), _moved(b, vb, mid)):
+            hi = mid
+        else:
+            lo = mid
+    mtv = obb_mtv(_moved(a, va, hi), _moved(b, vb, hi))
+    axis = mtv[0] if mtv is not None else env["normal"]
+    return {"hit": True, "toi": hi, "normal": vscale(axis, -1.0),
+            "depth": (mtv[1] if mtv is not None else 0.0),
+            "conservative": True, "substeps": substeps, "refined": True,
+            "toi_lo": lo, "toi_hi": hi, "envelope_toi": t_lo}
+
+
+def resolve_penetration(a, b, *, mass_a=1.0, mass_b=1.0):
+    """按**质量反比**推离两箱 ⇒ `(shift_a, shift_b)`，保证推离后**不再重叠**。
+
+    等质量 ⇒ 各推一半；`mass_a=1, mass_b=3` ⇒ a 推 3/4、b 推 1/4（轻的走得多）。
+    不相交 ⇒ `((0,0,0), (0,0,0))`。OBB 用 `obb_mtv`（15 轴），AABB 用 `aabb_mtv`。
+    """
+    ma = _positive_num(mass_a, "mass_a")
+    mb = _positive_num(mass_b, "mass_b")
+    if _is_obb(a) or _is_obb(b):
+        mtv = obb_mtv(a, b)
+    else:
+        mtv = aabb_mtv(a, b)
+    if mtv is None:
+        return (0.0, 0.0, 0.0), (0.0, 0.0, 0.0)
+    axis, depth = mtv
+    total = ma + mb
+    share_a = mb / total                                 # 质量反比：b 越重，a 推得越多
+    share_b = ma / total
+    shift_a = vscale(axis, -depth * share_a)
+    shift_b = vscale(axis, depth * share_b)
+    # 浮点保护：极端坐标下舍入可能残留亚纳米重叠 ⇒ 沿同轴补一个极小余量（只影响 resolve）
+    moved_a = _moved(a, shift_a, 1.0)
+    moved_b = _moved(b, shift_b, 1.0)
+    if aabb_overlap(moved_a, moved_b) or (obb_overlap(moved_a, moved_b) if (_is_obb(a) or _is_obb(b)) else False):
+        extra = _SEPARATION_EPS * (1.0 + abs(depth))
+        shift_a = vadd(shift_a, vscale(axis, -extra * share_a))
+        shift_b = vadd(shift_b, vscale(axis, extra * share_b))
+    return shift_a, shift_b
+
+
+def collision_proxy_truth(case):
+    """**6 个解析真值用例**（判据可机械核对；几何与期望值都是**独立闭式**写死的）。
+
+    返回 `{"case","boxes","expect", …}`：`boxes` 给几何（可直接喂给检测函数），
+    `expect` 给该用例的解析期望（深度/是否相交/toi 等），**不从检测实现里反推**。
+    """
+    key = str(case)
+    if key in ("x_overlap", "1"):
+        d = 0.25
+        A = aabb_of([(0.0, 0.0, 0.0), (1.0, 1.0, 1.0)])
+        B = aabb_of([(1.0 - d, 0.0, 0.0), (2.0 - d, 1.0, 1.0)])
+        return {"case": "x_overlap", "a": A, "b": B,
+                "expect": {"overlap": True, "axis": (1.0, 0.0, 0.0), "depth": d,
+                           "intersection_length": d,
+                           "formula": "沿 x 重叠 d ⇒ 逃逸深度 == d（部分重叠时与交集长度相等）"}}
+    if key in ("containment", "2"):
+        A = aabb_of([(-5.0, -5.0, -5.0), (5.0, 5.0, 5.0)])
+        B = aabb_of([(-1.0, -1.0, -1.0), (1.0, 1.0, 1.0)])
+        escape = 6.0                                     # = a.half + b.half + |Δcenter| = 5+1+0
+        inter = 2.0                                      # 交集长度（**不足以分离**）
+        return {"case": "containment", "a": A, "b": B,
+                "expect": {"overlap": True, "nonzero": True, "depth": escape,
+                           "escape_depth": escape, "intersection_length": inter,
+                           "formula": "逃逸距离 = a.half+b.half+|Δcenter| = 6；交集长度 2 推不出去"}}
+    if key in ("bars_crossed", "bars_parallel", "3"):
+        half = (2.0, 0.05, 0.05)                         # 沿局部 x 的长细棒
+        c45 = math.cos(math.radians(45.0))
+        s45 = math.sin(math.radians(45.0))
+        rot = ((c45, 0.0, s45), (0.0, 1.0, 0.0), (-s45, 0.0, c45))
+        A = obb_of(aabb={"center": (0.0, 0.0, 0.0), "half": half}, rot=rot)
+        crossed = obb_of(aabb={"center": (0.0, 0.0, 0.0), "half": half}, rot=rot)
+        parallel = obb_of(aabb={"center": (0.0, 0.0, 1.0), "half": half}, rot=rot)
+        return {"case": "bars", "a": A, "b_crossed": crossed, "b_parallel": parallel,
+                "expect": {"crossed_overlap": True, "parallel_overlap": False,
+                           "offset": 1.0, "bar_half_thickness": 0.05,
+                           "formula": "同姿态细棒：共心 ⇒ 必相交；沿 z 错开 1.0 > 2*0.05 ⇒ 不相交"}}
+    if key in ("bullet_thin_plate", "4"):
+        half_bullet = 0.05
+        x_plate = 10.0
+        plate_half_x = 0.05                              # 板厚 0.1
+        A = aabb_of([(-half_bullet, -half_bullet, -half_bullet),
+                     (half_bullet, half_bullet, half_bullet)])
+        B = aabb_of([(x_plate - plate_half_x, -1.0, -1.0), (x_plate + plate_half_x, 1.0, 1.0)])
+        v = 1000.0
+        toi = (x_plate - plate_half_x - half_bullet) / v   # = (10−0.05−0.05)/1000 = 0.0099
+        return {"case": "bullet_thin_plate", "a": A, "b": B, "va": (v, 0.0, 0.0),
+                "vb": (0.0, 0.0, 0.0), "dt": 1.0,
+                "expect": {"hit": True, "toi": toi, "tunnel_if_naive": True,
+                           "formula": "膨胀箱 slab 求交：toi=(10−0.05−0.05)/1000=0.0099；"
+                                      "朴素做法只看终点会漏（终点 x=1000 ⇒ 判定不碰 = 穿模）"}}
+    if key in ("starting_overlap", "5"):
+        A = aabb_of([(0.0, 0.0, 0.0), (1.0, 1.0, 1.0)])
+        B = aabb_of([(0.5, 0.5, 0.5), (1.5, 1.5, 1.5)])
+        return {"case": "starting_overlap", "a": A, "b": B,
+                "va": (1.0, 0.0, 0.0), "vb": (0.0, 0.0, 0.0), "dt": 1.0,
+                "expect": {"hit": True, "toi": 0.0, "depth": 0.5, "intersection_length": 0.5,
+                           "formula": "起始已重叠 ⇒ toi == 0.0；MTV 逃逸深度 0.5（== 交集长度）"}}
+    if key in ("resolve_equal", "resolve_ratio_1_3", "6"):
+        A = aabb_of([(0.0, 0.0, 0.0), (1.0, 1.0, 1.0)])
+        B = aabb_of([(0.6, 0.0, 0.0), (1.6, 1.0, 1.0)])
+        return {"case": "resolve", "a": A, "b": B,
+                "expect": {"depth": 0.4, "intersection_length": 0.4, "equal_shifts": (0.2, 0.2),
+                           "ratio_1_3_shifts": (0.3, 0.1),
+                           "formula": "沿 x 重叠 0.4；等质量各 0.2；1:3 ⇒ a 0.3 / b 0.1"}}
+    raise PhysicsError("collision_proxy_truth：未知 case %r（支持 x_overlap / containment / "
+                       "bars_crossed / bars_parallel / bullet_thin_plate / starting_overlap / "
+                       "resolve_equal / resolve_ratio_1_3）" % (case,))
+
+
+# ----------------------------------------------------------- 由 state/env 造模型
+def _sim_model_from_state(state, env, dt):
+    """`state` + `env` ⇒ `(model, closed, reason)`。
+
+    · `env` 为真空平地 ⇒ 用 `state` 自带的 kind（或默认 `projectile`）——与 `predict_at` 同源；
+    · `env.medium` ⇒ `drag2`（**闭式**：一维沿 up；横向分量存在 ⇒ 只能定步长近似）；
+    · `env.terrain` ⇒ `slope_friction` / `rolling`（**闭式**：沿下坡一维）；
+    · `medium` + `terrain` 同时给 ⇒ 无闭式 ⇒ 定步长积分（必须显式 `dt`）。
+    """
+    if not isinstance(state, dict):
+        raise PhysicsError("state 须为 dict（{'p0','v0','t_ref'} 或任一 fit_* 的模型），得到 %r"
+                           % (type(state).__name__,))
+    up = env["up"]
+    g = env["gravity"]
+    has_kind = "kind" in state
+    if not has_kind:
+        if "p0" not in state or "v0" not in state:
+            raise PhysicsError("state 缺 'p0'/'v0'（或给一个 fit_* 的模型 dict）")
+        base = {"schema": PHYSICS_SCHEMA, "kind": "projectile",
+                "p0": _vec3(state["p0"], "state['p0']"), "v0": _vec3(state["v0"], "state['v0']"),
+                "g_vec": env["g_vec"], "a": env["g_vec"], "gravity": g, "up": up,
+                "t_ref": float(state.get("t_ref", state.get("t0", 0.0)) or 0.0),
+                "residual_rms": 0.0, "n_samples": 0}
+    else:
+        base = dict(state)
+        base.setdefault("up", up)
+        base.setdefault("t_ref", 0.0)
+        base.setdefault("residual_rms", None)
+    med, ter = env["medium"], env["terrain"]
+    if med is not None and ter is not None:
+        return base, False, "medium+terrain 同时作用：三维二次阻力+斜面摩擦无闭式解"
+    if med is not None:
+        beta = med["drag_beta"]
+        mass = state.get("mass", med["mass"]) if has_kind else med["mass"]
+        p0 = _vec3(base["p0"], "state['p0']")
+        v0 = _vec3(base["v0"], "state['v0']")
+        if state.get("v_s0") is not None:          # 命名口径（#①）：标量沿"下落方向"（正=向下）
+            vs = _finite_num(state["v_s0"], "state['v_s0']")
+            v0 = tuple(-vs if i == up else v0[i] for i in range(3))
+        vt = math.sqrt(g / beta)
+        v_up = v0[up]
+        transverse = math.sqrt(sum(v0[i] ** 2 for i in range(3) if i != up))
+        model = {"schema": PHYSICS_SCHEMA, "kind": "drag2", "up": up, "gravity": g,
+                 "beta": beta, "terminal_v": vt, "mass": mass,
+                 "drag_c": beta * float(mass),
+                 "p0": p0, "v0": v0, "drift": v0,
+                 "t_ref": float(base.get("t_ref") or 0.0),
+                 "residual_rms": base.get("residual_rms"), "n_samples": base.get("n_samples", 0)}
+        if abs(v_up) >= vt:
+            return model, False, ("沿 up 的初速 |v0[up]|=%.6f 已达/超过终端速度 v_t=%.6f"
+                                  "（下落方向 |v| 须 < v_t）" % (abs(v_up), vt))
+        if transverse > 1e-9:
+            return model, False, ("横向速度 %.6f != 0：三维二次阻力无闭式解（drag2 闭式只覆盖"
+                                  "沿 up 一维）" % transverse)
+        return model, True, None
+    if ter is not None:
+        p0 = _vec3(base["p0"], "state['p0']")
+        v0 = _vec3(base["v0"], "state['v0']")
+        u = ter["incline_dir"]
+        beta = state.get("beta", state.get("i_over_mr2"))
+        if state.get("v_s0") is not None:          # 命名口径（#①）：标量沿下坡方向
+            v_s = _finite_num(state["v_s0"], "state['v_s0']")
+            v0 = tuple(u[i] * v_s for i in range(3))
+        else:
+            v_s = sum(v0[i] * u[i] for i in range(3))
+        drift = tuple(v0[i] - v_s * u[i] for i in range(3))
+        lat = math.sqrt(sum(x * x for x in drift))
+        if beta is not None:
+            kind = "rolling"
+            a = g * math.sin(ter["slope_rad"]) / (1.0 + _finite_num(beta, "state['beta']"))
+            model = {"schema": PHYSICS_SCHEMA, "kind": kind, "up": up, "gravity": g,
+                     "slope_deg": ter["slope_deg"], "slope_rad": ter["slope_rad"],
+                     "beta": float(beta), "accel": a, "incline_dir": u, "v_s0": v_s,
+                     "drift": drift, "radius": state.get("radius"), "mass": state.get("mass"),
+                     "p0": p0, "v0": v0, "t_ref": float(base.get("t_ref") or 0.0),
+                     "residual_rms": base.get("residual_rms"),
+                     "n_samples": base.get("n_samples", 0)}
+        else:
+            kind = "slope_friction"
+            a = g * (math.sin(ter["slope_rad"]) - ter["mu_k"] * math.cos(ter["slope_rad"]))
+            model = {"schema": PHYSICS_SCHEMA, "kind": kind, "up": up, "gravity": g,
+                     "slope_deg": ter["slope_deg"], "slope_rad": ter["slope_rad"],
+                     "mu_k": ter["mu_k"], "mu_s": ter["mu_s"], "accel": a,
+                     "incline_dir": u, "v_s0": v_s, "drift": drift,
+                     "locked": bool(ter["locks"] and v_s <= 0.0),
+                     "p0": p0, "v0": v0, "t_ref": float(base.get("t_ref") or 0.0),
+                     "residual_rms": base.get("residual_rms"),
+                     "n_samples": base.get("n_samples", 0)}
+        if lat > 1e-9:
+            return model, False, ("横向（面内）速度 %.6f != 0：斜面闭式只覆盖沿下坡一维" % lat)
+        return model, True, None
+    # 真空平地：与既有 predict_at 同源（**向后兼容硬判据**）
+    return base, True, None
+
+
+def _integrate_env(model, env, t, dt):
+    """**定步长**半隐式欧拉积分（仅在闭式不可得时使用；`dt` 必须显式给出）。
+
+    加速度 = 重力 + 二次阻力（介质，`−β|v|v`）+ 库仑摩擦（地形，沿下坡反向，幅度 `μ_k g cosθ`）。
+    返回 `(pos, vel, steps)`。步数 = `ceil(|t−t_ref|/dt)`，步长 = 区间/步数（末步不溢出）。
+
+    ⚠ **精度与成本（实测）**：本积分器是**一阶半隐式欧拉**，误差 ~**O(dt)**：
+      · 复核者场景（三维二次阻力）：`dt=0.05`、1 s 内位置误差 **0.217 m（相对 ~4.8%）**；
+      · 本件复测场景（`β=0.25`、横向初速 1.0）：`dt=0.05` ⇒ **0.2040 m（5.50%）**、
+        `dt=0.02` ⇒ 0.0813 m（2.19%）、`dt=0.01` ⇒ 0.0406 m（1.09%）、
+        `dt=0.005` ⇒ 0.0203 m（0.55%）⇒ **误差随 dt 线性下降**（以 dt=1e-5 为参照）。
+      · 成本随步数**线性**（20k→0.05 s、80k→0.14 s）。
+    需要更紧的精度请减小 `dt`；**只有**闭式不可得（横向速度≠0 / medium+terrain 同时作用）才走这里。
+    ⚠ **步数上限**：`steps > MAX_INTEGRATION_STEPS`（默认 2e5）⇒ `PhysicsError`
+    （**fail-closed，不静默截断**）——避免小 `dt` + 大 `span` 把进程挂住。
+    """
+    if dt is None:
+        raise PhysicsError("该场景无闭式解 ⇒ 必须显式传 dt 做定步长积分（不静默选步长）")
+    dt = _positive_num(dt, "dt")
+    up = env["up"]
+    g_vec = env["g_vec"]
+    beta = env["drag_beta"]
+    ter = env["terrain"]
+    t0 = float(model.get("t_ref") or 0.0)
+    span = float(t) - t0
+    if span == 0.0:
+        return _vec3(model["p0"], "p0"), _vec3(model["v0"], "v0"), 0
+    steps = max(1, int(math.ceil(abs(span) / dt)))
+    if steps > MAX_INTEGRATION_STEPS:
+        raise PhysicsError(
+            "定步长积分步数超限：|span|/dt = %.0f 步 > MAX_INTEGRATION_STEPS=%d"
+            "（span=%.6g, dt=%.6g）——**不静默截断**：请放大 dt、缩短 span，"
+            "或改用闭式路径" % (steps, MAX_INTEGRATION_STEPS, abs(span), dt))
+    h = span / steps
+    p = list(_vec3(model["p0"], "p0"))
+    v = list(_vec3(model["v0"], "v0"))
+    for _ in range(steps):
+        a = list(g_vec)
+        if beta is not None:
+            sp = math.sqrt(sum(x * x for x in v))
+            for i in range(3):
+                a[i] -= beta * sp * v[i]
+        if ter is not None:
+            u = ter["incline_dir"]
+            v_s = sum(v[i] * u[i] for i in range(3))
+            mu_a = ter["mu_k"] * env["gravity"] * math.cos(ter["slope_rad"])
+            if abs(v_s) > _EPS:
+                dec = min(mu_a * h, abs(v_s)) / h          # 一步内不反向
+                sgn = 1.0 if v_s > 0.0 else -1.0
+                for i in range(3):
+                    a[i] -= sgn * dec * u[i]
+        for i in range(3):
+            v[i] += a[i] * h
+            p[i] += v[i] * h
+    return tuple(p), tuple(v), steps
+
+
+def simulate(state, env, t, *, dt=None):
+    """**环境 + 状态 ⇒ t 时刻演化**（能闭式就闭式；闭式不可得才定步长积分）。
+
+    参数
+    ----
+    · `state`：`{"p0": (x,y,z), "v0": (x,y,z), "t_ref": …}`，**或**任一 `fit_*` 的模型 dict
+      （可另带 `beta`/`radius`/`mass` 覆盖环境缺省）；
+    · `env`：`make_environment(...)` 的返回，或 `None`（= 各向同性真空平地）；
+    · `t`：目标时刻；`dt`：**仅**在闭式不可得时使用的步长（此时必须显式给，否则 fail-closed）。
+
+    返回（键名冻结）::
+
+        {"pos": (…), "vel": (…), "model": {…}, "residual_rms": …,
+         "env_used": {…}, "integrated": bool, "steps": int, "kind": str, "t": float,
+         "closed_form": bool, "reason": str|None}
+
+    硬判据：`env=None` 时 `pos`/`vel` 与既有 `predict_at(model, t)` **逐字段一致**
+    （实现上就是同一条路径 ⇒ 构造性成立）。
+    """
+    t = _finite_num(t, "t")
+    env_n = _normalize_env_arg(env)
+    model, closed, reason = _sim_model_from_state(state, env_n, dt)
+    if closed:
+        pos, vel = predict_at(model, t)
+        integrated, steps = False, 0
+    else:
+        pos, vel, steps = _integrate_env(model, env_n, t, dt)
+        integrated = True
+    return {"pos": pos, "vel": vel, "model": model,
+            "residual_rms": model.get("residual_rms"), "env_used": env_n,
+            "integrated": integrated, "steps": steps, "kind": model["kind"], "t": t,
+            "closed_form": bool(closed), "reason": reason}
+
+
+def environment_truth(env, kind, **kw):
+    """**环境 + 模型类别 ⇒ 该场景的闭式真值**（复用各 `*_truth`；键名自明）。
+
+    支持 `kind`：`drag2` / `slope_friction` / `rolling` / `projectile`。
+    返回 = `{"kind": …, "env_used": env, **<该 *_truth 的键>}`。
+    """
+    env_n = _normalize_env_arg(env)
+    g, up = env_n["gravity"], env_n["up"]
+    if kind == "drag2":
+        med = env_n["medium"]
+        if med is None:
+            raise PhysicsError("environment_truth('drag2') 需要 env.medium（drag_c/mass）")
+        args = dict(kw)
+        args.setdefault("mass", med["mass"])
+        args.setdefault("drag_c", med["drag_c"])
+        return {"kind": kind, "env_used": env_n,
+                **drag2_truth(gravity=g, up=up, **args)}
+    if kind == "slope_friction":
+        ter = env_n["terrain"]
+        if ter is None:
+            raise PhysicsError("environment_truth('slope_friction') 需要 env.terrain")
+        args = dict(kw)
+        args.setdefault("slope_deg", ter["slope_deg"])
+        args.setdefault("mu_k", ter["mu_k"])
+        args.setdefault("mu_s", ter["mu_s"])
+        args.setdefault("incline_axis", ter["incline_axis"])
+        args.setdefault("incline_dir", ter["incline_dir"])
+        return {"kind": kind, "env_used": env_n,
+                **slope_friction_truth(gravity=g, up=up, **args)}
+    if kind == "rolling":
+        ter = env_n["terrain"]
+        if ter is None:
+            raise PhysicsError("environment_truth('rolling') 需要 env.terrain")
+        args = dict(kw)
+        args.setdefault("slope_deg", ter["slope_deg"])
+        args.setdefault("incline_axis", ter["incline_axis"])
+        args.setdefault("incline_dir", ter["incline_dir"])
+        return {"kind": kind, "env_used": env_n,
+                **rolling_truth(gravity=g, up=up, **args)}
+    if kind == "projectile":
+        p0 = _vec3(kw.pop("p0"), "p0")
+        v0 = _vec3(kw.pop("v0"), "v0")
+        return {"kind": kind, "env_used": env_n,
+                **projectile_truth(p0, v0, gravity=g, up=up, **kw)}
+    raise PhysicsError("environment_truth：不支持的 kind %r（支持 drag2 / slope_friction / "
+                       "rolling / projectile）" % (kind,))
+
+
+def environment_model(env, kind, **kw):
+    """**环境 + 类别 ⇒ 可直接 `predict_at` 的模型 dict**（与 `environment_truth` 同口径）。
+
+    用途：让 `simulate` 与 `environment_truth` 共用同一套参数化，避免两处公式漂移。
+    """
+    env_n = _normalize_env_arg(env)
+    up = env_n["up"]
+    if kind == "drag2":
+        med = env_n["medium"]
+        if med is None:
+            raise PhysicsError("environment_model('drag2') 需要 env.medium")
+        p0 = _vec3(kw.get("p0", (0.0, 0.0, 0.0)), "p0")
+        v0 = _vec3(kw.get("v0", (0.0, 0.0, 0.0)), "v0")
+        if kw.get("v_s0") is not None:             # 命名口径（#①）：标量沿"下落方向"（正=向下）
+            vs = _finite_num(kw["v_s0"], "v_s0")
+            v0 = tuple(-vs if i == up else v0[i] for i in range(3))
+        return {"schema": PHYSICS_SCHEMA, "kind": "drag2", "up": up,
+                "gravity": env_n["gravity"], "beta": med["drag_beta"],
+                "terminal_v": med["terminal_v"], "mass": med["mass"],
+                "drag_c": med["drag_c"], "p0": p0, "v0": v0, "drift": v0,
+                "t_ref": float(kw.get("t_ref", 0.0) or 0.0),
+                "residual_rms": 0.0, "n_samples": 0}
+    if kind in ("slope_friction", "rolling"):
+        ter = env_n["terrain"]
+        if ter is None:
+            raise PhysicsError("environment_model(%r) 需要 env.terrain" % (kind,))
+        st = {"p0": kw.get("p0", (0.0, 0.0, 0.0)),
+              "v0": _slide_state_v0(env_n, kw), "t_ref": kw.get("t_ref", 0.0)}
+        if kind == "rolling":
+            st["beta"] = kw.get("beta", kw.get("i_over_mr2", SOLID_SPHERE_BETA))
+        if kw.get("radius") is not None:
+            st["radius"] = kw["radius"]
+        if kw.get("mass") is not None:
+            st["mass"] = kw["mass"]
+        return _sim_model_from_state(st, env_n, None)[0]
+    raise PhysicsError("environment_model：不支持的 kind %r" % (kind,))
+
+
+def _slide_state_v0(env_n, kw):
+    """斜面 state 的**三维初速**：`v_s0`（标量，沿下坡）优先；否则 `v0`（三维）。
+
+    #① 冻结口径：`v_s0` 恒为标量、`v0` 恒为三维向量。早期版本只读 `v0` ⇒
+    `environment_model(env,"slope_friction", v_s0=4.0)` 被**静默忽略**（模型当成静止
+    ⇒ `locked=True`），而 `environment_truth(..., v0=4.0)` 走的是标量 ⇒ 两处读数漂移。
+    """
+    ter = env_n["terrain"]
+    u = ter["incline_dir"] if ter is not None else (1.0, 0.0, 0.0)
+    v_s0 = kw.get("v_s0")
+    v0 = kw.get("v0")
+    if v_s0 is not None and v0 is not None:
+        raise PhysicsError("v_s0（标量，沿坡）与 v0（三维向量）只给其一")
+    if v_s0 is not None:
+        if isinstance(v_s0, (list, tuple)):
+            raise PhysicsError("v_s0 是标量（沿下坡方向的初速）；三维初速请用 v0=(x,y,z)")
+        sc = _finite_num(v_s0, "v_s0")
+        return tuple(u[i] * sc for i in range(3))
+    if v0 is None:
+        return (0.0, 0.0, 0.0)
+    return _vec3(v0, "v0")
 
 
 # =========================================================== 弹簧 / 单摆 的解析真值

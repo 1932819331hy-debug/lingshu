@@ -1828,3 +1828,164 @@ def selfcheck() -> Dict:
         out["recipe:" + cat] = {"tris": rep["tris"], "watertight": rep["watertight"],
                                 "volume": rep["signed_volume"], "bbox": rep["bbox"]}
     return out
+
+
+# ===========================================================================
+# 十、碰撞代理与自穿模自检（碰撞箱接线 · 用户第二条需求）
+# ---------------------------------------------------------------------------
+# 用户原话：「我希望，在我睡着的时候，你还能修复碰撞箱问题，避免世界模型自己
+#   多面数建模和运动时的穿模问题。」
+# 本段接的是**建模侧**：世界模型**自己生成**的部件之间做碰撞箱自检 ⇒ 检出穿模
+# **必须点名**（`clean=False` + 具体 pair/深度），不许静默。
+# 运动侧（实体防穿透）在 `scene_simulator`。
+#
+# 诚实边界（照抄 `COLLISION-BRIEF.md`）：
+#   · 只支持**凸**箱体代理（AABB/OBB）；**不做**网格级三角面精确相交；
+#   · `obb=True` 的 OBB 半宽取自**点集 AABB**，再挂上 `rot`（内核 `obb_of` 口径）
+#     —— 若你要"紧贴旋转姿态的箱"，请自己传 `aabb=`（本件透传 `rot` 的语义就是
+#     "把 AABB 的姿态声明为 rot"）；
+#   · 体素占用不参与实体碰撞（沿用既有 #249 口径）。
+# ===========================================================================
+
+#: 碰撞代理 schema（与内核同源，便于对表）
+COLLISION_PROXY_SCHEMA = "wmfactory.collision-proxy/1"
+
+
+def _proxy_points(soup_or_mesh) -> List[Vertex]:
+    """`MeshData` / `mesh3d.MeshGeometry` / 三角面汤 → 顶点列表。
+
+    鸭子类型（与 `tri_soup` 同口径）：有 `.verts`+`.faces` 就当网格；否则当
+    面汤（`[(v,v,v), …]`）。空/畸形 ⇒ `ValueError`（fail-closed：空点集会让
+    内核抛 `PhysicsError`，这里先把"形状不对"与"没点"分开报）。
+    """
+    if soup_or_mesh is None:
+        raise ValueError("collision_proxy：soup_or_mesh 为 None")
+    if hasattr(soup_or_mesh, "verts") and hasattr(soup_or_mesh, "faces"):
+        pts = list(soup_or_mesh.verts)
+    else:
+        pts = []
+        for k, tri in enumerate(soup_or_mesh):
+            if len(tri) != 3:
+                raise ValueError("面汤第 %d 项不是三角面（长度 %d）" % (k, len(tri)))
+            pts.extend(tri)
+    if not pts:
+        raise ValueError("collision_proxy：顶点集为空（不返回零点箱，fail-closed）")
+    return pts
+
+
+def collision_proxy(soup_or_mesh, *, rot=None, obb: bool = False) -> Dict:
+    """自生成网格/面汤 → **碰撞代理**（AABB 恒有；`obb=True` 时附 OBB）。
+
+    参数
+    ----
+    · `soup_or_mesh`：`MeshData` / `mesh3d.MeshGeometry` / 三角面汤；
+    · `rot`：3x3 行主序旋转（行 = 箱体局部轴）；`None` = 轴对齐；
+    · `obb`：是否附 `"obb"` 子代理（SAT 15 轴用；不附则只有 AABB）。
+
+    返回（AABB 的键 + 三件附加）::
+
+        {"schema","lo","hi","center","half","rot":None,   # = physics.aabb_of(points)
+         "n_points": int,
+         "obb": {"center","half","rot","lo","hi"}|None,   # obb=True 时
+         "proxy": "aabb"|"obb"}
+
+    空点集 / 非有限坐标 ⇒ `PhysicsError`（内核 fail-closed，不返回"零点箱"）。
+    """
+    from . import physics
+    pts = _proxy_points(soup_or_mesh)
+    out = dict(physics.aabb_of(pts))
+    out["n_points"] = len(pts)
+    out["obb"] = physics.obb_of(pts, rot=rot) if obb else None
+    out["proxy"] = "obb" if obb else "aabb"
+    return out
+
+
+def _looks_like_soup(x) -> bool:
+    """结构探测：`x` 是否**单个**三角面汤（`[(v,v,v), …]`）。
+
+    判别式：`x[0][0][0]` 是**数** ⇒ 单个面汤（`x[0]`=三角面、`x[0][0]`=顶点）；
+    是**元组** ⇒ `x` 是"面汤的列表"（`x[0]`=面汤、`x[0][0]`=三角面）。
+    """
+    try:
+        return isinstance(x[0][0][0], (int, float)) and not isinstance(x[0][0][0], bool)
+    except (TypeError, IndexError, KeyError):
+        return False
+
+
+def _as_part_soup(x, where: str) -> Soup:
+    """部件（`MeshData` / 面汤 / `{"mesh"|"soup": …}`）→ 面汤。"""
+    if isinstance(x, dict):
+        for key in ("soup", "mesh", "geometry"):
+            if key in x:
+                return _as_part_soup(x[key], where)
+        raise ValueError("%s：dict 部件缺 'soup'/'mesh' 键（实得键 %s）"
+                         % (where, sorted(x)))
+    if hasattr(x, "verts") and hasattr(x, "faces"):
+        return tri_soup(x)
+    if not x:
+        raise ValueError("%s：部件为空（fail-closed，不当作'没穿模'）" % where)
+    return [tuple(tuple(float(c) for c in v) for v in tri) for tri in x]
+
+
+def _parts_of(soup, parts) -> List[Soup]:
+    """`(soup, parts)` → "每部件一个面汤"的列表。
+
+    · `parts` 给了 ⇒ 逐元素取面汤（索引 `i`/`j` 即 `parts` 的下标，可点名）；
+    · `parts` 为 None ⇒ 若 `soup` 本身是"面汤的列表"（结构探测）就按它拆件；
+      否则**整份 soup 视为一个部件**（⇒ 无可比对 pair：`n_checked=0, clean=True`）。
+    """
+    if parts is not None:
+        if not parts:
+            raise ValueError("parts 为空序列（fail-closed）")
+        return [_as_part_soup(p, "parts[%d]" % i) for i, p in enumerate(parts)]
+    if _looks_like_soup(soup):
+        return [_as_part_soup(soup, "soup")]
+    return [_as_part_soup(p, "soup[%d]" % i) for i, p in enumerate(soup)]
+
+
+def self_interpenetration_report(soup, *, parts=None, obb: bool = False) -> Dict:
+    """**自生成部件之间**两两做碰撞箱自检 ⇒ 穿模点名报告。
+
+    参数
+    ----
+    · `soup`：装配体的三角面汤，**或**"面汤的列表"（每元素一个部件）；
+    · `parts`：显式部件序列（`MeshData` / 面汤 / `{"soup": …}`）；给了就以它为准，
+      `pairs` 里的 `i`/`j` 即其下标 ⇒ **可点名到具体部件**；
+    · `obb`：用 OBB（SAT 15 轴）而不是 AABB 判重叠。
+
+    返回::
+
+        {"pairs": [{"i","j","overlap","depth","axis"}, …],   # 检查过的**每一对**
+         "max_depth": float, "clean": bool, "n_checked": int, "n_parts": int}
+
+    **不许静默**：检出穿模 ⇒ 对应 pair 的 `overlap=True` 且 `depth>0`、`clean=False`；
+    空部件 / 空点集 ⇒ 抛错（不把"没检查"伪装成"干净"）。
+    """
+    from . import physics
+    part_soups = _parts_of(soup, parts)
+    proxies = []
+    for i, ps in enumerate(part_soups):
+        try:
+            proxies.append(collision_proxy(ps, obb=obb))
+        except Exception as exc:                       # 点名到部件再抛（fail-closed）
+            raise ValueError("部件 %d 的碰撞代理失败：%s" % (i, exc)) from exc
+    pairs, max_depth = [], 0.0
+    for i in range(len(proxies)):
+        for j in range(i + 1, len(proxies)):
+            a, b = proxies[i], proxies[j]
+            if obb:
+                overlap = physics.obb_overlap(a["obb"], b["obb"])
+                mtv = physics.obb_mtv(a["obb"], b["obb"]) if overlap else None
+            else:
+                overlap = physics.aabb_overlap(a, b)
+                mtv = physics.aabb_mtv(a, b) if overlap else None
+            axis, depth = (mtv if mtv is not None else (None, 0.0))
+            if overlap:
+                max_depth = max(max_depth, float(depth))
+            pairs.append({"i": i, "j": j, "overlap": bool(overlap),
+                          "depth": (float(depth) if overlap else 0.0),
+                          "axis": (tuple(axis) if (overlap and axis is not None) else None)})
+    return {"pairs": pairs, "max_depth": max_depth,
+            "clean": not any(p["overlap"] for p in pairs),
+            "n_checked": len(pairs), "n_parts": len(proxies),
+            "schema": COLLISION_PROXY_SCHEMA}

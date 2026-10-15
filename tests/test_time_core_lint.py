@@ -120,6 +120,23 @@ _PHYSICS_TAU_SPECS = (
 )
 
 
+#: 2026-10-15 **物理仿真深化**（drag2 / slope_friction / rolling / collision +
+#: `Environment`/`simulate`）新增的命中。性质已在 lint 头部豁免表下**逐条复核**：
+#: R1 全部是物理阻尼/振子闭式解与 `_log_cosh`（softplus，纯函数）；
+#: R3 全部是运动学外推（`tau` 是流逝时间 t-t0，不是保持率）。
+#: 登记判据与先例同类（`_ACTIVATION_SPEC` / `_PHYSICS_DAMPING_SPECS` / `_PHYSICS_TAU_SPECS`）。
+_PHYSICS_DEEPENING_R1_SPECS = (
+    ("lingshu/world/physics.py", "math.log1p(math.exp(-2.0 * a))", 1),   # _log_cosh（softplus）—— drag2 位置闭式
+)
+_PHYSICS_DEEPENING_R3_SPECS = (
+    ("lingshu/world/physics.py", "u = u0 + g * tau / vt", 1),                        # drag2 tanh 参数
+    ("lingshu/world/physics.py", "float(drift[i]) * tau", 1),                        # drag2 横向匀速漂移
+    ("lingshu/world/physics.py", "s = v_s0 * tau + 0.5 * a * tau * tau", 1),         # slope_friction 沿坡位移
+    ("lingshu/world/physics.py", "v_s = v_s0 + a * tau", 1),                         # slope_friction 沿坡速度
+    ("lingshu/world/physics.py", "u_dir[i] * s + float(drift[i]) * tau", 1),         # slope_friction 世界坐标分解
+)
+
+
 def _anchor(spec):
     rel, marker, nth = spec
     return (rel, _marker_line(rel, marker, nth))
@@ -600,6 +617,15 @@ def test_real_repo_current_hit_set_is_exactly_stable_lease(empty_baseline):
       · 11 → 17 条：2026-10-15 #607 词表补 tau 后 physics.py 的 6 条 R3(c)
         `* tau` 形状级命中（`_PHYSICS_TAU_SPECS`）——tau 是 predict_at 的流逝
         时间变量（运动学外推），非保持率；逐条核实后登记（见 baseline #607 段）。
+      · 17 → 23 条：2026-10-15 **物理仿真深化**（drag2 / slope_friction / rolling /
+        collision + `Environment`/`simulate`）在 physics.py 行号之上插入大量新代码
+        ⇒ 既有条目全部 stale、同一违规以新行号出现。按 lint 头部豁免表**逐条复核 20 条**
+        后判定：R1 全部是**物理阻尼/振子闭式解**（fit_damped 基函数、predict_at('damped')
+        解析解、欠阻尼包络 exp(-ζωt)、(1+ωt)exp(-ωt) 临界阻尼、对数衰减率
+        exp(-2πζ/√(1-ζ²))）与 `_log_cosh`（softplus，纯函数）；R3 全部是**运动学外推**
+        （p0+v0·τ+½a·τ²、θ=θ0+ω·τ、s=v_s0·τ+½a·τ²、drag2 的 tanh 参数与横向漂移），
+        `tau` 是流逝时间 (t-t0) 而非保持率。**无一条**是 time_core 的时间可信度衰减核
+        ⇒ 照既有豁免类登记 baseline（**非**放宽判据），并逐条补写性质注释。
     """
     data = payload(run_lint("--baseline", str(empty_baseline), "--json"))
     assert hit_set(data) == (
@@ -610,6 +636,8 @@ def test_real_repo_current_hit_set_is_exactly_stable_lease(empty_baseline):
         | {_anchor(sp) + ("R1",) for sp in _PHYSICS_DAMPING_SPECS}
         | {_anchor(_SHADE_SHOULDER_SPEC) + ("R1",)}
         | {_anchor(sp) + ("R3",) for sp in _PHYSICS_TAU_SPECS}
+        | {_anchor(sp) + ("R1",) for sp in _PHYSICS_DEEPENING_R1_SPECS}
+        | {_anchor(sp) + ("R3",) for sp in _PHYSICS_DEEPENING_R3_SPECS}
     )
 
 
