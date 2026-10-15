@@ -3604,6 +3604,22 @@ class LayeredStore:
         if not verify_designer(designer_key):
             raise PermissionError(
                 "D-007 设计者认证失败：密钥无效或未配置 AEIS_DESIGNER_KEY（fail-closed）")
+        # #586：实例角色闸——终裁是**共享层写**（下方 `UPDATE nodes SET
+        # layer='structure', confidence=1.0`），与 `add_node` 的 `SHARED_LAYERS`
+        # 角色闸同向：非 PRIMARY 即便持有效设计者密钥也不得写共享层。旧实现只验
+        # 密钥 ⇒ SUB 本地「自提案→自复核→自终裁」把任意内容写成结构层节点
+        # （confidence=1.0、不可删、不衰减），并经 `prepare_shared_sync` /
+        # `apply_shared_sync` 传入 PRIMARY（公开 issue #586 复现读数）。密钥取自
+        # 进程环境变量，同一部署下启动的 SUB 天然持有 ⇒ 密钥闸不构成角色隔离。
+        # fail-closed：先判后写，抛错时零状态变更（提案状态亦不改写）。
+        # 边界（削掉的判别力，如实标注）：本闸只判**实例角色**；SUB 仍可
+        # `propose_promotion`/`verify_promotion`（提案与复核属本地动作），只是
+        # 终裁权归父节点主控。判据来源：公开 issue #586 ＋ 写权限单一真源
+        # `SHARED_LAYERS`（`add_node`/`protect_node`/洞见 #569 同款）。
+        if self.role != Role.PRIMARY:
+            raise PermissionError(
+                f"role={self.role.value} 无权终裁固化提案（终裁写共享层，"
+                f"由父节点主控，#586）")
         c = self.conn.cursor()
         c.execute("SELECT node_id, status, content_hash, requester, verified_by "
                   "FROM promotion_proposals WHERE id=?", (proposal_id,))
@@ -9309,6 +9325,23 @@ class SpacetimeMemoryEngine:
                 "D-007 设计者认证失败：备份含需密钥治理面行（不可变层 "
                 f"{len(immutable_rows)} 条 / engine_meta 治理快照 {len(guarded_meta)} 条 / "
                 f"action_logs 带 id 行 {len(id_log_rows)} 条）（fail-closed，零落库）")
+        # #586：实例角色闸（与上方密钥闸并列的第二道，同族旁路面）——备份含
+        # **共享层**（anchor/structure）行时非 PRIMARY 不得导入，即便持有效密钥。
+        # 旧实现只验密钥 ⇒ SUB + 密钥导入含 `structure` 行的备份即在本实例落
+        # structure 行（公开 issue #586「同根因：import_all」实测）。
+        # 口径取 `SHARED_LAYERS` 而非 `IMMUTABLE_LAYERS`：#191 已裁定 SELF 属
+        # **本地层**（SUB 可写），若按 IMMUTABLE 收口会把 SUB 的自我层备份一并
+        # 拒掉、回归 #191 ⇒ 与 `add_node` 的写权限单一真源保持一致。
+        # 判据来源：公开 issue #586 ＋ `SHARED_LAYERS`（core.py `add_node` 角色闸）。
+        shared_values = {lyr.value for lyr in self.store.SHARED_LAYERS}
+        shared_rows = [r.get("id") for r in data.get("nodes", [])
+                       if r.get("layer") in shared_values
+                       or prior_layer.get(r.get("id")) in shared_values]
+        if shared_rows and self.role != Role.PRIMARY:
+            raise PermissionError(
+                f"role={self.role.value} 无权导入共享层（anchor/structure）行"
+                f"（{len(shared_rows)} 条）：共享层由父节点主控，即便持设计者密钥"
+                "亦不放行（#586，fail-closed，零落库）")
         counts = {}
         skipped = []
         discarded = {}
