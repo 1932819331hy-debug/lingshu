@@ -17,6 +17,13 @@
    ——`SKIP` 与 `PASS` 在汇总里分开计数，最后的 `VERDICT` 也把 SKIP 数写清楚。
 2. 子进程一律显式 `encoding="utf-8", errors="replace"`
    （本仓 #455 纪律：非 UTF-8 locale 下不加 encoding 会静默拿到 `None`）。
+
+退出码 ↔ VERDICT（**两者必须一一对应**，调用方按退出码判，人按 VERDICT 读）：
+    0  VERDICT=PASS              全部门都真验过且通过
+    2  VERDICT=PASS-WITH-SKIP    无失败，但有门被跳过（**没验过 ≠ 通过**）
+    1  VERDICT=FAIL              至少一门失败
+★ 退出码 `2` 是 #699 F1 的修复：旧版把 `PASS-WITH-SKIP` 也返回 `0`，于是"4 门全验"
+  与"只验 3 门"在**退出码**上不可区分（CI/脚本据此判"绿"会误判）。这是**行为变更**。
 """
 from __future__ import annotations
 
@@ -91,7 +98,12 @@ def main(argv=None):
           % (n_pass, n_fail, n_skip, len(GATES)))
     print("VERDICT=%s" % ("PASS" if (n_fail == 0 and n_skip == 0)
                           else ("PASS-WITH-SKIP" if n_fail == 0 else "FAIL")))
-    return 0 if n_fail == 0 else 1
+    #: 退出码**反映跳过**（#699 F1，**行为变更**：旧版此处 `return 0 if n_fail == 0 else 1`，
+    #: 有跳过也返回 0）。现在：0=全验通过 · 2=无失败但有跳过 · 1=有失败。
+    #: 理由：调用方按"非 0 即失败"消费时，旧版会把"只验了 3 门"误判成"4 门全绿"。
+    if n_fail:
+        return 1
+    return 2 if n_skip else 0
 
 
 if __name__ == "__main__":

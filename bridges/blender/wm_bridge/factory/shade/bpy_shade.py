@@ -58,11 +58,14 @@ STUDIO_PREFIX = "SHADE_"
 #: 描边壳体的自定义标记（导出 GLB 时按它过滤，避免顶点数翻倍）
 OUTLINE_TAG = "shade_outline"
 
+#: #699 F15：`setup_studio` 曾被列进 `__all__`，但它**模块级从未定义**（全仓仅此一处
+#: 出现，无实现、无调用方）⇒ `from ... import *` 会 `AttributeError`。按语义**移除该名**
+#: （而不是补一个空壳定义）。其余 19 名均已在模块级定义（静态守卫钉住这条）。
 __all__ = [
     "SHADE_VERSION", "STUDIO_PREFIX", "OUTLINE_TAG",
     "apply_recipe", "assign_material", "resolve_part_objects", "apply_spec_materials",
     "build_outline", "clear_outline", "object_bounds", "solve_framing",
-    "setup_studio", "render_still", "render_shot", "export_glb", "verify_glb",
+    "render_still", "render_shot", "export_glb", "verify_glb",
     "render_all", "run", "selftest", "make_material_balls",
 ]
 
@@ -1595,9 +1598,13 @@ def selftest(outdir=None):
              "note": "canonical PNG = 剥 ancillary chunk 后固定参数重编码 ⇒ 这时 sha256 "
                      "才是『像素的哈希』，而不是『像素+渲染耗时』的哈希"})
         chk("raw_png_sha_unequal_due_to_metadata",
-            _s1["png"]["sha256"] != _s2["png"]["sha256"] or True,
+            _s1["png"]["sha256"] != _s2["png"]["sha256"],
             {"note": "Blender 原始 PNG 含 tEXt/Date · RenderTime · Camera ⇒ 即便像素相同，"
-                     "sha256 也不同（这就是『EEVEE 不可复现』的真身）"})
+                     "sha256 也不同（这就是『EEVEE 不可复现』的真身）。"
+                     "★ #699 F7：旧版此处写成 `... != ... or True`（恒真式）⇒ 该 check "
+                     "永不可能失败，等于没在断言。现为**真实比较**——若某版本 Blender 的"
+                     "原始 PNG 真的一致，这条会红，那正是需要知道的（说明该版本不带那些 "
+                     "chunk）。⚠ 本条需 Blender 运行时才能实跑，本批未做运行时验证。"})
         chk("determinism_studio_idempotent",
             len([o for o in bpy.data.objects if o.name.startswith(STUDIO_PREFIX + "cam")]) == 1,
             [o.name for o in bpy.data.objects if STUDIO_PREFIX + "cam" in o.name])

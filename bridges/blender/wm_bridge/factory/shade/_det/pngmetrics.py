@@ -160,16 +160,25 @@ def encode_canonical(w, h, ch, pixels, *, level=9, filter_type=0):
 
 
 def canonical_file(src, dst, *, level=9, keep_if_exists=False):
-    """把 src 重编码成确定性 PNG 写到 dst。返回 {src, dst, sha256, bytes, decoded_sha256}。"""
+    """把 src 重编码成确定性 PNG 写到 dst。返回 {src, dst, sha256, bytes, from_cache}。
+
+    **来源可判读**（#699 F8）：`keep_if_exists=True` 且 dst 已存在时**不重编码、不覆写**，
+    直接取 dst 既有内容的 sha。旧版对此**不作任何标记** ⇒ 陈旧缓存的 sha 可冒充"本次产物
+    的指纹"。现在返回值带 `from_cache`：
+      · `from_cache=False` ⇒ `sha256` 是**本次由 src 重编码**所得字节的哈希（src 的可信指纹）
+      · `from_cache=True`  ⇒ `sha256` 是 **dst 既有文件**的哈希，**不保证**对应本次的 src；
+                             需要 src 的指纹时请传 `keep_if_exists=False`。
+    """
     import os
-    if keep_if_exists and os.path.exists(dst):
+    from_cache = bool(keep_if_exists and os.path.exists(dst))
+    if from_cache:
         b = open(dst, "rb").read()
     else:
         im = decode_file(src)
         b = encode_canonical(im["w"], im["h"], im["ch"], im["pixels"], level=level)
         with open(dst, "wb") as f:
             f.write(b)
-    return {"src": src, "dst": dst, "bytes": len(b),
+    return {"src": src, "dst": dst, "bytes": len(b), "from_cache": from_cache,
             "sha256": hashlib.sha256(b).hexdigest()}
 
 

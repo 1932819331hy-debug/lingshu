@@ -89,13 +89,17 @@ try:
     sc.camera = cam
     res["camera"] = {"loc": [round(v, 3) for v in cam.location],
                      "ctr": [round(v, 3) for v in ctr], "radius": round(radius, 3)}
-    paths = BA.render_frames(list(range(n)), OUT, prefix="f")
-    res["rendered"] = len(paths)
+    #: ⚠ `render_frames` 返回的是 **dict** `{"paths": [...], "snapshots": {...}}`（**不是列表**）。
+    #: #699 F16：旧版写 `paths = BA.render_frames(...)` 后 `len(paths)` 取的是**键数**(=2)、
+    #: `for p in paths` 迭代的是**键名** ⇒ `rendered` 恒为 2、`frames` 记成 ["paths","snapshots"]。
+    #: 按契约取 `["paths"]`。
+    _frames = BA.render_frames(list(range(n)), OUT, prefix="f")
+    res["rendered"] = len(_frames["paths"])
 
     #: ⚠ GIF 组装**不在 Blender 里做**：Blender 的 Python 没有 PIL
     #: （实测 `ModuleNotFoundError: No module named 'PIL'`）。这里只出帧；
     #: 装配交给 venv 侧的 `assemble_hex_gif.py`（那里有 PIL），并把两条断言带上。
-    res["frames"] = [os.path.basename(p) for p in paths]
+    res["frames"] = [os.path.basename(p) for p in _frames["paths"]]
     res["delay_ms"] = delay
     res["expected_total_ms"] = n * delay
     res["ok"] = True

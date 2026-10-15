@@ -588,7 +588,13 @@ def foreground_mask(src, width=None, height=None, ss=2, threshold=0.5):
 
 
 def iou(mask_a, mask_b):
-    """前景 IoU。两掩码尺寸须一致（不一致直接报错，不猜）。"""
+    """前景 IoU。两掩码尺寸须一致（不一致直接报错，不猜）。
+
+    返回值 `(iou, detail)`。**空集语义**（#699 F3）：两掩码**都为空**时 IoU 在数学上是
+    `0/0`（未定义）。旧版返回 `1.0`，把"两个空掩码"判成"完全重合"（假成功：双空掩码
+    能骗过 `iou >= 0.90` 这类下限门）。现改为返回 `0.0` 并**在明细里显式标 `undefined`**
+    —— 消费方据此可区分"真的算出来是 0"（`undefined` 缺席）与"无从判定"（`undefined=True`）。
+    """
     a = np.asarray(mask_a, dtype=bool)
     b = np.asarray(mask_b, dtype=bool)
     if a.shape != b.shape:
@@ -596,7 +602,9 @@ def iou(mask_a, mask_b):
     inter = int(np.count_nonzero(a & b))
     union = int(np.count_nonzero(a | b))
     if union == 0:
-        return 1.0, {"inter": 0, "union": 0, "a": 0, "b": 0}
+        #: 两掩码全空 ⇒ 未定义（不是"完全重合"，也不是"完全不同"）
+        return 0.0, {"inter": 0, "union": 0, "a": 0, "b": 0,
+                     "empty": True, "undefined": True}
     return inter / float(union), {"inter": inter, "union": union,
                                   "a": int(np.count_nonzero(a)),
                                   "b": int(np.count_nonzero(b))}
