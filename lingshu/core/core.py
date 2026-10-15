@@ -1088,6 +1088,9 @@ class LayeredStore:
         # 强引用——旧实现用强引用列表登记，线程退出后连接对象不 GC ⇒ 不关闭 ⇒ 其
         # 可能悬挂的写事务持锁不放（「库写不进去」），且登记表随线程数无界增长。
         self._conns = weakref.WeakSet()
+        #: #660：生命周期终止态标志——`close()` 置 True，`conn` property 据此 fail-closed
+        #: （旧实现无此标志，close 后仍返回死连接；见 `conn` docstring）。
+        self._closed = False
         self._memory_dsn = (self._MEMORY_DSN.format(uuid.uuid4().hex[:12])
                             if db_path == ":memory:" else None)
         # 锚连接（强引用）：`file:...?mode=memory&cache=shared` 的共享内存库需要**至少
@@ -1184,9 +1187,24 @@ class LayeredStore:
 
     @property
     def conn(self) -> sqlite3.Connection:
-        """本线程的连接；首次访问时按需建立（每线程一条，互不共享）。"""
+        """本线程的连接；首次访问时按需建立（每线程一条，互不共享）。
+
+        #660：`close()` 之后本实例为**终止态**——旧实现不清 `_local.slot`，且新鲜度判据
+        （`slot is None or slot.conn is None`）看不到 `_ThreadConn._closed` 已置位 ⇒ 返回
+        **已关闭的连接对象**，五个公开面全抛 `ProgrammingError: Cannot operate on a
+        closed database.`（新线程则走 `_connect` 建到已销毁的 `:memory:` 库上，得
+        `OperationalError: no such table: nodes`），调用方读不到「引擎已关闭」这一事实。
+        现：① 新鲜度判据纳入 `slot._closed`（同一模块里写好的状态位不再被忽略）；
+        ② `close()` 置位的 `self._closed` 在此**显式失败**并给可判文案（fail-closed）。
+        边界（如实标注 · 留设计者裁）：本件取「close 为生命周期终点、拒绝重用」的最小口径
+        ——**是否**提供显式 reopen（尤其 `:memory:` 后端重连）属产品口径，本件不定，留门。
+        """
+        if self._closed:
+            raise sqlite3.ProgrammingError(
+                "LayeredStore 已关闭（close() 已调用）：本实例不可再用于读写。close() 是"
+                "生命周期终点；如需继续使用请新建实例（#660）")
         slot = getattr(self._local, "slot", None)
-        if slot is None or slot.conn is None:
+        if slot is None or slot.conn is None or slot._closed:
             slot = self._connect(self._memory_dsn or self.db_path)
         return slot.conn
 
@@ -4858,19 +4876,48 @@ class LayeredStore:
         return stats
 
     def close_current_thread(self):
-        """服务请求收尾时释放本线程连接，不关闭其他线程的连接。"""
+        """服务请求收尾时释放本线程连接，不关闭其他线程的连接。
+
+        #660：旧实现读的是 `getattr(self._local, "conn", None)`，而 `_connect` 实际设的是
+        `self._local.slot` ⇒ 该读取**恒为 None**、整个方法恒为 no-op（槽仍在、连接仍可用）。
+        现改读/清 `self._local.slot`：关槽、从登记表摘除、清空本线程槽（下次访问经
+        `conn` property 按需重建——本方法**不是**终止态，故不置 `self._closed`）。
+
+        `:memory:` 边界（如实标注）：`__init__` 的保活锚连接在创建线程内**就是**该线程的
+        `_local.slot`（`_connect` 同时登记两处）。若直接关掉它，共享内存库随最后一条连接
+        消失 ⇒ 后续访问得到空库假连接。故当被关的槽就是锚连接时，**先补一条新的保活
+        连接**再关旧槽（共享缓存库在旧连接关闭前已有新连接挂上，库不消失）；文件库无需
+        保活，直接清引用。
+        """
         with self._lock:
-            connection = getattr(self._local, "conn", None)
-            if connection is not None:
-                connection.close()
-                self._conns.remove(connection)
-                del self._local.conn
+            slot = getattr(self._local, "slot", None)
+            if slot is None:
+                return
+            self._local.slot = None
+            if slot is self._anchor:
+                if self._memory_dsn is not None:
+                    self._anchor = self._connect(self._memory_dsn)
+                    # 新锚只作保活，不作本线程连接（下次访问按需重建）。
+                    self._local.slot = None
+                else:
+                    self._anchor = None
+            slot.close()
+            self._conns.discard(slot)
 
     def close(self):
-        """关闭本实例登记的全部连接（Agent 生命周期终点调用）。"""
+        """关闭本实例登记的全部连接（Agent 生命周期终点调用）。
+
+        #660：旧实现只遍历 `_conns` 关槽 ＋ `_anchor = None`，**不清 `self._local.slot`**
+        ——被 close 的槽 `_closed=True` 但 `slot.conn` 仍非 None，`conn` property 判为
+        「仍新鲜」并返回死连接（见 `conn` docstring）。现：① 置 `self._closed`（终止态，
+        `conn` 显式失败并给可判文案）；② 清本线程 `_local.slot`；③ 其余线程的槽已关闭，
+        其 `_local.slot` 指向的槽 `_closed=True` 由 `conn` 新鲜度判据拦下。
+        """
+        self._closed = True
         for slot in list(self._conns):
             slot.close()
         self._conns = weakref.WeakSet()
+        self._local.slot = None
         self._anchor = None
 
 
