@@ -131,14 +131,17 @@ class Environment:
     （`gravity=physics.DEFAULT_G`）、1 秒/tick。⇒ 只要没有实体被标成
     `attrs["physics"] == "dynamics"`，登记环境**不会移动任何实体**（硬判据）。
 
-    · `gravity` 是**沿 `-up` 轴的重力强度**（正数；`0` = 失重，用于隔离阻力）；
+    · `gravity` 是**沿 `-up` 轴的重力强度**（**须 > 0**；方向由 up 决定。内核
+      `physics.make_environment` 要求 `gravity > 0`（`drag2` 的闭式真值以
+      `v_t = sqrt(g/beta)` 为参数，`g = 0` 时退化）⇒ 本层同向拒 `0`，不提供
+      「零重力」模式；做「隔离阻力」实验请用一个**极小正数**，实测 `1e-09` 两侧都通过）；
     · `up` 是上方向的轴索引（lingshu 世界 Y-up ⇒ 缺省 1）；
     · `slope_deg` / `mu_s` / `mu_k`：恒定坡度与静/动摩擦系数（库仑摩擦）；
     · `drag_c`：二次流体阻力系数（`c`，见 `physics.drag2_truth`）；`mass` 为质量；
     · `dt`：每 tick 的秒数（**唯一时间基准**；本层不支持每实体不同 dt）。
 
-    校验 fail-closed：非有限 / 负的摩擦与阻力 / 非正质量或步长 / `up` 越界 /
-    `|slope_deg| >= 90` 一律 `ValueError`——不静默夹取、不静默改写。
+    校验 fail-closed：非有限 / 非正的 `gravity` / 负的摩擦与阻力 / 非正质量或步长 /
+    `up` 越界 / `|slope_deg| >= 90` 一律 `ValueError`——不静默夹取、不静默改写。
     """
     gravity: Optional[float] = None
     up: int = 1
@@ -162,9 +165,10 @@ class Environment:
             if isinstance(v, bool) or not isinstance(v, (int, float))                     or not math.isfinite(float(v)):
                 raise ValueError("Environment.%s 需为有限数值，收到 %r" % (name, v))
             setattr(self, name, float(v))
-        if self.gravity < 0:
-            raise ValueError("Environment.gravity 需 >= 0（强度，方向由 up 决定）：%r"
-                             % (self.gravity,))
+        if self.gravity <= 0:
+            raise ValueError("Environment.gravity 需 > 0（沿 -up 轴的强度，方向由 up 决定）："
+                             "%r——内核 `physics.make_environment` 要求 `gravity > 0`，"
+                             "本层不做第二套约定" % (self.gravity,))
         if self.mass <= 0:
             raise ValueError("Environment.mass 需 > 0：%r" % (self.mass,))
         if self.dt <= 0:
