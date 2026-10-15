@@ -329,7 +329,7 @@
     {
      "file": "core.py",
      "src": "aeis.core",
-     "sha256": "6985fd5ce8f3be3e",
+     "sha256": "af7c93c0842ca661",
      "rewrites": 34,
      "sanitized": 2,
      "patches": 2,
@@ -541,7 +541,7 @@
     {
      "file": "rust_bridge.py",
      "src": "aeis.rust_bridge",
-     "sha256": "361b67c33492c374",
+     "sha256": "693d7d7d7cd36af0",
      "rewrites": 0,
      "sanitized": 4,
      "patches": 0,
@@ -704,7 +704,7 @@
    "lingshu/world/wm_simloop.py": "aa84dde49ad8c837",
    "lingshu/world/world3d.py": "7b7527deb009dd70",
    "lingshu/world/world_model.py": "97a0f817684fa51e",
-   "lingshu/core/core.py": "6985fd5ce8f3be3e"
+   "lingshu/core/core.py": "af7c93c0842ca661"
   }
  },
  "second_third_batch": {

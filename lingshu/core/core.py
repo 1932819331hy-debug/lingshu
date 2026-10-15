@@ -3457,15 +3457,36 @@ class LayeredStore:
         ②本件**不**把 `procedure` 纳入匹配、也不做语序/空格归一（issue 标题后半段
         「整句子串匹配、步骤字段从不参与」属另一条独立面，未在本件范围内）；
         ③返回前的相关度 `sort` 口径不变（仍按 `char_bigram_jaccard`）。
+
+        #492：预筛模式须**按片段切分**（与同文件 `search_content` 的 #266 同口径）。
+        旧实现把整段查询原文拼成**一条** `%{q}%` 模式绑定给两列，查询字节数一过
+        SQLite 的 `SQLITE_MAX_LIKE_PATTERN_LENGTH`（上游默认 50000）该 `execute`
+        自身即抛 `OperationalError: LIKE or GLOB pattern too complex`——`recall_skill`
+        经本方法同链同报错。触发需**两条件同时成立**：skills 表非空（空表走不到
+        LIKE 求值）＋ 去空白后的查询非空且过长（实测 49998 字节不抛、49999 字节抛；
+        20000 汉字 = 60000 字节抛）。现按 `_like_fragments` 切分：短词原样返回
+        `[term]`（短查询 SQL 语义逐字不变），超长词切成多条短模式，每片段各占一组
+        `name/description LIKE ? ESCAPE '\'` 子句（片段数上限 `_LIKE_FRAGMENT_CAP`）。
+        边界（削掉的判别力，如实标注）：超过片段上限的词尾不参与预筛（与
+        `search_content` 同）——本方法**无**「LIKE 落空 → 全表兜底」腿，故超长查询
+        的**词尾命中**在预筛阶段不可见（候选池由前若干片段决定）；这与 #272 保留
+        有界候选池（`LIMIT 100`）的取舍同族，属已知边界。
+        判据来源：公开 issue #492（复现条件与读数为本件复核实测）。
         """
         q = query.strip()
         c = self.conn.cursor()
         if q:
-            pat = f"%{self._escape_like(q)}%"
-            c.execute("SELECT * FROM skills WHERE name LIKE ? ESCAPE '\\'"
-                      " OR description LIKE ? ESCAPE '\\'"
+            # #492：整段 `%{q}%` 超长即抛（见 docstring）。按片段切分，短词行为不变。
+            like_parts, like_params = [], []
+            for frag in self._like_fragments(q):
+                like_parts.append(
+                    "name LIKE ? ESCAPE '\\' OR description LIKE ? ESCAPE '\\'")
+                esc = f"%{self._escape_like(frag)}%"
+                like_params.extend([esc, esc])
+            like_cond = "(" + " OR ".join(like_parts) + ")"
+            c.execute("SELECT * FROM skills WHERE " + like_cond +
                       " ORDER BY confidence DESC, updated_at DESC LIMIT 100",
-                      (pat, pat))
+                      like_params)
         else:
             c.execute("SELECT * FROM skills LIMIT 100")
         skills = [{"id": r[0], "name": r[1], "description": r[2], "procedure": r[3],
