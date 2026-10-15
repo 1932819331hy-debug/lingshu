@@ -6599,13 +6599,19 @@ class SpacetimeMemoryEngine:
     #: `Image.save(path)` ⇒ 无目录约束、无根判定，可向任意路径写图像（唯一边界是
     #: Pillow 只认图像扩展名）。
     #: 修法（与同门面 `flush` 的 #324 收口同形）：显式配置面
-    #: `LINGSHU_WORLD3D_OUT_ROOT`（`os.pathsep` 多根）优先，未配置则回落**认知图
-    #: 库根** `MDCG_ROOT`（本门面既有真源），两者皆无 ⇒ **fail-closed**（不写、
-    #: 返回 error）。归一用 `realpath + normcase` ⇒ 软链/junction 别名与 `..` 逃逸
-    #: 不得绕过。
+    #: `LINGSHU_WORLD3D_OUT_ROOT`（`os.pathsep` 多根）优先；未配置 ⇒ **fail-closed**
+    #: （不写、返回 error）。归一用 `realpath + normcase` ⇒ 软链/junction 别名与
+    #: `..` 逃逸不得绕过。
     #: 判据来源：公开 issue #277「建议修复 1：限制输出根……用 `os.path.realpath` +
     #: `os.path.commonpath` 判定包含性，越界即拒绝并返回显式错误」＋ 同文件 #324
-    #: 已采纳的「显式面 → 认知图库根 → fail-closed」三级回落链（同形先例）。
+    #: 已采纳的「显式面 → fail-closed」回落链（同形先例）。
+    #:
+    #: issue #480（安全 P0）续：**默认根不再回落 `MDCG_ROOT`**——与 `flush` 同一
+    #: 缺陷形状（未设显式根时唯一可写位置恰是认知图真源，真源内的图片扩展名文件
+    #: 可被 `Image.save` 覆盖）。#480 报告与值守复核帖均点名本条为「同根第二路径」，
+    #: 故两处同收：默认不回落 + 显式根不得位于真源内 + 目标路径不得落回真源。
+    #: 边界（如实标注）：#277 自身面（「path 由调用方完全可控」）仍属 #277——本件
+    #: 只收「真源」这一格，**不**改 #277 的越界判定口径（白名单包含性判定逐字不变）。
     #: 边界（削掉的判别力）：**不**加扩展名白名单（issue 建议 2）——issue 自身实测
     #: 边界已证非图像扩展名由 `PIL.Image.save` 抛 `ValueError` 拒绝，本件不重复设卡；
     #: 亦**不**加 `overwrite=False`（issue 建议 3，属新的产品决策，非本缺陷面）。
@@ -6613,29 +6619,42 @@ class SpacetimeMemoryEngine:
 
     @classmethod
     def _world3d_out_roots(cls) -> List[str]:
-        """`render` 输出白名单根（显式配置面优先，回落认知图库根）。"""
+        """`render` 输出白名单根（**仅显式配置面**；#480 起不再回落 MDCG_ROOT）。"""
         raw = os.environ.get(cls.WORLD3D_OUT_ROOT_ENV, "")
-        roots = [p for p in str(raw).split(os.pathsep) if p.strip()] if raw else []
-        if not roots:
-            md = str(os.environ.get("MDCG_ROOT", "") or "").strip()
-            roots = [md] if md else []
-        return roots
+        return [p for p in str(raw).split(os.pathsep) if p.strip()] if raw else []
 
     @classmethod
     def _confine_world3d_out_path(cls, out_path: str) -> str:
-        """把 `render` 的 `path` 收进白名单根；越界/未配置 ⇒ `ValueError`。
+        """把 `render` 的 `path` 收进白名单根；越界/未配置/根在真源内 ⇒ `ValueError`。
 
         归一用 `realpath + normcase`（与 `_confine_simloop_out_path` 同口径）——
         软链/junction 别名不得绕过根判定。边界（如实标注）：判据是「归一后的目标
         路径落在某个根之下」，**不**拦「根之内的软链指向根外」这种（`realpath` 已
         解析目标侧，故实际已覆盖）；也不拦根目录自身被当文件写（那是写失败，不是
-        越界）。"""
+        越界）。
+
+        #480 续（与 `_confine_simloop_out_path` 同三条）：①未显式配置根 ⇒
+        fail-closed（不再回落 `MDCG_ROOT`）；②配置的根位于 `MDCG_ROOT` 之内 ⇒ 拒；
+        ③目标路径本身位于 `MDCG_ROOT` 之内 ⇒ 拒（堵「根＝真源父目录」绕过腿）。
+        """
         roots = cls._world3d_out_roots()
         if not roots:
             raise ValueError(
-                "#277 render 拒绝：未配置输出根（LINGSHU_WORLD3D_OUT_ROOT 或 "
-                "MDCG_ROOT 皆缺）⇒ fail-closed，不做任意路径写入")
+                "#277 render 拒绝：未配置输出根（LINGSHU_WORLD3D_OUT_ROOT 缺）"
+                "⇒ fail-closed，不做任意路径写入（#480：不再回落 MDCG_ROOT）")
+        md = str(os.environ.get("MDCG_ROOT", "") or "").strip()
+        md_norm = os.path.normcase(os.path.realpath(md)) if md else ""
+        for r in roots:
+            root = os.path.normcase(os.path.realpath(r))
+            if md_norm and (root == md_norm or root.startswith(md_norm + os.sep)):
+                raise ValueError(
+                    "#480 render 拒绝：输出根位于认知图真源 MDCG_ROOT 之内"
+                    "（%s 在 %s 之下）⇒ fail-closed，不写真源" % (r, md))
         target = os.path.normcase(os.path.realpath(out_path))
+        if md_norm and (target == md_norm or target.startswith(md_norm + os.sep)):
+            raise ValueError(
+                "#480 render 拒绝：目标路径位于认知图真源 MDCG_ROOT 之内"
+                "（%s 在 %s 之下）⇒ fail-closed，不写真源" % (out_path, md))
         for r in roots:
             root = os.path.normcase(os.path.realpath(r))
             if target == root or target.startswith(root + os.sep):
@@ -7141,6 +7160,33 @@ class SpacetimeMemoryEngine:
             "#324 flush 拒绝：out_path 越出白名单根（%s 不在 %r 之下）"
             % (out_path, roots))
 
+    @classmethod
+    def _confine_simloop_wal_path(cls, wal_path: str) -> str:
+        """把 `setup`/`attach` 的 WAL 路径挡在认知图真源之外（#480 续）。
+
+        为什么必须挡：`SimulationLoop._wal` 每个 tick 以 `"a"` **追加**写该路径
+        （`world/wm_simloop.py` 的 WAL 段），而 `setup`/`attach` 的 `wal_path` 由
+        调用方（模型驱动面）给、**原样**透传——SUB 角色实例把 `wal_path` 指向
+        认知图真源里的节点文件即可向其追加任意行（本件实测：受保护节点的正文被
+        JSONL 行污染；因是追加语义，frontmatter 仍在 ⇒ 缺陷更隐蔽）。模块自身
+        注释承诺「不旁路写真源」，本闸即该承诺的判据面。
+
+        边界（如实标注）：本闸**只**拦「落在 `MDCG_ROOT` 之内」；真源之外的任意
+        路径追加面（#324 第 4 项「`wal_path` 不受约束」）**未**在本件收口——那属
+        #324 的「任意路径写入」面，且收口它须先定 WAL 默认根口径（涉及部署默认值，
+        非纯技术题），故本件只做与 flush 同一条「不写真源」的判据。
+        """
+        md = str(os.environ.get("MDCG_ROOT", "") or "").strip()
+        if not md:
+            return wal_path
+        md_norm = os.path.normcase(os.path.realpath(md))
+        target = os.path.normcase(os.path.realpath(wal_path))
+        if target == md_norm or target.startswith(md_norm + os.sep):
+            raise ValueError(
+                "#480 wm_simloop 拒绝：wal_path 位于认知图真源 MDCG_ROOT 之内"
+                "（%s 在 %s 之下）⇒ fail-closed，不向真源追加写" % (wal_path, md))
+        return wal_path
+
     def wm_simloop(self, action: str, params: dict = None) -> dict:
         """世界模型推演循环（里程碑 M5.1 · WM-SIMLOOP-REV1）：
         - setup: 构建推演循环（size/seed/entities/mask/wal_path）
@@ -7162,7 +7208,15 @@ class SpacetimeMemoryEngine:
         if action == "attach":
             if not hasattr(self, '_wmodel'):
                 return {"status": "error", "error": "先初始化统一世界模型"}
-            self._simloop = SimulationLoop(world_model=self._wmodel, wal_path=p.get("wal_path"))
+            wal = p.get("wal_path")
+            if wal:
+                try:
+                    # #480 续：wal_path 亦不得落在认知图真源之内（WAL 是追加写，
+                    # 指向真源节点即向受保护 .md 追加任意行）
+                    wal = self._confine_simloop_wal_path(str(wal))
+                except ValueError as e:
+                    return {"status": "error", "error": str(e)}
+            self._simloop = SimulationLoop(world_model=self._wmodel, wal_path=wal)
             return {"status": "ok", "state": self._simloop.state()}
         if action == "setup":
             # #248：默认 WAL 路径不再写死相对 cwd 的 "data/"。旧实现
@@ -7175,6 +7229,11 @@ class SpacetimeMemoryEngine:
             wal = p.get("wal_path") or os.path.join(
                 os.environ.get("LINGSHU_DATA_ROOT", "data"),
                 "wm_simloop_wal.jsonl")
+            try:
+                # #480 续：显式 wal_path 不得落在认知图真源之内（追加写面）
+                wal = self._confine_simloop_wal_path(str(wal))
+            except ValueError as e:
+                return {"status": "error", "error": str(e)}
             sl_ = SimulationLoop(size=int(p.get("size", 40)),
                                  seed=int(p.get("seed", 42)), wal_path=wal)
             sl_.scene.create_scene(trees=int(p.get("trees", 0)), water=False)

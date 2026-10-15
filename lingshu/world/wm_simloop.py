@@ -690,10 +690,10 @@ class SimulationLoop:
         （未做目录 fsync；Windows 上亦无法对目录取句柄）。
 
         issue #480（安全 P0）：`overwrite=False`（门面写文件时的默认语义）改用
-        **`os.link` 排他创建**（`FileExistsError`）——目标已存在即拒，**不覆盖**
-        既有 `.md`（尤其认知图真源的受保护节点）。`os.link` 在本机（Windows
-        NTFS / POSIX）语义等价于 `open(O_EXCL)`＋原子换入：目标在场即抛
-        `FileExistsError`，且「链接」本身是原子的。直调库 API 默认仍为
+        **`os.open(O_CREAT | O_EXCL | O_WRONLY)` 排他创建**（目标已存在即抛
+        `FileExistsError`）——**不覆盖**既有 `.md`（尤其认知图真源的受保护节点）。
+        `O_EXCL` 使「判定存在性」与「创建」是**同一次**内核调用 ⇒ 无先查后建的
+        TOCTOU 窗口；写中途失败则清理半截新档。直调库 API 默认仍为
         `overwrite=True`（覆盖式语义保留，见 #324 守卫）。
         """
         self._flush_count += 1

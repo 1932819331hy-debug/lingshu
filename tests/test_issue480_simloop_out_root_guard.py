@@ -23,6 +23,9 @@
   G5 非 .md 扩展名 ⇒ 拒
   G6 非 PRIMARY（SUB）执行写文件动作 ⇒ 拒
   G7（防误杀·反向腿）PRIMARY + 显式合法根（MDCG_ROOT 之外）⇒ 照旧成功写出
+  G8 `setup` 的 `wal_path` 落在 MDCG_ROOT 之内 ⇒ 拒（WAL 是**追加**写，指向真源
+     节点即向受保护 `.md` 追加任意行；本件实测的第二个写入面）
+  G9 `attach` 分支的 `wal_path` 走同一闸（两入口同判据）
 
 运行（仓根）：python -X utf8 -m pytest tests/test_issue480_simloop_out_root_guard.py -q --no-header
 """
@@ -203,3 +206,61 @@ def test_g7_PRIMARY合法根照旧成功(monkeypatch):
         got = f.read()
     assert got == r["flush"]["payload"]["body_md"], "G7 落盘内容与载荷不一致"
     assert got.startswith("---\n") and "wm_simloop" in got, "G7 产物形态不对"
+
+
+def test_g8_wal_path_不得落在真源之内(monkeypatch):
+    """G8：`setup` 的 `wal_path` 指向 MDCG_ROOT 内节点 ⇒ 拒（且不追加写）。
+
+    缺陷面（本件实测）：`SimulationLoop._wal` 每个 tick 以 `"a"` **追加**写
+    `wal_path`，而 `setup` 原样透传调用方给的路径 ⇒ SUB 可向真源受保护 `.md`
+    追加任意 JSONL 行。追加语义使 frontmatter 仍在（比 flush 的覆盖更隐蔽）。
+    """
+    td = tempfile.mkdtemp()
+    lib = os.path.join(td, "mdcg_lib")
+    node = _protected_node(lib)
+    monkeypatch.setenv("MDCG_ROOT", lib)
+    monkeypatch.delenv(ENV, raising=False)
+
+    eng = SpacetimeMemoryEngine(":memory:", role=Role.SUB)
+    r = eng.wm_simloop("setup", {
+        "size": 6, "seed": 1, "wal_path": node,
+        "entities": [{"category": "x\n## 注入", "pos": [2, 1.5, 2]}]})
+    assert r["status"] == "error", "G8 wal_path 落在真源内未被拒：%r" % (r,)
+    with open(node, encoding="utf-8") as f:
+        txt = f.read()
+    assert "seq" not in txt, "G8 已向真源节点追加 WAL 行：%r" % (txt[:200],)
+
+    # 反向腿：真源之外的合法 wal_path 照旧可用（防误杀）
+    eng2 = SpacetimeMemoryEngine(":memory:", role=Role.PRIMARY)
+    r2 = eng2.wm_simloop("setup", {"size": 6, "seed": 1,
+                                   "wal_path": os.path.join(td, "wal.jsonl")})
+    assert r2["status"] == "ok", "G8 合法 wal_path 被误拒：%r" % (r2,)
+
+
+def test_g9_attach_wal_path_同闸(monkeypatch):
+    """G9：`attach` 分支的 `wal_path` 走同一闸（两入口同判据，不遗漏一侧）。
+
+    **前置必做**：`attach` 分支在 `_wmodel` 缺失时**先**返回「先初始化统一世界
+    模型」——若只断言 `status == "error"`，那条无关错误会让本腿**假绿**（无判别力）。
+    故先 `world_model("init")` 让 `attach` 真正走到 wal 闸，并断言错误文案点名
+    `#480`/`wal_path`（排除其它 error 路径冒充）。
+    """
+    td = tempfile.mkdtemp()
+    lib = os.path.join(td, "mdcg_lib")
+    node = _protected_node(lib)
+    monkeypatch.setenv("MDCG_ROOT", lib)
+    monkeypatch.delenv(ENV, raising=False)
+    eng = SpacetimeMemoryEngine(":memory:", role=Role.PRIMARY)
+    assert eng.world_model("init", {"size": 12, "seed": 1})["status"] == "ok"
+
+    r = eng.wm_simloop("attach", {"wal_path": node})
+    assert r["status"] == "error", "G9 attach 的 wal_path 落在真源内未被拒：%r" % (r,)
+    assert "#480" in r.get("error", "") and "wal_path" in r.get("error", ""), (
+        "G9 被拒但理由不是 wal 闸（可能被「先初始化统一世界模型」等无关错误假绿）：%r"
+        % (r.get("error"),))
+    with open(node, encoding="utf-8") as f:
+        assert "seq" not in f.read(), "G9 attach 后真源被追加写"
+
+    # 反向腿：真源之外的合法 wal_path 在 attach 上照旧可用（防误杀）
+    r2 = eng.wm_simloop("attach", {"wal_path": os.path.join(td, "ok.jsonl")})
+    assert r2["status"] == "ok", "G9 合法 wal_path 在 attach 上被误拒：%r" % (r2,)
