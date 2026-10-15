@@ -2,12 +2,21 @@
 
 本目录让维护者能从零复现 PR 里的全部读数：语料自动下载（锁定版本 + sha256 校验），评测脚本只依赖本仓库代码和 `numpy`、`pyyaml`。
 
+> **本目录需联网取数**（首次）。`fetch_data.py` 从 `codeload.github.com` / `raw.githubusercontent.com` /
+> `huggingface.co` 下载三份公开语料（约 20 MB）；**离线 / 禁网环境**下，只要把三份语料预置到数据目录
+> （默认 `bench/repro/data/`，可用 `--data-dir <目录>` 指定），脚本命中 `if not os.path.exists` 缓存判断后
+> **只做 sha256 校验、不再联网**。数据目录被 `.gitignore` 忽略、不入库，故裸 clone 后必须先取数一次。
+
 ```bash
 python bench/repro/fetch_data.py         # 约 20 MB：hive-memory-bench@72130ac、locomo-zh-500@dsh-memory 2c21e3f、KdConv@HF 460c94a
+python bench/repro/fetch_data.py --data-dir /path/to/data   # 指定数据目录（预置语料后即离线只校验）
 bash bench/repro/run_all.sh              # 约 10 分钟，结果写到 bench/repro/results/RESULTS.md
 FULL=1 bash bench/repro/run_all.sh       # 另含 5 万条干扰、1.5 万节点 TMS
 python bench/repro/negative_results.py   # 试过但没有并入的方案（含稠密向量对照）
 ```
+
+`run_all.sh` 的解释器默认 `python3`，可用环境变量 `PYTHON` 覆盖（如 `PYTHON=python bash bench/repro/run_all.sh`）；
+脚本内命令一律 `-X utf8` 且 `export PYTHONUTF8=1`，避免 Windows 默认编码下的解码异常。
 
 本次提交时的完整输出见 `results/RESULTS.md`（`raw.jsonl` 不入库）。脚本全部固定随机种子；除延迟外，重跑读数应当逐位一致。
 

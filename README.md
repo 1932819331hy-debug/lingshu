@@ -68,6 +68,16 @@ Pillow 12.3.0——`pyproject.toml` 中 extras 的版本区间由此收敛，**�
 依赖分层、环境自适应降级点与精修记录见
 [docs/intake/body-export-v0.1/](docs/intake/body-export-v0.1/)（导出说明 / 双清单审计 / 逐文件指纹清单）。
 
+### 桥接（进程外适配器 · 不进 wheel）
+
+[`bridges/`](bridges/) 是**进程外**适配器（当前为 Blender 世界模型桥
+[`bridges/blender/wm_bridge/`](bridges/blender/wm_bridge/)）：它在**宿主进程之外**（Blender 运行时）
+充当世界模型的外部观察者 / 真值源，并供货几何与锚点，经 stdio/HTTP 与仓内对接。
+它**刻意不进 `lingshu` 包、不进 wheel**——`pyproject.toml` 的 `packages.find` 只收 `lingshu*`，
+仓内依赖列表也不引入 `bpy`（Blender 内置模块，非 PyPI 包，无法在 `pyproject.toml` 声明）；
+运行它需宿主自带 **Blender 运行时**，缺失时 fail-closed 明确报错。
+设计与三条硬边界见 [DESIGN.md](bridges/blender/wm_bridge/DESIGN.md)。
+
 ## 场景推演（可运行提案）
 
 `lingshu.world.scenario.ScenarioContext` 将同一组记忆用于角色材料、世界状态、
