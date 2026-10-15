@@ -104,6 +104,21 @@ _PHYSICS_DAMPING_SPECS = (
 _SHADE_SHOULDER_SPEC = ("lingshu/world/shade_paint.py",
                         "return SHOULDER + span * (1.0 - math.exp(-(v - SHOULDER) / span))", 1)
 
+#: 2026-10-15 新增（#607）：_KEEP_WORD 补 gamma/alpha/rho/tau/discount/lr 后，
+#: physics.py 新增 6 条 R3(c) `* tau` 形状级命中。该文件的 tau 一律是
+#: predict_at / projectile_state 的**流逝时间变量**（`tau = float(t) - t0`），
+#: 乘 tau 是运动学外推（p = p0 + v0·τ + ½a·τ² 等），不是保持率/衰减因子——
+#: 与 `_ACTIVATION_SPEC`（R3 形状级）同类，已逐条核实后登记 baseline 并注明
+#: 判据（见 `tools/time_core_lint_baseline.txt` 的 2026-10-15 #607 段）。
+_PHYSICS_TAU_SPECS = (
+    ("lingshu/world/physics.py", "vscale(a, 0.5 * tau * tau)", 1),   # 467 匀加速闭式
+    ("lingshu/world/physics.py", "vscale(a, 0.5 * tau * tau)", 2),   # 471 抛体闭式
+    ("lingshu/world/physics.py", "e = math.exp(-kk * tau)", 1),      # 475 与已登记 R1 同行
+    ("lingshu/world/physics.py", 'model["omega"] * tau', 1),         # 482 圆周角度推进
+    ("lingshu/world/physics.py", 'model["v_up"] * tau', 1),          # 485 圆周竖直漂移
+    ("lingshu/world/physics.py", "v0[i] * tau", 1),                  # 931 抛体闭式返回
+)
+
 
 def _anchor(spec):
     rel, marker, nth = spec
@@ -569,17 +584,22 @@ def test_text_mode_runs_from_other_cwd(tmp_path):
 
 # ------------------------------------------- 判定回归：真实仓库当前命中集
 def test_real_repo_current_hit_set_is_exactly_stable_lease(empty_baseline):
-    """真实仓库（空 baseline）当前命中集**恰好**是下面两条（各以形态锚定位）。
+    """真实仓库（空 baseline）当前命中集**恰好**是下述各条（各以形态锚定位）。
 
     这是判定回归：若新增了其它命中，须先按 lint 头部豁免表复核，
     再决定登记 baseline 还是加豁免——不要直接改这条断言。
 
-    命中集在本批由 1 条变 2 条，已按上述程序复核过第二条：
-      · `activation.py` 的 `d *= cond_match(...)`（#53 节点对级条件衰减修正）
+    命中集历史变更（均按上述程序逐条复核后更新）：
+      · 1 → 2 条：`activation.py` 的 `d *= cond_match(...)`（#53 节点对级条件衰减修正）
         ——R3(b) 的口径是「**任何** `*= …` 都命中」（形状级），而 `cond_match`
         返回的是条件空间重合率、与 time_core 的时间衰减核不是同一量，且 `d` 是
         装载期局部标量（无状态自指、无逐 tick 演化）⇒ 判「不按时间衰减核违规」，
         **登记 baseline 并注明判据与削掉的判别力**（见 baseline 该行注释）。
+      · 2 → 11 条：2026-10-14 物理阻尼（8×R1）与色调映射软肩（1×R1）形状级命中
+        （`_PHYSICS_DAMPING_SPECS` / `_SHADE_SHOULDER_SPEC`，登记判据见 baseline）。
+      · 11 → 17 条：2026-10-15 #607 词表补 tau 后 physics.py 的 6 条 R3(c)
+        `* tau` 形状级命中（`_PHYSICS_TAU_SPECS`）——tau 是 predict_at 的流逝
+        时间变量（运动学外推），非保持率；逐条核实后登记（见 baseline #607 段）。
     """
     data = payload(run_lint("--baseline", str(empty_baseline), "--json"))
     assert hit_set(data) == (
@@ -589,6 +609,7 @@ def test_real_repo_current_hit_set_is_exactly_stable_lease(empty_baseline):
         }
         | {_anchor(sp) + ("R1",) for sp in _PHYSICS_DAMPING_SPECS}
         | {_anchor(_SHADE_SHOULDER_SPEC) + ("R1",)}
+        | {_anchor(sp) + ("R3",) for sp in _PHYSICS_TAU_SPECS}
     )
 
 

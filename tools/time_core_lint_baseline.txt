@@ -14,6 +14,10 @@
 #   python tools/time_core_lint.py --baseline <空文件>
 #                                               → 退出码 1，命中 stable_lease.py:88:R1
 #                                                 （证明规则确实在命中，baseline 不是摆设）
+# #607 三缺口修复后重测（2026-10-15，fix/time-core-keepword-vocab）：命中 11→17——
+#   _KEEP_WORD 补 tau 使 physics.py 新增 6 条 R3 形状级命中（见下方 #607 段，逐条已核）；
+#   同行多违规划账与冗余括号剥离在本仓内零新增（仓内无 `;` 同行多违规、无括号包裹的
+#   自指衰减写法）。更新后全量跑退出码 0。
 
 # ── 已登记的既有违规 ──────────────────────────────────────────────────────
 lingshu/world/stable_lease.py:88:R1    # 既有：手写同核 exp(-γ·t)（与 time_core.cred_factor 同一指数核），未转交统一时间核。本模块头部「耦合声明（DEV-005）」已自认 TTL 与 confidence 衰减共享该核，实现却留在本地——即钉死批条款 3 要禁的形态，另见 issue #19。修法（改用 cred_factor/cred）需改源码，超出本 PR（仅新增工具+测试）范围，留待维护者裁决。
@@ -58,3 +62,30 @@ lingshu/world/physics.py:792:R1      # 物理阻尼：同 787 的第二处响应
 lingshu/world/physics.py:808:R1      # 物理量：阻尼比的对数衰减率 exp(-2πζ/√(1-ζ²))，非时间核
 lingshu/world/physics.py:907:R1      # 物理量：同 808（该文件第二处对数衰减率）
 lingshu/world/shade_paint.py:215:R1  # 色调映射：软肩曲线 1-exp(-(v-S)/S)（呈现层光学变换），非时间演化
+
+# ── 2026-10-15 新增登记（#607）：_KEEP_WORD 补 tau 后 physics.py 的 6 条 R3「形状级」命中 ──
+# 性质：#607 把 gamma/alpha/rho/tau/discount/lr 补进 R3 的保持率词表（与 RULE_R2C 自列的
+#   衰减名对齐——修「`x = x * (1 - gamma)` 被报、`x = x * gamma` 零命中」的口径自相矛盾）。
+#   收紧后仓内新增 6 条命中，全部集中在 lingshu/world/physics.py，全部是 R3(c) 的
+#   `* tau` 形状命中，且该文件的 tau 一律是 **predict_at / projectile_state 里的流逝时间
+#   变量**（`tau = float(t) - t0`），不是保持率/衰减因子：
+#   · 467/471：匀加速/抛体闭式位置 `p = p0 + v0·τ + ½a·τ²`（运动学外推，乘 τ 是位移）；
+#   · 475：`e = math.exp(-kk * tau)`——与上方已登记的 R1 同一行同一式（阻尼解析真值），
+#     R3 是该式内 `* tau` 的名字形状命中（一行两条：R1+R3 各记一条，口径如此）；
+#   · 482：圆周运动角度推进 `θ = θ0 + ω·τ`；
+#   · 485：圆周运动竖直漂移 `z = z0 + v_up·τ`；
+#   · 931：抛体闭式 `(p0[i] + v0[i]·τ + ½g[i]·τ², v0[i] + g[i]·τ)`（同一 return 语句
+#     首处 `* tau` 记 931；932 行的 `g[i] * tau` 属同一语句，R3(c) 每语句记首处）。
+# 判据与先例（activation.py:224:R3「形状级命中」、上方 2026-10-14 物理阻尼 R1 批）同类：
+#   R3(c) 是**名字形状级**规则（lint 头部 L1「名字启发式」自陈），名字撞车不构成
+#   「时间衰减核」判据；逐条核实均为运动学外推，非记忆/可信度保持率 ⇒ 登记而非放宽词表
+#   （tau 必须在册——否则 `x = x * tau` 这类真衰减写法漏报，正是 #607 要修的缺口）。
+# 削掉的判别力（如实）：本段登记后，physics.py 这些行若将来真的改写成时间衰减核，
+#   本工具不会点名。若这些公式改走 time_core 统一核或 tau 改名（如 dt/elapsed），
+#   请删除本段条目。
+lingshu/world/physics.py:467:R3      # 运动学外推：匀加速闭式 p=p0+v0·τ+½a·τ²，tau=流逝时间(t-t0) 非保持率（#607 词表收紧新增）
+lingshu/world/physics.py:471:R3      # 运动学外推：抛体闭式（形态同 467），tau 非保持率（#607）
+lingshu/world/physics.py:475:R3      # 与本行已登记 R1 同一阻尼式 exp(-kk·τ) 的 `* tau` 名字形状命中，非独立违规（#607）
+lingshu/world/physics.py:482:R3      # 圆周角度推进 θ=θ0+ω·τ，tau 非保持率（#607）
+lingshu/world/physics.py:485:R3      # 圆周竖直漂移 z=z0+v_up·τ，tau 非保持率（#607）
+lingshu/world/physics.py:931:R3      # 抛体闭式返回（v0·τ+½g·τ²），tau 非保持率（#607）
