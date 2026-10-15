@@ -53,6 +53,10 @@ def _env():
 
 
 def _run(cmd):
+    # #620 适配：本件的离线桩是**非官方副本**（_env 已声明其指纹）⇒ build_viewer
+    #   须经显式自备开关才走自备轨（只改调用面，不改本件任何断言语义）。
+    if cmd and os.path.basename(str(cmd[0])) == "build_viewer.py":
+        cmd = list(cmd) + ["--allow-unofficial-cyto"]
     return subprocess.run([sys.executable, "-X", "utf8"] + cmd,
                           capture_output=True, text=True, encoding="utf-8",
                           cwd=REPO, env=_env())
