@@ -3842,8 +3842,8 @@ class LayeredStore:
     @_transactional
     def prune_self_snapshots(self, keep: int) -> int:
         """自我快照有界保留（lingshu #201）：只留最近 `keep` 条**自动快照**
-        （tags 含 `self_snapshot`，按 created_at 降序），其余连同关联边删除，
-        返回删除条数。
+        （tags 含 `self_snapshot`，按**插入序** `rowid` 降序），其余连同关联边
+        删除，返回删除条数。
 
         为什么不经 `delete_node`：SELF 层在 `IMMUTABLE_LAYERS` 内（v1.16 扮演论
         「自我锚点不可遗忘」），`delete_node` 一律拒删；而 `update_self` 每次调用
@@ -3855,10 +3855,30 @@ class LayeredStore:
         tests/test_self_model_history.py）同族。
         边界（削掉的判别力）：对**自动快照**开了「不可删」的一个窄口（仅此一类、
         无 TTL）；SELF 层其它节点、`protections` 名单节点一律不动。
+
+        #489：保留序由**墙钟 `created_at`** 改为**插入序 `rowid`**——旧实现
+        `ORDER BY created_at DESC`，而 `created_at` 取 `time.time()`（不单调）。
+        只要库里有任何 SELF 快照的 `created_at` 大于当前时间（NTP 步进校正 /
+        虚拟机快照回滚 / 无 RTC 开机 / `import_all` 导入时钟偏快机器的备份），
+        `update_self` **本次刚插入**的快照 `created_at` 就是全层最小，紧随其后的
+        本次淘汰会把它**当场删除**；随后 `update_self` 用该 id `add_edge` ⇒
+        `IntegrityError: FOREIGN KEY constraint failed`（半截副作用：节点与边各自
+        已 commit，内存 `self_model` 已更新而库内快照已删）。改为按 `rowid`
+        （插入序）降序，则刚写入的快照 rowid 最大，永不落入淘汰前缀；与情境层
+        `enforce_context_cap`（#259）**同根同法**。
+        判据来源：公开 issue #489（值守复核帖 6165096839 / 6187655595 的「建议
+        修复面锚①：保留序改 `rowid DESC`，贴 #259 情境层先例」）。
+        边界（削掉的判别力，如实标注）：①`rowid` 反映**物理插入序**——本表
+        `id` 为 TEXT PRIMARY KEY（非 `WITHOUT ROWID`），`INSERT OR REPLACE`
+        命中同 id 会**换 rowid**；快照 id 含 uuid+毫秒戳、正常路径不复用同 id，
+        故不影响；`export_all`/`import_all` 往返保序（导出 `SELECT *` 按 rowid
+        扫描、导入按该序插入）⇒ 灾备恢复后 rowid 序仍等于原始写入序；②本件只改
+        **排序键**，未采纳「拒绝未来 `created_at`」——那是另设「未来多久算非法」
+        的容差口径，属设计者裁面，且会误伤时钟偏快机器所出备份的合法历史。
         """
         c = self.conn.cursor()
         c.execute("SELECT id FROM nodes WHERE layer='self' AND tags LIKE ? "
-                  "ORDER BY created_at DESC", ("%self_snapshot%",))
+                  "ORDER BY rowid DESC", ("%self_snapshot%",))
         ids = [r[0] for r in c.fetchall()]
         if len(ids) <= keep:
             return 0
@@ -5718,6 +5738,9 @@ class SpacetimeMemoryEngine:
         )
         self.store.add_node(snapshot)
         # #201：自我快照有界保留（FIFO 淘汰最旧快照），防无界堆积挤占召回。
+        # #489：prune 按插入序（rowid）淘汰 ⇒ 本次刚插入的快照 rowid 最大，不会
+        # 被自己这次淘汰选中（旧实现按墙钟 created_at，时钟回拨时自删，并令下方
+        # add_edge 抛 FOREIGN KEY constraint failed）。
         self.store.prune_self_snapshots(self.SELF_SNAPSHOT_MAX)
         if link_to_node_id and self.store.get_node(link_to_node_id):
             self.add_edge(snapshot.id, link_to_node_id, EdgeType.CAUSAL, confidence=1.0)
@@ -5764,7 +5787,8 @@ class SpacetimeMemoryEngine:
 
         先权威键（`engine_meta`），再回退 SELF 层最新 `self_snapshot` 节点——
         回退腿覆盖「本件修复前已运行过的库」（有 SELF 层快照但无权威键）。
-        取最新按 `created_at DESC`（`id` 兜底，防同毫秒并列）。
+        取最新按**插入序** `rowid` 降序（#489；与 `prune_self_snapshots` 同键，
+        墙钟 `created_at` 不单调——时钟回拨后「最新」会指向旧快照）。
         """
         raw = self.store.get_meta(self.SELF_MODEL_META_KEY).get(self.SELF_MODEL_META_KEY)
         if raw:
@@ -5774,7 +5798,7 @@ class SpacetimeMemoryEngine:
                 pass
         c = self.store.conn.cursor()
         c.execute("SELECT content FROM nodes WHERE layer='self' AND tags LIKE ? "
-                  "ORDER BY created_at DESC, id DESC LIMIT 1", ("%self_snapshot%",))
+                  "ORDER BY rowid DESC LIMIT 1", ("%self_snapshot%",))
         row = c.fetchone()
         if not row or not row[0]:
             return None
