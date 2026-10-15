@@ -54,7 +54,10 @@ gen-diffusion = ["torch", "diffusers"]
 #   门禁装 `.[full,dev]` 拿不到 PyYAML，出现「本机装了 PyYAML 而绿 / CI 红」的回归。
 #   `pytest-xdist` 同理落 dev：它只是**并行跑**同一套测试的加速器（本机实测
 #   全量 483s → 176s，`-n 4 --dist loadfile`），不引入任何运行时依赖。
-dev = ["pytest", "PyYAML>=6.0,<7", "pytest-xdist>=3.6,<4"]
+dev = ["pytest", "PyYAML>=6.0,<7", "pytest-xdist>=3.6,<4", "markdown-it-py"]
+#   ^ #604 守卫（tests/test_issue604_repro_html_end_guard.py）的渲染真值对表依赖：
+#     importorskip 守卫的**测试件运行依赖**（与 PyYAML 同形入 dev）；不设版本区间——
+#     markdown-it-py 未入 README「已测版本矩阵」（与 scipy/torch 的「要设区间先补实测」口径同）。
 
 [tool.setuptools.packages.find]
 include = ["lingshu*"]

@@ -53,7 +53,8 @@ REPO = os.path.dirname(os.path.dirname(os.path.abspath(__file__)))
 
 SCAN_DIRS = ("tests", "tools", "scripts")
 LOCAL_TOP = {"lingshu", "tools", "scripts", "tests", "experiments"}
-DIST_ALIAS = {"pil": "pillow", "yaml": "pyyaml", "pytest": "pytest"}
+DIST_ALIAS = {"pil": "pillow", "yaml": "pyyaml", "pytest": "pytest",
+               "markdown_it": "markdown-it-py"}
 
 
 def _handler_reraises(handler):
