@@ -23,10 +23,11 @@
 
 lingshu/_pathguard.py	17
 lingshu/core/component_resolver.py	7
-lingshu/core/core.py	47
+lingshu/core/core.py	46
 lingshu/core/longterm_gate.py	11
 lingshu/core/provenance.py	4
 lingshu/core/retrieval.py	1
+lingshu/core/structure_service.py	0
 lingshu/nn/hex_cnn.py	0
 lingshu/world/brain_store.py	1
 lingshu/world/channel_credibility.py	2
@@ -40,7 +41,9 @@ lingshu/world/world3d.py	2
 lingshu/world/world_learner.py	3
 lingshu/world/world_model.py	2
 
-# TOTAL 113
+# TOTAL 114
+
+# 2026-10-15 2d3bf15e（PR #429 重放） lingshu/core/core.py 47→46：#329 的 `_write_structure_record` 由「except Exception: return None」改为向调用方传播（留史失败即回滚，见 core.py 该处 docstring）⇒ 少 1 条静默；新增 lingshu/core/structure_service.py = 0。仅按合并态实读登记，不增豁免、不放宽 lint 判据。
 
 # 2026-10-15 6020eab lingshu/core/core.py  +1：FTS 索引挂载失败 ⇒ self._fts=None 回退原检索路径（LINGSHU_FTS 默认关闭，Retrieval docstring 声明「失败只回退原路径」）
 # 2026-10-15 6020eab lingshu/core/retrieval.py  新增 1：_doc() 的 json.loads 兜底 → 回退空标签（同模块 docstring：「所有方法失败都只让调用方回退原路径」）

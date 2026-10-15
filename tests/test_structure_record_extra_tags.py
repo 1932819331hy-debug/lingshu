@@ -35,7 +35,11 @@ def sub():
 
 
 def _tags(engine, content):
-    """读回 tags 列——该列存的是 JSON 文本（`_dumps_tags` 写入），需解析。"""
+    """读回 tags 列——该列存的是 JSON 文本（`_dumps_tags` 写入），需解析。
+
+    定位键：正文列存的是 `_record_structure_event` 产出的 `"[<kind>] <正文>"`
+    （PR #429 起结构事件正文统一带 `[kind] ` 前缀），故键取**带前缀**全文。
+    """
     row = engine.store.conn.execute(
         "SELECT tags FROM nodes WHERE content=?", (content,)).fetchone()
     if not row or row[0] is None:
@@ -46,7 +50,7 @@ def _tags(engine, content):
 def test_extra_tags_land_on_primary_structure_record(prim):
     """PRIMARY + extra_tags ⇒ 结构层节点必须带上 extra_tags。"""
     prim._write_structure_record("迁移事件A", "migration", extra_tags=["v1.7"])
-    tags = _tags(prim, "迁移事件A")
+    tags = _tags(prim, "[migration] 迁移事件A")
     assert tags is not None, tags
     assert "v1.7" in tags, tags
     assert "migration" in tags, tags
@@ -56,7 +60,7 @@ def test_extra_tags_land_on_primary_structure_record(prim):
 def test_extra_tags_land_on_sub_copy(sub):
     """SUB + extra_tags ⇒ 知识层副本带 extra_tags 与 pending_sync。"""
     sub._write_structure_record("迁移事件B", "migration", extra_tags=["v1.7"])
-    tags = _tags(sub, "迁移事件B")
+    tags = _tags(sub, "[migration] 迁移事件B")
     assert tags is not None, tags
     assert "v1.7" in tags, tags
     assert "pending_sync" in tags, tags
@@ -66,7 +70,7 @@ def test_both_roles_keep_the_same_extra_tags(prim, sub):
     """同一调用 ⇒ 两个角色落库的标签集只在层标签 / pending_sync 上有差。"""
     prim._write_structure_record("同参迁移", "migration", extra_tags=["v1.7", "d3"])
     sub._write_structure_record("同参迁移", "migration", extra_tags=["v1.7", "d3"])
-    tp, ts = set(_tags(prim, "同参迁移")), set(_tags(sub, "同参迁移"))
+    tp, ts = set(_tags(prim, "[migration] 同参迁移")), set(_tags(sub, "[migration] 同参迁移"))
     extra = {"v1.7", "d3", "migration"}
     assert extra <= tp, tp
     assert extra <= ts, ts
@@ -78,7 +82,7 @@ def test_both_roles_keep_the_same_extra_tags(prim, sub):
 def test_no_extra_tags_still_records_tag(prim):
     """不传 extra_tags 时行为不变（回归护栏）。"""
     prim._write_structure_record("注意力记录", "attention_weight")
-    tags = _tags(prim, "注意力记录")
+    tags = _tags(prim, "[attention_weight] 注意力记录")
     assert tags is not None and "attention_weight" in tags, tags
 
 
@@ -86,7 +90,7 @@ def test_multiple_extra_tags_all_land(prim):
     """多个 extra_tags 都要落上。"""
     prim._write_structure_record("多标签事件", "migration",
                                  extra_tags=["v1.7", "b2", "flag-x"])
-    tags = _tags(prim, "多标签事件")
+    tags = _tags(prim, "[migration] 多标签事件")
     for t in ("v1.7", "b2", "flag-x"):
         assert t in tags, (t, tags)
 
@@ -94,7 +98,7 @@ def test_multiple_extra_tags_all_land(prim):
 def test_no_duplicate_tags(prim):
     """tag_node 幂等：不得产生重复标签。"""
     prim._write_structure_record("去重事件", "migration", extra_tags=["v1.7"])
-    tags = _tags(prim, "去重事件")
+    tags = _tags(prim, "[migration] 去重事件")
     assert tags is not None
     assert len(tags) == len(set(tags)), tags
 
@@ -102,7 +106,7 @@ def test_no_duplicate_tags(prim):
 def test_guard_is_discriminating(prim):
     """判别力锚定：修前实现只在事后补 `tag`，extra_tags 必然缺席。"""
     prim._write_structure_record("判别事件", "migration", extra_tags=["v1.7"])
-    tags = set(_tags(prim, "判别事件"))
+    tags = set(_tags(prim, "[migration] 判别事件"))
     # 修前语义：tags 里只有 structure + migration
     assert "migration" in tags
     # 现语义：extra_tags 已在
