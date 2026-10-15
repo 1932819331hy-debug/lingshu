@@ -375,7 +375,7 @@ def fit_damped(samples, up=1, k_max=8.0, k_steps=800):
     rms = math.sqrt(best_c if best_k == k else cost(k)[0])
     return {"schema": PHYSICS_SCHEMA, "kind": "damped", "k": k, "up": up,
             "p0": tuple(p0), "p_inf": tuple(p_inf),
-            "v0": tuple((p0[i] - p_inf[i]) * (-k) * -1.0 for i in range(3)),
+            "v0": tuple((p0[i] - p_inf[i]) * (-k) for i in range(3)),  # #673：真实初速 = −k·(p0−p∞)，指向 p∞（与 predict_at 的 damped 速度、damped_truth 的 p_inf=p0+v0/k 同口径；旧码此处多乘 *-1.0 致反号）。行数不变以保 tools/time_core_lint_baseline.txt 的行号基线。
             "t_ref": t0, "residual_rms": rms / math.sqrt(3.0 * len(ts)),
             "n_samples": len(samples)}
 
