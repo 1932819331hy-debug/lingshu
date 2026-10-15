@@ -106,8 +106,10 @@ def _run_viewer(graph, syn_path):
     with io.open(os.path.join(out, "cytoscape.min.js"), "w", encoding="utf-8", newline="\n") as f:
         f.write(stub)
     sha = hashlib.sha256(stub.encode("utf-8")).hexdigest()
+    # #620：桩为非官方副本 ⇒ 自备轨须经显式开关（夹具语义不变）
     cmd = [sys.executable, "-X", "utf8", _BUILD_VIEWER,
-           "--graph", graph, "--out", out, "--synonyms", syn_path, "--merge-synonyms"]
+           "--graph", graph, "--out", out, "--synonyms", syn_path, "--merge-synonyms",
+           "--allow-unofficial-cyto"]
     env = dict(os.environ, PYTHONDONTWRITEBYTECODE="1", LINGSHU_CYTO_SHA256=sha)
     p = subprocess.run(cmd, capture_output=True, text=True, encoding="utf-8",
                        cwd=REPO, env=env)

@@ -45,6 +45,9 @@ def main(argv=None):
     ap.add_argument("--port", type=int, default=8788, help="查看器端口（缺省 8788）")
     ap.add_argument("--merge-synonyms", action="store_true",
                     help="显式启用视图层同义归并（默认关闭：⑤ 的候选只进待复核，不自动归并）")
+    ap.add_argument("--allow-unofficial-cyto", action="store_true",
+                    help="#620：透传给 ⑥——允许复用路径按 LINGSHU_CYTO_SHA256 声明接受自备 "
+                         "cytoscape 副本（产物记 cyto_official=false）；默认关闭，下载轨恒官方")
     args = ap.parse_args(argv)
 
     root = args.root
@@ -85,6 +88,11 @@ def main(argv=None):
     #   只有显式 --merge-synonyms 才把候选喂给 build_viewer 的归并开关。
     if args.merge_synonyms:
         build_args += ["--merge-synonyms"]
+    # #620：校验旁路封堵后，继承来的 LINGSHU_CYTO_SHA256 不再是放行凭据——
+    #   不设本开关时，一键链路对「变量=篡改文件自身 sha」直接 rc≠0（fail-closed）；
+    #   自备非官方副本须显式开启，且产物登记 cyto_official=false 可查。
+    if args.allow_unofficial_cyto:
+        build_args += ["--allow-unofficial-cyto"]
     sess = os.path.join(out, "session_chains.json")
     # #423：只有本轮 ③ 真跑过（sess_fresh）才把它并入派生边；否则目录里那份是上一轮遗留。
     if sess_fresh and os.path.isfile(sess):

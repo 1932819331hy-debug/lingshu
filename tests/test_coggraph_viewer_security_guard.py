@@ -71,6 +71,9 @@ def _run_viewer(out, graph, extra=(), env_extra=None):
     env = dict(os.environ, PYTHONDONTWRITEBYTECODE="1")
     if env_extra:
         env.update(env_extra)
+    if env_extra and "LINGSHU_CYTO_SHA256" in env_extra:
+        # #620：桩是**非官方副本**，声明其指纹后必须经显式开关才走自备轨（夹具语义不变）
+        cmd += ["--allow-unofficial-cyto"]
     return subprocess.run(cmd, capture_output=True, text=True, encoding="utf-8",
                           cwd=HERE, env=env)
 
@@ -188,9 +191,11 @@ class ThirdPartyPinningTests(unittest.TestCase):
             sha = _stub_cyto(tmp, content)
             os.environ["LINGSHU_CYTO_SHA256"] = sha
             try:
-                p, note = V.fetch_cytoscape(tmp)
+                p, note = V.fetch_cytoscape(tmp, allow_unofficial=True)
                 self.assertTrue(os.path.isfile(p))
                 self.assertIn("校验通过", note)
+                # #620：自备声明轨的通过必须与官方通过措辞可区分（不再混称「校验通过」）
+                self.assertIn("非官方", note, "自备通过措辞未与官方区分：%r" % note)
             finally:
                 os.environ.pop("LINGSHU_CYTO_SHA256", None)
 

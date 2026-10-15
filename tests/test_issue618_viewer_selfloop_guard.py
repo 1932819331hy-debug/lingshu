@@ -75,8 +75,10 @@ def _run_viewer(graph, extra=()):
     base = tmp.name
     out = os.path.join(base, "out")
     sha = _stub_cyto(out)
+    # #620：桩为非官方副本 ⇒ 自备轨须经显式开关（夹具语义不变）
     cmd = [sys.executable, "-X", "utf8", BUILD_VIEWER,
-           "--graph", graph, "--out", out] + [str(a) for a in extra]
+           "--graph", graph, "--out", out] + [str(a) for a in extra] + \
+          ["--allow-unofficial-cyto"]
     env = dict(os.environ, PYTHONDONTWRITEBYTECODE="1", LINGSHU_CYTO_SHA256=sha)
     p = subprocess.run(cmd, capture_output=True, text=True, encoding="utf-8",
                        cwd=HERE, env=env)

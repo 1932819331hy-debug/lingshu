@@ -226,26 +226,40 @@ def _sha256_file(path):
     return h.hexdigest()
 
 
-def fetch_cytoscape(out_dir):
+def fetch_cytoscape(out_dir, allow_unofficial=False):
     """确保 out_dir/cytoscape.min.js 是**固定版本且内容校验通过**的 cytoscape。
 
     修复 #251：旧实现仅以「文件存在且 >100000 字节」判定可复用（不校验内容），
     被替换 / 损坏 / 版本漂移的同名文件会被静默复用；下载产物也不校验。
     现在复用与下载两条路径都做 SHA256 校验，期望指纹 = 固定版本官方产物（CYTO_SHA256）。
 
-    离线 / 测试可用环境变量 LINGSHU_CYTO_SHA256 显式声明**自备**产物的期望指纹
-    （默认仍走固定值）；它只用于放置自备副本，不改变默认的固定校验。
+    修复 #620（校验旁路）：旧取值 `expect = os.environ.get("LINGSHU_CYTO_SHA256") or CYTO_SHA256`
+    的 `or` 短路让环境变量**取代**固定基准——把它设成目标文件自身的 sha256 即可让任意
+    篡改内容通过校验、stdout 谎称「已有（校验通过）」。现改为**双轨**，两轨各自可判定：
+      · 内容 sha 轨（默认，恒参与判定，对齐 #251 已有效那半）：仅 `got == CYTO_SHA256`
+        判官方通过；**下载路径恒按官方固定指纹**，环境变量与自备开关都不得放宽它。
+      · 自备声明轨（显式独立开关）：`allow_unofficial=True`（CLI `--allow-unofficial-cyto`）
+        **且** `LINGSHU_CYTO_SHA256` 显式声明自备产物指纹时，仅**复用路径**接受
+        `got == 声明值`；通过时 stderr 告警、措辞与官方通过可区分，并由调用方把
+        判定登记进 viewer_graph.json 的 `cyto_official` 字段（产物侧可查）。
+    变量本身不再是放行凭据：旁路场景（设变量=篡改自身 sha、不开开关）一律拒绝（rc≠0）。
     """
     p = os.path.join(out_dir, "cytoscape.min.js")
-    expect = os.environ.get("LINGSHU_CYTO_SHA256") or CYTO_SHA256
+    declared = (os.environ.get("LINGSHU_CYTO_SHA256") or "").strip()
     if os.path.isfile(p) and os.path.getsize(p) > 100000:
         got = _sha256_file(p)
-        if got != expect:
-            raise SystemExit(
-                "cytoscape.min.js 校验失败：期望 sha256=%s，实得 %s（文件 %s）。"
-                "请删除该文件后重试（将重新下载并校验），或放置固定版本 %s"
-                % (expect, got, p, CYTO_URL))
-        return p, "已有（校验通过）"
+        if got == CYTO_SHA256:
+            return p, "已有（官方校验通过）"
+        if allow_unofficial and declared and got == declared:
+            print("[warn] build_viewer: 按自备声明接受非官方 cytoscape 副本（sha256=%s，"
+                  "经 LINGSHU_CYTO_SHA256 + --allow-unofficial-cyto 显式开启）；"
+                  "viewer_graph.json 已登记 cyto_official=false" % got, file=sys.stderr)
+            return p, "已有（自备声明校验通过·非官方副本）"
+        raise SystemExit(
+            "cytoscape.min.js 校验失败：官方固定指纹=%s，实得 %s（文件 %s）；"
+            "自备声明=%s（且自备声明仅对复用路径显式开启 --allow-unofficial-cyto 时有效，"
+            "下载路径恒按官方指纹）。请删除该文件后重试（将重新下载并校验），或放置固定版本 %s"
+            % (CYTO_SHA256, got, p, declared or "（未设）", CYTO_URL))
     last = ""
     for attempt in range(3):
         try:
@@ -253,18 +267,20 @@ def fetch_cytoscape(out_dir):
             with urllib.request.urlopen(req, timeout=120) as r:
                 data = r.read()
             got = hashlib.sha256(data).hexdigest()
-            if got != expect:
+            if got != CYTO_SHA256:
                 raise SystemExit(
                     "cytoscape 下载校验失败：期望 sha256=%s，实得 %s（%s）——拒绝写入被篡改/"
-                    "版本漂移的产物。" % (expect, got, CYTO_URL))
+                    "版本漂移的产物（#620：下载轨恒按官方固定指纹，LINGSHU_CYTO_SHA256 "
+                    "与自备开关都不得放宽此轨）。" % (CYTO_SHA256, got, CYTO_URL))
             with open(p, "wb") as f:
                 f.write(data)
-            return p, "已下载（校验通过）"
+            return p, "已下载（官方校验通过）"
         except Exception as e:
             last = str(e)
             time.sleep(3)
     raise SystemExit("cytoscape 下载失败（离线环境请手工放置固定版本 cytoscape.min.js 到 %s，"
-                     "其 sha256 须为 %s）：%s" % (out_dir, expect, last))
+                     "其 sha256 须为 %s；自备非官方副本须经 --allow-unofficial-cyto + "
+                     "LINGSHU_CYTO_SHA256 显式声明其指纹）：%s" % (out_dir, CYTO_SHA256, last))
 
 
 def main(argv=None):
@@ -277,6 +293,10 @@ def main(argv=None):
     ap.add_argument("--synonyms", default="", help="synonym_groups.json（同义归并候选；仅在 --merge-synonyms 时生效）")
     ap.add_argument("--merge-synonyms", action="store_true",
                     help="显式启用视图层同义归并（默认关闭，只作待复核候选，不自动归并）")
+    ap.add_argument("--allow-unofficial-cyto", action="store_true",
+                    help="#620：显式允许复用路径按 LINGSHU_CYTO_SHA256 声明接受自备 cytoscape 副本"
+                         "（非官方件会 stderr 告警并在 viewer_graph.json 记 cyto_official=false；"
+                         "下载路径恒按官方固定指纹）")
     args = ap.parse_args()
 
     with io.open(args.graph, encoding="utf-8") as f:
@@ -406,13 +426,17 @@ def main(argv=None):
               "dropped_selfloop": selfloop_dropped, "merged_edges": dup_merged}
 
     os.makedirs(args.out, exist_ok=True)
+    # #620：cytoscape 校验前置到产物落盘之前——官方/自备的判定要登记进
+    #   viewer_graph.json 的 cyto_official 字段（产物侧可查，两种通过不再混称）；
+    #   校验不过直接非零退出，产物不写（比旧序「先写产物、最后才校验」更严不更宽）。
+    _, note = fetch_cytoscape(args.out, allow_unofficial=args.allow_unofficial_cyto)
+    vgraph["cyto_official"] = "非官方" not in note
     with io.open(os.path.join(args.out, "index.html"), "w", encoding="utf-8", newline="\n") as f:
         f.write(doc)
     with io.open(os.path.join(args.out, "viewer_graph.json"), "w", encoding="utf-8", newline="\n") as f:
         json.dump(vgraph, f, ensure_ascii=False)
     with io.open(os.path.join(args.out, "serve.py"), "w", encoding="utf-8", newline="\n") as f:
         f.write(SERVE)
-    _, note = fetch_cytoscape(args.out)
     print("产物：%s" % args.out)
     print("  index.html / viewer_graph.json(%d 节点 %d 边) / serve.py / cytoscape.min.js(%s)"
           % (len(vnodes), len(vedges), note))

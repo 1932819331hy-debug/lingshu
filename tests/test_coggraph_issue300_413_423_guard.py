@@ -76,6 +76,10 @@ def _env():
 
 
 def _run(cmd, cwd=HERE):
+    # #620：本件全程用离线非官方桩（_env 已声明其指纹）⇒ 查看器与一键链路须经
+    #   显式开关才走自备轨（夹具语义不变，不放宽默认路径）
+    if cmd and os.path.basename(str(cmd[0])) in ("build_viewer.py", "view_memory.py"):
+        cmd = list(cmd) + ["--allow-unofficial-cyto"]
     return subprocess.run([sys.executable, "-X", "utf8"] + cmd,
                           capture_output=True, text=True, encoding="utf-8",
                           cwd=cwd, env=_env())

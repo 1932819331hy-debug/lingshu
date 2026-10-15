@@ -182,7 +182,9 @@ def e_group(tmp):
     with open(os.path.join(out, "cytoscape.min.js"), "w", encoding="utf-8") as f:
         f.write(_stub)
     import hashlib as _hl
-    cmd = [sys.executable, "-X", "utf8", VIEWER, "--graph", g, "--derived", dv, "--out", out]
+    # #620：桩为非官方副本 ⇒ 自备轨须经显式开关（夹具语义不变）
+    cmd = [sys.executable, "-X", "utf8", VIEWER, "--graph", g, "--derived", dv, "--out", out,
+           "--allow-unofficial-cyto"]
     p = subprocess.run(cmd, capture_output=True, text=True, encoding="utf-8", cwd=REPO,
                        env=dict(os.environ, PYTHONDONTWRITEBYTECODE="1",
                                 LINGSHU_CYTO_SHA256=_hl.sha256(_stub.encode()).hexdigest()))
