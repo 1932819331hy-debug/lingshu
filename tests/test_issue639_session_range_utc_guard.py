@@ -85,7 +85,7 @@ def test_g2_tz_double_run_product_identical():
     probe = subprocess.run(
         [sys.executable, "-c",
          "import time; time.tzset(); print(time.localtime(%r).tm_hour)" % TS[0]],
-        capture_output=True, text=True, env={**os.environ, "TZ": "SGT-8"}, timeout=30)
+        capture_output=True, text=True, encoding="utf-8", env={**os.environ, "TZ": "SGT-8"}, timeout=30)
     if "16" in probe.stdout:
         print("[639] 本机 TZ env 生效（localtime 随 TZ 变）⇒ 双跑一致是跨机器决定性的实证")
     else:
