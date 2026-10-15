@@ -160,8 +160,10 @@ class ScenarioContext:
         real_spatial = [n for n in nodes if n["spatial"] and not (
             _tags_with(n["tags"], "role:") or "roleplay" in n["tags"] or "sub-knowledge" in n["tags"])]
         if real_spatial:
-            # 沿用身体×脑 M1：事件为源，状态槽为投影。仅实体名匹配的现实记录可消费
-            # 既有无角色命名空间的槽；角色同名实体不继承宿主状态。
+            # 沿用身体×脑 M1：事件为源，状态槽为投影。台账 subject ＝**节点 id**
+            # （issue #366：实体名在同一脑根内跨场景不唯一，故状态按「哪个节点」
+            # 记账、按节点 id 读回；角色同名实体各持不同节点 id，天然不继承宿主
+            # 状态。与 brain_store._state_map 的同一约定对齐）。
             state_response = client.call("stg", {"op": "state_chain", "limit": 500})
             if not isinstance(state_response.get("items"), list):
                 raise RuntimeError("brain state_chain response has no items list")
@@ -172,8 +174,7 @@ class ScenarioContext:
                 if event.get("slot") == "状态" and event.get("state") == "active":
                     states.setdefault(str(event.get("subject")), []).append(event)
             for n in real_spatial:
-                names = _tags_with(n["tags"], "ent:")
-                events = states.get(names[0], []) if len(names) == 1 else []
+                events = states.get(n["id"], [])
                 if len(events) == 1:
                     n["attributes"] = {"state": events[0].get("value"),
                                        "state_evidence": _copy(events[0])}

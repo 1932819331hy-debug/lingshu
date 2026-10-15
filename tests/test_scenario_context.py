@@ -227,7 +227,9 @@ def test_host_state_does_not_leak_into_same_named_role_entity():
     class States(BrainRead):
         def call(self, name, args):
             if name == "stg":
-                return {"items": [{"subject": "keeper", "slot": "状态", "state": "active", "value": "happy"}]}
+                # 状态台账 subject＝节点 id（#366；旧形态「实体名作 subject」行不再
+                # 被认作任何节点的状态）。宿主状态是现实节点 `real-keeper` 自己那条。
+                return {"items": [{"subject": "real-keeper", "slot": "状态", "state": "active", "value": "happy"}]}
             return super().call(name, args)
     ctx = ScenarioContext.from_brain(States([real, role]), "keeper", role_id="alice")
     report = ctx.view("world")
@@ -318,7 +320,8 @@ def test_scenario_import_needs_no_world_extras():
     repo = str(Path(__file__).resolve().parents[1])
     code = "import sys; sys.path.insert(0, sys.argv[1]); from lingshu.world.scenario import ScenarioContext; assert 'numpy' not in sys.modules; assert 'PIL' not in sys.modules"
     result = subprocess.run([sys.executable, "-I", "-S", "-c", code, repo],
-                            capture_output=True, text=True)
+                            capture_output=True, text=True,
+                            encoding="utf-8", errors="replace")
     assert result.returncode == 0, result.stderr
 
 
