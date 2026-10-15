@@ -1402,6 +1402,10 @@ class LayeredStore:
         ＋ **D-08**「禁（同 id 不得换层）」；修法形状见
         `docs/plans/治理与写入边界_修复设计_v0.1.md` §2 S-127-1(a)。
         边界（削掉的判别力）：同 id 同层的原位覆盖仍放行（本件只堵换层/降级面）；
+        **#659 补丁**：同层覆盖**受保护节点**（`_is_forget_protected` 为真）时保留其
+        `no_forget` 标签并落审计（见方法体内 #659 段）——仍不拒绝覆盖（保住
+        `apply_shared_sync(overwrite=True)` 合法路径），故「覆盖受保护节点内容」这一
+        判别力仍未收口，只收口了「保护标记被静默抹掉」。
         数值接口 `update_node_confidence` / `update_node_importance` 的层与角色校验
         不在本件范围内（待裁清单 D-33：本批不动，另笔）。
         另注（#191 口径）：自我层行不受「共享层仅 PRIMARY 可写」约束后，
@@ -1463,6 +1467,7 @@ class LayeredStore:
                 "唯一写入汇聚点）" % type(node.content).__name__
             )
         existing = self.get_node(node.id)
+        overwrite_protected = None
         if existing is not None:
             if existing.layer in self.SHARED_LAYERS and self.role != Role.PRIMARY:
                 raise PermissionError(
@@ -1474,12 +1479,46 @@ class LayeredStore:
                     f"禁止同 id 换层（#127）：id={node.id} 现为 {existing.layer.value}，"
                     f"拒绝改写为 {node.layer.value}"
                 )
+            # #659（数据损坏）：同 id 同层原位覆盖走 `INSERT OR REPLACE` **整行替换**
+            # ——#127 的闸只拦「换层」与「旧行属共享层且非 PRIMARY」，同层覆盖完全放行
+            # ⇒ 新行漏带 tags 时，旧行的 `no_forget` 标签被静默抹掉；随后遗忘路径
+            # （`decay_cycle`/`delete_node`）按设计把「不可遗忘」节点正常删除
+            # （`_is_forget_protected` 的两个真源之一被一步覆写，护栏没有被绕过，是被
+            # 合法地走完了）。修法（温和版 · 与 issue 建议「至少保真 no_forget」同向）：
+            # ① 旧行 tags 含 `no_forget` ⇒ **并入**新行 tags（保护标记不随覆盖消失）；
+            # ② 旧行受保护（`_is_forget_protected`：`no_forget` 标签 ∪ `protections`
+            #    行登记）⇒ 落一条 `action_logs` 审计，使「受保护节点被改写」不再静默。
+            # **不**改成「拒绝覆写受保护节点」——那会打掉 `apply_shared_sync(overwrite=True)`
+            # 这条合法原地更新路径（该路径走 `store.add_node`）。取舍（如实标注）：
+            # 保护语义收口在「标记保留 ＋ 可审计」，**不改写内容本身**（内容仍按调用方
+            # 传入落库）；`protections` 行不受 `INSERT OR REPLACE` 影响（另一张表），
+            # 故 `delete_node` 仍拒删该节点。
+            # 判据来源：公开 issue #659 ＋ `_is_forget_protected`（#36「唯一真源」）
+            # ＋ 既有 `immutable_edge_stripped` 的审计写法先例。
+            if self._is_forget_protected(existing):
+                # ① 保护标记保真：旧行 tags 含 `no_forget` ⇒ 并入新行 tags（**只**在旧行
+                #    确有该标签时并入——`protections` 行登记的节点另有真源，不据此新造标签，
+                #    避免把「仅经 protections 行保护」的节点语义悄悄改写成带标签）。
+                if "no_forget" in (existing.tags or []) and "no_forget" not in node.tags:
+                    node.tags = list(node.tags) + ["no_forget"]
+                # ② 受保护节点被改写 ⇒ 落审计（不再静默）。
+                overwrite_protected = existing
         with self._lock:
             c = self.conn.cursor()
             c.execute('''
                 INSERT OR REPLACE INTO nodes
                 VALUES (?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?)
             ''', node.to_row())
+            if overwrite_protected is not None:
+                # 审计与写入同一连接、同一提交（`log_action` 自带 commit ⇒ 一并落库）。
+                self.log_action(
+                    "protected_node_overwritten",
+                    f"受保护节点 {node.id} 被同 id 同层覆盖（#659）：no_forget 标签已保留、"
+                    f"protections 行不受影响，保护语义（拒删/免衰减）仍生效",
+                    node_ids=[node.id],
+                    outcome={"no_forget_in_new_tags": "no_forget" in node.tags,
+                             "protections_row": node.id in set(self.get_protected_nodes()),
+                             "old_tags": list(overwrite_protected.tags or [])})
             self.conn.commit()
         return node.id
 
