@@ -32,7 +32,10 @@ def argmax3(lat, vec, k1, k2, k3):
     conv1 = vec[i:i + k1 * 7].reshape(k1, 7); i += k1 * 7
     conv2 = vec[i:i + k2 * k1 * 7].reshape(k2, k1, 7); i += k2 * k1 * 7
     conv3 = vec[i:i + k3 * k2 * 7].reshape(k3, k2, 7); i += k3 * k2 * 7
-    head = vec[i:].reshape(9, k3 + 3)
+    # head 的输入维＝`k3 + C`（C＝输入实际通道数）：`feat = concat([d3, color])` 的维数是
+    # `k3 + C`（`color` 是 `lat` 按通道求均值），旧写法写死 `k3 + 3` ⇒ 只有 C=3 能跑，
+    # C≠3 时 `feat @ head.T` 直接 ValueError（#679，PR #97 把 `_layer` 推广到任意 C 时的漏改）。
+    head = vec[i:].reshape(9, k3 + lat.shape[-1])
     h1 = _layer(lat, conv1, k1)
     h2 = _layer(h1, conv2, k2)
     h3 = _layer(h2, conv3, k3)

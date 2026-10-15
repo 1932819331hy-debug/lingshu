@@ -262,7 +262,7 @@ SPLIT_DEPTH = 2              # 递归深度上限（3 件簇需两层：1|2 再�
 SPLIT_MIN_AREA = 8000        # **对象尺度下限**（候选实例须 ≥ 此面积才尝试切分）：锚＝词表标称半径 51
                              #   的整圆面积 π·51²≈8171。标定集上 (3021, 14242] 任意取值同效——
                              #   它挡掉的是**全部**假触发（无地板时低 rmin 的标定 over 5→7 全是 <8000px 碎片）
-SPLIT_MAX_AREA_FRAC = 0.5    # 整幅前景失败（面积 > 0.5·SIZE²，multi s44/s55＝262144）不切——另一通道
+SPLIT_MAX_AREA_FRAC = 0.5    # 整幅前景失败（面积 > 0.5·画幅；512 下＝262144，multi s44/s55）不切——另一通道
 _VOCAB_CACHE = {}
 
 
@@ -376,11 +376,14 @@ def _split_two(mask):
 def _vocab_split_one(mask, r_min, margin):
     """单层切分判定（R321 判据面，全在**源端**；读者的判决不参与，纪律 77）。
     过全部前提 ⇒ 返回 (a, b)；任一不过 ⇒ `None`（保守不切）：
-    ① 面积窗 [`SPLIT_MIN_AREA`, `SPLIT_MAX_AREA_FRAC`·SIZE²]（碎片归合并管 / 整幅前景失败另案）；
+    ① 面积窗 [`SPLIT_MIN_AREA`, `SPLIT_MAX_AREA_FRAC`·画幅]（碎片归合并管 / 整幅前景失败另案）；
     ② 触发前提 `r(M) ≥ r_min`；③ 可二分；④ 两半残留可算且 `plausibly_object`；
     ⑤ 接受门 `r(a) + r(b) + margin < r(M)`。"""
     area = int(mask.sum())
-    if area < SPLIT_MIN_AREA or area > SPLIT_MAX_AREA_FRAC * SIZE * SIZE:
+    # 上限＝**输入画幅**比例（#678）：旧写法乘模块常量 SIZE² ⇒ 非 512 输入下门固定 131072px，
+    # 大图普通对象被误判「整幅前景」、小图真整幅前景漏挡。#523 让非 512 输入能跑后二者分叉。
+    h, w = mask.shape[0], mask.shape[1]
+    if area < SPLIT_MIN_AREA or area > SPLIT_MAX_AREA_FRAC * (h * w):
         return None
     r_m = vocab_residual(mask)
     if r_m is None or r_m < r_min:
