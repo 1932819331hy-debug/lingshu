@@ -5845,7 +5845,54 @@ class SpacetimeMemoryEngine:
     #: #479：import_all 需密钥的 engine_meta 治理键（身份/信任持久面）。
     #: 纯技术键（_schema_version/_last_decay_at）无治理载荷，不在闸面——整表拒绝
     #: 会打掉 schema 版本恢复（值守复核 6164742040 权衡段，编排侧裁定收窄到载荷键）。
-    ENGINE_META_GUARDED_KEYS = frozenset({SELF_MODEL_META_KEY})
+    #:
+    #: #671（本笔 · 最小枚举补齐）：`#479` 的枚举只列 `self_model_snapshot` 一个键，
+    #: 而**启动期被回读**的治理载荷键至少还有四个（复核实测）：
+    #:   · `verifier_config` —— `_restore_structure_configuration` 无钳制原样恢复
+    #:     （`dedup_static` 0.85→0.0 生效，绕过 `#118` 的 `[0.5,0.95]` 钳制）；
+    #:   · `attention_weights` —— 同函数恢复注意力偏好权重；
+    #:   · `context_max` —— `_load_context_max()` 重启后 200→1，情境层 FIFO 上限被改写；
+    #:   · `structure_writer_schema` —— 重启后 `_structure_writer_active` False→True。
+    #: 上述四键与 `self_model_snapshot` 同属「无密钥可改且启动回读」的治理载荷面，
+    #: 本笔一并纳入闸内。判据来源：公开 issue #671 ＋ `#479` 的同一把闸。
+    #: **取舍（如实标注，留设计者裁）**：本笔取**最小枚举补齐**，不改成 deny-by-default
+    #: 放行白名单——后者是更大的契约变更（「哪些键能跨备份存活」），属设计者裁面。
+    #: 为防「枚举天然会漏」重演，另立机械闭合腿 `ENGINE_META_STARTUP_KEYS` ＋
+    #: `ENGINE_META_NONGOVERNANCE_KEYS`（见下），由
+    #: `tests/test_issue671_engine_meta_guarded_keys_guard.py` 的 G5 扫描源码闭合：
+    #: 将来新增一个启动回读键而忘了分类 ⇒ 守卫红。
+    ENGINE_META_GUARDED_KEYS = frozenset({
+        SELF_MODEL_META_KEY,
+        "verifier_config",
+        "attention_weights",
+        "context_max",
+        "structure_writer_schema",
+    })
+
+    #: #671：源码内**全部** `engine_meta` 读点出现的键（机械闭合腿的分类全集）。
+    #: 判据来源：`git grep -n 'get_meta(' lingshu/` ＋ `engine_meta WHERE key=` 的
+    #: 全部读点逐条核对（core.py 的 `_init_tables` / `__init__` /
+    #: `_restore_structure_configuration` / `get_current_structure_nodes` /
+    #: `_load_self_snapshot` / `_load_context_max` / `decay_cycle`，以及
+    #: `structure_writer.py` 的版本读点）。
+    #: 守卫 G5 断言 `ENGINE_META_GUARDED_KEYS ∪ ENGINE_META_NONGOVERNANCE_KEYS`
+    #: **恰等于**本集合 ⇒ 新增键漏分类即红。
+    ENGINE_META_STARTUP_KEYS = frozenset({
+        SELF_MODEL_META_KEY,          # 身份/信任持久快照（#479）
+        "verifier_config",            # 验证/去重配置（#671）
+        "attention_weights",          # 注意力偏好权重（#671）
+        "context_max",                # 情境层 FIFO 上限（#671）
+        "structure_writer_schema",    # 结构写入器开关（#671）
+        "_schema_version",            # schema 版本（非治理：灾备恢复必需）
+        "_last_decay_at",             # 上次衰减墙钟（非治理：纯技术时间戳）
+    })
+
+    #: #671：**非治理**键白名单（无治理载荷，无密钥可导入）。
+    #: 判据来源：`#479` 的收窄理由原文「不整表拒绝——整表拒绝会打掉 schema 版本恢复」
+    #: ＋ 本笔复核（`_schema_version` 只被 `_init_tables` 与 schema 恢复读；
+    #: `_last_decay_at` 只被 `decay_cycle` 读，是纯技术时间戳，不改变任何行为分支）。
+    ENGINE_META_NONGOVERNANCE_KEYS = frozenset({"_schema_version", "_last_decay_at"})
+
 
     def _save_self_model(self) -> None:
         """把运行态自我模型整份写入 `engine_meta` 权威键（#33 落库出口）。
