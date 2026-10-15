@@ -63,6 +63,7 @@ env:
     tests/test_longterm_gate_novelty.py
     tests/test_state_write_observable.py
     tests/test_coggraph_naming_report.py
+    tests/test_issue606_naming_r5in_phantom_guard.py
     tests/test_skeleton_fk_order_guard.py
     tests/test_expression_render_guard.py
     tests/test_hex_grid_extent.py

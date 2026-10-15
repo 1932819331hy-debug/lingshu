@@ -86,9 +86,15 @@ def main(argv=None):
     # Q2/Q3 的"被正文提及"只数**被提及**方向：derive_edges 的 R5 是
     # add(me, owner, ...)（s=提及者、t=被提及的规范概念节点），把 e["s"] 也算进来
     # 会把"这条正文提及了多少个概念"当成"被多少个节点正文提及"。
+    # #606：R5 还把同名节点自己的标题行（`# 功能名：<自身标题>`）记成互引边
+    # （#359 已认定的 phantom，Q1 的 deg 侧已滤）——r5_in 若全收，同名组会被
+    # 自己的 phantom 提及顶上去：2 名组真实外部提及只有 2，加 1 条 phantom 后
+    # r5_in=3 ⇒ q3=True ⇒ 误判「已锚定」逃出隔离区。故与上方 deg 完全同口径过滤。
     r5_in = collections.Counter()
     for e in d["edges"]:
         if e.get("rule") == "R5_body_crossref":
+            if title_of.get(e["s"], "") == title_of.get(e["t"], ""):
+                continue                  # #606：同名声明 phantom，与 Q1 deg 同口径过滤
             r5_in[e["t"]] += 1          # t = 被提及者
 
     rows = []
