@@ -13,9 +13,11 @@
     `from spacetime_memory_core import LayeredStore`（该名在本仓**不存在**，
     是私域 AEIS 的命名空间别名；本仓形态靠 `except` 回落仓内 `..core.core`）。
 
-issue 的**终局目标**：`grep -n "from ..world" lingshu/core/` 为**空**——即把 core
-里的世界层外观方法全部迁到 `lingshu/facade/world_api.py`（外观层），core 只保留
-引擎本体，依赖方向回到单向。
+issue 的**终局目标**：core→world 反向依赖清零——即把 core 里的世界层外观方法
+全部迁到 `lingshu/facade/world_api.py`（外观层），core 只保留引擎本体，依赖方向
+回到单向。原字面判据 `grep -n "from ..world" lingshu/core/` 为空——**#608 指出该
+字面判据可被「改写成绝对导入」绕过**（依赖还在、只是换写法，grep 归空但计数失明）；
+终局判据改为**本工具 core_to_world 计数 = 0**（#608 四形态口径，见下）。
 
 ★★本批（P2 批次 F）**只做机械可判的那一半**——「上尺子 ＋ 定基线（防新增）」：
   · 新增本工具与基线 `tools/import_direction_lint_baseline.txt`（基线＝本次实测计数）；
@@ -29,9 +31,19 @@ issue 的**终局目标**：`grep -n "from ..world" lingshu/core/` 为**空**—
 --------
 两个方向、按文件聚合行计数（行级正则，宽松下界）：
 
-  DIR "core_to_world"（正方向，issue 点名）：
-      扫描 `lingshu/core/*.py`，计**行首**为 `from ..world` 或 `import ..world`
-      的行（`^\\s*(from|import)\\s+\\.\\.world`）。一行计 1。
+  DIR "core_to_world"（正方向，issue 点名；#608 扩四形态）：
+      扫描 `lingshu/core/*.py`，计 core→world 反向依赖行——**四种等价写法**
+      （#608：旧口径只认相对形态字面，把一行相对导入改写成绝对导入即可让
+      计数 1→0、退出码 0→0 恒绿，绕过「只准减不准增」）：
+        a) `from ..world…` / `import ..world…`（相对导入，#178 既有口径，保持）；
+        b) `from .. import world`（含 `from .. import world, x`——world 混在
+           多个导入名里也算该行）；
+        c) `from lingshu.world…` / `import lingshu.world…`（绝对导入）；
+        d) `import_module("lingshu.world…")`（importlib 动态导入字符串，含
+           `from importlib import import_module` 后裸调；只认形如
+           "lingshu.world…" 的模块路径）。
+      a–c 行首锚定、d 匹配调用形态；一行命中任一形态即计 1（多形态同行不重复计）；
+      `lingshu.core` 内部互引不属于 world，不计。
   DIR "stmc_refs"（反方向旧名）：
       扫描 `lingshu/**/*.py`，计含子串 `spacetime_memory_core` 的行（含注释/字符串，
       因为旧名出现本身就是分层/命名面的事实）。一行计 1。
@@ -40,7 +52,11 @@ issue 的**终局目标**：`grep -n "from ..world" lingshu/core/` 为**空**—
 --------------------
 L1 行级正则、非 AST：把 `from ..world` 写在字符串/注释里也会计数（假阳）；
    `from .. world import`（空格）等异常写法漏报（假阴）。核心用法（逐方法体
-   `from ..world.x import Y`）两种口径一致。
+   `from ..world.x import Y`）两种口径一致。#608 增补：四形态仍是行级口径——
+   `import_module(` 与其字符串参数**跨行**、`from lingshu import world`（绝对
+   父包形态）、`__import__("lingshu.world…")` 等更冷门写法**不在四形态内**
+   （漏报面如实登记，需扩形态时另开一件）；反之 a–c 只认行首 `from/import`
+   起头的行，行中字符串（如 core.py 报错文案里的 `from lingshu.world`）不误报。
 L2 只数**行数**，不数"外观方法个数"：issue 说的"11 个外观方法"需人工按方法边界
    归属，本工具不自动判定（那需要 AST 方法归属 + 外观语义判定）。
 L3 `stmc_refs` 把注释里的提及也计入（如 `core.py` 文件头 docstring、
@@ -94,8 +110,28 @@ DIR_CORE_TO_WORLD = "core_to_world"
 DIR_STMC_REFS = "stmc_refs"
 DIRECTIONS: Tuple[str, ...] = (DIR_CORE_TO_WORLD, DIR_STMC_REFS)
 
-# 正方向：行首 `from ..world` / `import ..world`
-RE_CORE_TO_WORLD = re.compile(r"^\s*(?:from|import)\s+\.\.world\b")
+# 正方向（core→world 反向依赖）四形态匹配（issue #608）——旧口径只有下面 a)
+# 一条相对形态正则，同语义的反向依赖写法全数不到（计数 1→0、退出码 0→0 恒绿，
+# 「只准减不准增」被「改写法」绕过）。行级口径不变：一行命中任一形态 ⇒ 计 1
+# （多形态同行不重复计）；`lingshu.core` 内部互引不算。
+#   a) 相对导入：`from ..world.x import Y` / `import ..world.x`（#178 既有口径，原样保持）
+RE_CORE_TO_WORLD_RELATIVE = re.compile(r"^\s*(?:from|import)\s+\.\.world\b")
+#   b) `from .. import world`（含 `from .. import world, x`——world 混在多个导入名里，
+#      匹配该 from 行即可；`\b` 挡掉 `worldly` 等前缀撞名）
+RE_CORE_TO_WORLD_FROM_PARENT = re.compile(r"^\s*from\s+\.\.\s+import\s+world\b")
+#   c) 绝对导入：`from lingshu.world.x import Y` / `import lingshu.world.x`
+#      （`\b` 挡掉 `lingshu.worldly`；`lingshu.core` 内部互引不满足前缀，不计）
+RE_CORE_TO_WORLD_ABSOLUTE = re.compile(r"^\s*(?:from|import)\s+lingshu\.world\b")
+#   d) 动态导入字符串：`importlib.import_module("lingshu.world.x")`（含
+#      `from importlib import import_module` 后的裸调 `import_module("…")`）；
+#      只认形如 "lingshu.world…" 的模块路径（`lingshu.core…` 等内部互引不算）
+RE_CORE_TO_WORLD_IMPORTLIB = re.compile(r"import_module\s*\(\s*['\"]lingshu\.world\b")
+CORE_TO_WORLD_PATTERNS: Tuple[re.Pattern, ...] = (
+    RE_CORE_TO_WORLD_RELATIVE,
+    RE_CORE_TO_WORLD_FROM_PARENT,
+    RE_CORE_TO_WORLD_ABSOLUTE,
+    RE_CORE_TO_WORLD_IMPORTLIB,
+)
 # 反方向旧名
 STMC_TOKEN = "spacetime_memory_core"
 
@@ -141,7 +177,8 @@ def scan(root: Path, scan_dir: Path) -> Tuple[Dict[str, Dict[str, int]], List[st
                 path.resolve().relative_to(core_dir.resolve())
             except ValueError:
                 continue
-            m = sum(1 for line in text.splitlines() if RE_CORE_TO_WORLD.search(line))
+            m = sum(1 for line in text.splitlines()
+                    if any(p.search(line) for p in CORE_TO_WORLD_PATTERNS))
             if m:
                 out[DIR_CORE_TO_WORLD][rel] = m
     return out, errors
@@ -189,13 +226,19 @@ def render_baseline(counts: Dict[str, Dict[str, int]],
     lines = [
         "# import_direction_lint baseline —— core↔world 双向依赖计数（issue #178）",
         "# 格式：<方向><TAB><仓内相对路径><TAB><行数>   （`#` 起为注释）",
-        "# 方向：core_to_world = lingshu/core/ 里 `from ..world`/`import ..world` 的行数；",
+        "# 方向：core_to_world = lingshu/core/ 里 core→world 反向依赖的行数（#608 四形态口径：",
+        "#       a) from/import ..world… ｜ b) from .. import world ｜ c) from/import lingshu.world…",
+        "#       ｜ d) import_module(\"lingshu.world…\")）；",
         "#       stmc_refs     = lingshu/ 里含旧包名 `spacetime_memory_core` 的行数。",
         "# 语义：每 (方向,文件) 行数**只准减不准增**；超基线或出现基线外新计数 ⇒ 退出 1。",
         "# 基线来源：HEAD b846086 实测（python -X utf8 tools/import_direction_lint.py --update-baseline）。",
         "#   两组读数对表：issue 原实测 = core→world 约 22 处惰性导入；本 worktree b846086 实测 = 28 行（全在 core.py）。",
         "#   stmc_refs 实测 = 4 行（component_resolver.py:1 / core.py:1 / world/prediction.py:2）——旧名仍在，未清。",
-        "#   ★终局目标（issue #178）= `grep -n \"from ..world\" lingshu/core/` 为空——**本批达不到**：",
+        "#   #608（2026-10-15）：口径扩四形态后仓内复测——core_to_world 仍 28 行（全在 core.py）、",
+        "#     stmc_refs 仍 4 行；四条新形态在 main 无存量实例，数据行不变。",
+        "#   ★终局目标（issue #178）= core→world 反向依赖计数归零。旧字面判据 `grep -n",
+        "#     \"from ..world\" lingshu/core/` 为空可被「改写成绝对导入」绕过（依赖还在、只是换写法）——",
+        "#     #608 扩四形态后，终局判据以**本工具 core_to_world 计数 = 0** 为准。**本批达不到**：",
         "#     本批只上尺子＋定基线（防新增）；11 个外观方法迁 lingshu/facade/world_api.py 的重构未做。",
         "# ★基线可移植性：本值是 b846086 快照。合入其它在飞批次后若计数上升，先判因——",
         "#   真·新增反向依赖 ⇒ 改代码；刻意为之 ⇒ 更新基线并在下方登记段追加一行带日期记录。",
@@ -348,10 +391,10 @@ def run(argv: Optional[Sequence[str]] = None) -> Tuple[int, str, Dict]:
         lines.append("基线中已失效条目 %d 个（可清理）：%s" % (len(missing), ", ".join(missing)))
     if not args.quiet:
         lines.append("")
-        lines.append("core→world 惰性导入 %d 行（基线 %d）；旧名 stmc_refs %d 行（基线 %d）；超基线项 %d"
+        lines.append("core→world 反向依赖 %d 行（#608 四形态口径；基线 %d）；旧名 stmc_refs %d 行（基线 %d）；超基线项 %d"
                      % (actual_total[DIR_CORE_TO_WORLD], baseline_total[DIR_CORE_TO_WORLD],
                         actual_total[DIR_STMC_REFS], baseline_total[DIR_STMC_REFS], len(over)))
-        lines.append("★终局目标（grep \"from ..world\" lingshu/core/ 为空）本批未达成——只上尺子防新增。")
+        lines.append("★终局目标（core→world 依赖计数归零，#608 起按四形态口径、不以 \"from ..world\" 字面为准）本批未达成——只上尺子防新增。")
         lines.append("退出码 %d（%s）" % (exit_code, "存在超基线" if over else "无新增"))
     return exit_code, "\n".join(lines) + ("\n" if lines else ""), payload
 
