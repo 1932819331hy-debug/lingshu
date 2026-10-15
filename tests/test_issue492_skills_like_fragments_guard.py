@@ -29,6 +29,11 @@ SQLite 上游常量 `SQLITE_MAX_LIKE_PATTERN_LENGTH` 默认 50000 字节 ⇒ 模
      `%` / `_` 仍按字面匹配（#200）、定序仍按 confidence DESC（#272）。
   K4 切分确实发生：超长查询下 `_escape_like` 被调用 >1 次（模式确实分了片）。
   K5 前置边界：空 skills 表 + 超长查询不抛、返回空列表（缺陷前提①的对照）。
+  K6 **转义放大型**触发：查询里含大量 `\\` 时，`_escape_like` 会把每个 `\\` 变成两个
+     字符 ⇒ **模式字节数约翻倍**，分界点前移（25000 个 `\\`：原文 25000 字节，
+     转义后模式 50002 字节 > 上限 ⇒ 旧实现抛；原文远未到 49999 的分界）。
+     本腿正是 reporter「更正 1」指出的那一面——修复后（切分发生在**转义之前**）
+     每片段转义后仍 ≤ `2 × _LIKE_PATTERN_MAX_BYTES + 2`，远离上限。
 
 **修复后的语义边界（如实标注，不主张超长查询能召回技能）**：技能面预筛是
 `name/description LIKE %片段%`，短列**不可能包含**数十字节以上的片段 ⇒ 任何超长查询
@@ -159,25 +164,27 @@ def test_k5_empty_skills_table_long_query_ok():
 
 
 def test_k6_escape_amplification_leg():
-    """K6：转义字符放大腿——`\\` 会被 `_escape_like` 加倍，模式长度翻倍。
+    """K6：转义放大型触发——`\\` 经 `_escape_like` 加倍 ⇒ 模式长度翻倍、分界前移。
 
     reporter 的「更正 1」指出：查询里每个 `\\` 在 `_escape_like` 后变两个字符 ⇒ 模式
-    字节数约为查询的两倍，分界点随之前移到约 24999/25000。本机 SQLite 3.49.1 上该
-    前置**未再现**（详见判定帖复核读数），但**修复后必须两臂都安全**：切分阈值是
-    `_LIKE_PATTERN_MAX_BYTES`（3000），转义后单模式 ≤ 6000 + 2，远低于上游 50000。
+    字节数约为查询的两倍，分界点随之前移到约 24999/25000（本机核算：`"\\" * 25000`
+    的旧单模式 = `25000×2 + 2 = 50002` 字节 > 上游 50000 ⇒ 抛；`"\\" * 24999` 恰
+    50000 ⇒ 不抛）。修复把切分放在**转义之前**，故每片段转义后仍 ≤
+    `2 × _LIKE_PATTERN_MAX_BYTES + 2`，与上限差一个数量级。
     本腿钉死这一点，消「转义放大量随 SQLite 构建漂移」的盲区。
     """
     e = _engine_with_skills()
-    for n in (24000, 24999, 25000, 30000, 60000):
+    for n in (20000, 24000, 24999, 25000, 26000, 30000, 60000):
         q = "\\" * n
         assert len(q.encode("utf-8")) == n
         r1 = e.store.search_skills(q)     # 旧缺陷：≥ 分界点即抛 OperationalError
         r2 = e.recall_skill(q)
         assert isinstance(r1, list) and isinstance(r2, list), (n, r1, r2)
 
-    # 每片转义后的模式仍远低于上游上限（3000 × 2 + 2 = 6002 ≪ 50000）
-    from lingshu.core.core import _LIKE_PATTERN_MAX_BYTES
-    assert _LIKE_PATTERN_MAX_BYTES * 2 + 2 < 50000, _LIKE_PATTERN_MAX_BYTES
+    # 转义放大上界：分片在转义前 ⇒ 最坏情形（满片数 × 单片放大后字节）仍远离上限
+    from lingshu.core.core import _LIKE_FRAGMENT_CAP, _LIKE_PATTERN_MAX_BYTES
+    worst = 2 * _LIKE_PATTERN_MAX_BYTES + 2
+    assert worst * _LIKE_FRAGMENT_CAP < 50000, (worst, _LIKE_FRAGMENT_CAP)
 
 
 if __name__ == "__main__":
