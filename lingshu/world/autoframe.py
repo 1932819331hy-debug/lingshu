@@ -181,6 +181,34 @@ def _solve2x3(A, b):
 MAX_FIT_VERTS = 4000
 
 
+def _visible_face_verts(verts, faces, ctr, eye_rel) -> set:
+    """朝向相机的面所用到过的顶点集（#619）。
+
+    判据与 `mesh3d.prepare_triangles` 的背面剔除**同一口径**：`n·(eye − 面心) > 0`
+    ——`eye`/面心都取「相对 bbox 中心」的平移系（平移不改变法线与差向量，
+    与 prepare_triangles 的世界系判定逐面等价）。
+    #619：旧实现把 `orbit_dir` 的**单位方向**当 eye 位置用（隐含相机在距
+    中心 1 米处）。真实取景距离是物体尺度的数倍：大网格（半尺度 > 1）判不出
+    任何可见面、`len(vis) < 8` 静默退回拟合**全部**顶点（背点拉偏拟合框）；
+    小网格把大半个背面也当可见。修法：调用方传**显式相机位置** `dist·d`
+    （dist 用 `frame_points` 的同款初值公式）。
+    """
+    vis = set()
+    for fc in faces or []:
+        idx = getattr(fc, "idx", None)
+        if not idx:
+            continue
+        fx = (verts[idx[0]][0] + verts[idx[1]][0] + verts[idx[2]][0]) / 3.0 - ctr[0]
+        fy = (verts[idx[0]][1] + verts[idx[1]][1] + verts[idx[2]][1]) / 3.0 - ctr[1]
+        fz = (verts[idx[0]][2] + verts[idx[1]][2] + verts[idx[2]][2]) / 3.0 - ctr[2]
+        nm = getattr(fc, "normal", None)
+        if not nm:
+            continue
+        if nm[0] * (eye_rel[0] - fx) + nm[1] * (eye_rel[1] - fy) + nm[2] * (eye_rel[2] - fz) > 0.0:
+            vis.update(idx)
+    return vis
+
+
 def frame_mesh(mesh, screen_w: int, screen_h: int, use_verts: bool = True,
                center: Sequence[float] = (0.0, 0.0, 0.0), **kw):
     """按三角网格自动取景。
@@ -212,26 +240,18 @@ def frame_mesh(mesh, screen_w: int, screen_h: int, use_verts: bool = True,
         #: 中心实测偏上 0.18 画布（`center_y ≈ 0.324`）。可见顶点才是"看得见的主体"。
         #: 朝向判据与 `prepare_triangles` 的背面剔除**同一口径**：`n·(eye − 面心) > 0`。
         try:
-            top = max(range(3), key=lambda k: b[1][k] - b[0][k])
+            #: #619：可见性判据须用**显式相机位置**（`prepare_triangles` 同口径的
+            #: `n·(eye − 面心) > 0`）。dist 沿用 `frame_points` 的初值公式（包围
+            #: 尺度 × 视场半角 × 留边），与最终取景距离同量级——旧实现把单位
+            #: 方向当位置用，大网格判不出可见面、小网格把背面当可见（#619 取证）。
             eye_dir = orbit_dir(kw.get("azimuth_deg", 35.0), kw.get("elevation_deg", 22.0))
             ctr = tuple((b[0][k] + b[1][k]) / 2.0 for k in range(3))
-            vis = set()
-            for fc in getattr(mesh, "faces", []) or []:
-                idx = getattr(fc, "idx", None)
-                if not idx:
-                    continue
-                a0 = vs[idx[0]]
-                a1 = vs[idx[1]]
-                a2 = vs[idx[2]]
-                #: 注意：可见性判据只用**方向**，平移不改变法线朝向 ⇒ 用局部坐标即可
-                fx = (a0[0] + a1[0] + a2[0]) / 3.0 - ctr[0]
-                fy = (a0[1] + a1[1] + a2[1]) / 3.0 - ctr[1]
-                fz = (a0[2] + a1[2] + a2[2]) / 3.0 - ctr[2]
-                nm = getattr(fc, "normal", None)
-                if not nm:
-                    continue
-                if nm[0] * (eye_dir[0] - fx) + nm[1] * (eye_dir[1] - fy) + nm[2] * (eye_dir[2] - fz) > 0.0:
-                    vis.update(idx)
+            _scale = max(1e-6, max(b[1][k] - b[0][k] for k in range(3)))
+            _half = math.radians(kw.get("fov_deg", 50.0)) / 2.0
+            _dist = (_scale * 0.5) / math.tan(_half) \
+                * (1.0 + 2.0 * kw.get("margin_frac", DEFAULT_MARGIN_FRAC))
+            vis = _visible_face_verts(vs, getattr(mesh, "faces", []) or [],
+                                      ctr, _mul(eye_dir, _dist))
             if len(vis) >= 8:
                 vlist = sorted(vis)
                 vstep = max(1, len(vlist) // MAX_FIT_VERTS)
@@ -241,7 +261,6 @@ def frame_mesh(mesh, screen_w: int, screen_h: int, use_verts: bool = True,
                 corners = [(b[0][0] if i & 1 else b[1][0], b[0][1] if i & 2 else b[1][1],
                             b[0][2] if i & 4 else b[1][2]) for i in range(8)]
                 return frame_points(corners + pts, screen_w, screen_h, fit_points=pv, **kw)
-            del top
         except (AttributeError, TypeError, ValueError, ZeroDivisionError):
             pass
         #: 角点一并算进"初始尺度"（有顶点抽样时用它更稳），但**只把顶点**当拟合集
