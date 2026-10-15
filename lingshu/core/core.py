@@ -3313,8 +3313,13 @@ class LayeredStore:
         # 不参与打分**（本件只把「按插入序静默丢新项」改成「按重要度有序截断」，
         # 未改成全库扫描）。
         c = self.conn.cursor()
+        # #613：候选池定序**末位补 `id ASC`**——`importance`/`last_access` 上有大量
+        # 并列（`distinct_importance=1` 时池内次序全凭 SQLite 的物理取行序），而检索
+        # 路径会 `increment_access_many(..., touch=...)` 写回 `last_access` ⇒ 下一次
+        # 调用池内次序即变，并列次序泄漏进最终结果（同引擎连续两次调用顺序不同）。
+        # `id`（字符串、库内唯一、跨平台稳定）作末位键消掉并列，非并列情形**逐位不变**。
         c.execute(f"SELECT * FROM nodes WHERE {where} "
-                  f"ORDER BY importance DESC, last_access DESC LIMIT 300",
+                  f"ORDER BY importance DESC, last_access DESC, id ASC LIMIT 300",
                   params + like_params)
         rows = c.fetchall()
         # #183：预筛已转义（`%`/`_` 按字面匹配）。但**空结果会触发下面的全表
@@ -3331,10 +3336,10 @@ class LayeredStore:
             # 节点量级小（千级），全表计算代价可忽略；消除连续性漏检。
             if conds:
                 c.execute(f"SELECT * FROM nodes WHERE {' AND '.join(conds)} "
-                          f"ORDER BY importance DESC, last_access DESC LIMIT 500", params)
+                          f"ORDER BY importance DESC, last_access DESC, id ASC LIMIT 500", params)
             else:
                 c.execute("SELECT * FROM nodes "
-                          "ORDER BY importance DESC, last_access DESC LIMIT 500")
+                          "ORDER BY importance DESC, last_access DESC, id ASC LIMIT 500")
             rows = c.fetchall()
         scored = []
         # 评分用原查询二元组 Jaccard（含并集分母，与 char_bigram_jaccard 同式）；
@@ -3349,8 +3354,12 @@ class LayeredStore:
         # 同分按重要性降序（高质量记忆优先，避免并列截断排挤重要节点）；
         # #29④：再按置信度降序——旧实现终排不看 confidence，未验证/被矛盾标记的
         # 低置信节点与高置信节点同分时按插入序（importance 同值时）排前。
+        # #613：末位补 `id`——上述各键全部并列时，Python `sort` 是稳定排序 ⇒ 次序
+        # 由 `scored` 的输入序（即候选池取行序）决定，而该序会被 `touch` 写回
+        # `last_access` 扰动（见候选池 SQL 处注释）⇒ 并列次序泄漏进最终结果。
+        # `id` 唯一且跨平台稳定，作末位键消掉并列；非并列情形**逐位不变**。
         # 判据来源：经验标定（#29 修复轮；理论章节追不到）。
-        scored.sort(key=lambda x: (-x[1], -x[0].importance, -x[0].confidence))
+        scored.sort(key=lambda x: (-x[1], -x[0].importance, -x[0].confidence, x[0].id))
         # ★优化（本笔）：旧实现 `for node, _ in results: self.increment_access(node.id)`
         # —— 每个命中节点**新开一个 sqlite 连接**。改为一次交给批量单点（一条连接、
         # 一次提交）。计数口径不变：只对最终返回的 `results` 计数；重复 id 经
