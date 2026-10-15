@@ -171,11 +171,14 @@ def test_g4_whole_repo_zero_over_baseline():
     assert res.returncode == 0, data
     assert data["new_over_baseline"] == [], data
     assert data["actual_total"] == data["baseline_total"], data
-    assert data["actual_total"] >= 144, "基线合计低于 #609 重测值 144，判据可能被偷偷放宽"
+    assert data["actual_total"] >= 146, ("基线合计低于 #653 登记值 146"
+                                         "（#609 重测 144 ＋ #653 新增 2），"
+                                         "判据可能被偷偷放宽")
     assert data["unparsable"] == [], data
-    # #609 重测的落点：core.py 计数已同步进基线（46→76）
+    # #609 重测的落点：core.py 计数已同步进基线（46→76；#653 再 76→78，
+    # `_tolerant_edges` 边侧逐行容错新增 2 条，见基线文件 #653 登记行）
     core = next(r for r in data["per_file"] if r["file"] == "lingshu/core/core.py")
-    assert core["silent"] == core["baseline"] == 76, core
+    assert core["silent"] == core["baseline"] == 78, core
 
 
 def test_g4_baseline_file_documents_609_retest():
@@ -183,4 +186,6 @@ def test_g4_baseline_file_documents_609_retest():
     text = (REPO_ROOT / "tools" / "silent_except_lint_baseline.txt").read_text(
         encoding="utf-8")
     assert "#609 判定 AST 化后重测" in text, text
-    assert "lingshu/core/core.py\t76" in text, text
+    # #653 起基线值 76→78（`_tolerant_edges` 新增 2，见基线 #653 登记行）——
+    # 本断言跟随当前基线值，追溯链 = #609 历史区「46→76」＋ #653 登记行「76→78」。
+    assert "lingshu/core/core.py\t78" in text, text
