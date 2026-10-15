@@ -9,12 +9,15 @@
 **只贴读数、不作结论**——结论仍走人工/模型侧的既有流程。
 
 为什么它能跑不可信代码（安全前提，改动前先读）：
-  · 本脚本对被测子进程的**环境做清洗**：剔除 `GITHUB_*` / `GH_*` / `ACTIONS_*` /
-    `RUNNER_*` / `INPUT_*` 前缀的键，以及名字含 TOKEN|SECRET|PASSWORD|CREDENTIAL
-    的键——被测脚本的**进程 env 里**拿不到 job 令牌，也拿不到 `$GITHUB_ENV`/
-    `$GITHUB_OUTPUT` 等 CI 注入面的路径（workflow 侧另有配合：取正文与回评步骤
-    才带 GH_TOKEN，执行步骤不带；checkout 用 persist-credentials: false 不落
-    git 凭据）。
+  · 本脚本对被测子进程的**环境做清洗（白名单制，issue #682）**：只透传
+    `_ENV_ALLOW_EXACT` / `_ENV_ALLOW_PREFIXES` 命中的「进程运行基座」键
+    （路径 / 临时目录 / 家目录 / 区域 / 宿主自省 / CPython 配置），**其余继承键
+    一律丢弃**——被测脚本的**进程 env 里**拿不到 job 令牌，也拿不到
+    `$GITHUB_ENV`/`$GITHUB_OUTPUT` 等 CI 注入面的路径，更拿不到 `*_KEY` /
+    `*_URL` / `SSH_AUTH_SOCK` / `KUBECONFIG` / `DOCKER_HOST` / `NETRC` /
+    `*_PROXY` 这类**能力凭据**（旧实现是词表丢弃，漏掉这一整类；workflow 侧另有
+    配合：取正文与回评步骤才带 GH_TOKEN，执行步骤不带；checkout 用
+    persist-credentials: false 不落 git 凭据）。
     ⚠️ **本清洗只清「被测子进程自己的 env」，不等于同 job 隔离**（#241）：同 uid
     的被测代码仍可读父进程 environ（如 Linux `/proc/<ppid>/environ`）把被清洗的
     键取回，也可写 `$GITHUB_ENV`/`$GITHUB_PATH` 影响**后续步骤**。真正的边界是
@@ -203,9 +206,42 @@ def _html_block_start(line, prev_blank):
             return ("blank",)
     return None
 
-#: 被测子进程环境的剔除面（前缀 / 词）——令牌与 CI 注入面。
-_ENV_DROP_PREFIXES = ("GITHUB_", "GH_", "ACTIONS_", "RUNNER_", "INPUT_")
-_ENV_DROP_WORDS = ("TOKEN", "SECRET", "PASSWORD", "CREDENTIAL")
+#: 被测子进程环境的**白名单·具名**（#682）——跨平台「进程运行基座」：可执行查找 /
+#: 命令解释器 / 临时目录 / 家目录 / 区域 / 宿主自省 / CPython 配置面。
+#: **不含任何凭据或能力形状名**（`*_KEY` / `*_TOKEN` / `*_URL` / `*_URI` / `*_DSN`
+#: / `SSH_AUTH_SOCK` / `KUBECONFIG` / `DOCKER_HOST` / `NETRC` / `*_PROXY` 等）。
+#: 口径与脑侧 `lingshu/world/brain_store.py::_ENV_ALLOW_NAMES`（issue #227/#652）一致。
+_ENV_ALLOW_EXACT = frozenset({
+    # 可执行查找 / 命令解释器
+    "PATH", "PATHEXT", "COMSPEC",
+    # Windows 目录基座（Python 解释器与 stdlib 启动期读用）
+    "SYSTEMROOT", "SYSTEMDRIVE", "WINDIR",
+    "PROGRAMDATA", "ALLUSERSPROFILE", "PUBLIC",
+    "PROGRAMFILES", "PROGRAMFILES(X86)", "COMMONPROGRAMFILES",
+    "COMMONPROGRAMFILES(X86)", "PROGRAMW6432", "COMMONPROGRAMW6432",
+    # 临时目录
+    "TEMP", "TMP", "TMPDIR",
+    # 家目录 / 账户
+    "HOME", "HOMEDRIVE", "HOMEPATH", "USERPROFILE",
+    "APPDATA", "LOCALAPPDATA",
+    "USER", "USERNAME", "USERDOMAIN", "LOGNAME",
+    # 区域 / 终端
+    "LANG", "LANGUAGE", "TZ", "TERM",
+    # 宿主自省（解释器/编译扩展常用）
+    "NUMBER_OF_PROCESSORS", "PROCESSOR_ARCHITECTURE", "PROCESSOR_IDENTIFIER",
+    "PROCESSOR_LEVEL", "PROCESSOR_REVISION", "OS",
+    # CPython 配置/行为面（**不含** PYTHONHOME / PYTHONSTARTUP / PYTHONINSPECT /
+    # PYTHONEXECUTABLE——解释器启动期劫持面，见脑侧 #652③；被测脚本按
+    # `python -X utf8 <script>` 启动，不需要它们）。
+    "PYTHONPATH", "PYTHONUTF8", "PYTHONIOENCODING",
+    "PYTHONDONTWRITEBYTECODE", "PYTHONUNBUFFERED", "PYTHONWARNINGS",
+    "PYTHONFAULTHANDLER", "PYTHONHASHSEED", "PYTHONNOUSERSITE",
+    "PYTHONSAFEPATH", "PYTHONDEVMODE",
+})
+
+#: 白名单·前缀（#682）：仅区域/编码面 `LC_*`——无凭据形状名、无启动期执行面。
+_ENV_ALLOW_PREFIXES = ("LC_",)
+
 
 DEFAULT_TIMEOUT = 600
 DEFAULT_MAX_OUTPUT_BYTES = 20480
@@ -543,8 +579,26 @@ def _fetch_issue_body(repo, issue, env=None):
 # 执行
 # ---------------------------------------------------------------------------
 
+def _env_is_allowed(name):
+    """继承的 env 键是否在白名单内（大小写无关：Windows 上 `os.environ` 键为大写）。"""
+    up = str(name).upper()
+    if up in _ENV_ALLOW_EXACT:
+        return True
+    return any(up.startswith(p) for p in _ENV_ALLOW_PREFIXES)
+
+
 def _child_env(extra):
-    """构造被测子进程 env：清掉令牌/CI 注入面，再注入显式覆盖。
+    """构造被测子进程 env：**默认丢弃 + 白名单透传**，再注入显式覆盖。
+
+    #682：旧实现是「默认透传 + 词表丢弃」——词表（TOKEN|SECRET|PASSWORD|
+    CREDENTIAL）**不含** `KEY`/`URL`/`URI`/`DSN`，且盖不住 `SSH_AUTH_SOCK` /
+    `KUBECONFIG` / `DOCKER_HOST` / `NETRC` / `*_PROXY` 这类**能力凭据**，被测
+    （不可信）脚本能原样拿到（如 `AEIS_DESIGNER_KEY` / `AWS_ACCESS_KEY_ID` /
+    `DATABASE_URL`）。改为白名单后，父进程 env 里除 `_ENV_ALLOW_EXACT` /
+    `_ENV_ALLOW_PREFIXES` 命中的键外一律不透传；白名单只含「进程运行基座」，
+    不含任何凭据。
+
+    `PYTHONUTF8`/`PYTHONIOENCODING` 仍强制注入、`extra` 仍可覆盖（既有契约不变）。
 
     ⚠️ 作用域**仅限被测子进程自己的 env**（#241）：同 uid 的被测代码仍可读父
     进程 environ（如 Linux `/proc/<ppid>/environ`）把被清洗的键取回，也可写
@@ -553,11 +607,8 @@ def _child_env(extra):
     """
     env = {}
     for k, v in os.environ.items():
-        if k.startswith(_ENV_DROP_PREFIXES):
-            continue
-        if any(w in k.upper() for w in _ENV_DROP_WORDS):
-            continue
-        env[k] = v
+        if _env_is_allowed(k):
+            env[k] = v
     env["PYTHONUTF8"] = "1"
     env["PYTHONIOENCODING"] = "utf-8"
     env.update(extra)
