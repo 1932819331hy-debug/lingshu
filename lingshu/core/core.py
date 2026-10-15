@@ -1396,6 +1396,29 @@ class LayeredStore:
         # `importance > min_confidence` 之外 ⇒ 该节点**永不进入遗忘面**，正是
         # #185 点名的「永不遗忘」症状；取默认值 0.5 使其行为与普通记忆一致。
         node.importance = _finite_clamp(node.importance, 0.0, 1.0, default=0.5)
+        # #588 / #594：`content` 类型闸（唯一写入汇聚点，与 #164 同址）。#331 的同类
+        # 闸只加在 `add_perception` 一个入口 ⇒ 绕过面仍在：`add_context(content=...)`、
+        # `ingest_frame({"caption": ...})`、`set_anchor(content=...)`、
+        # `add_structure_node(content=...)` 四入口直构 `STNode` 后就地入库，非 str 以
+        # BLOB 落进 TEXT 列。后果链（#588 实测）：一行 BLOB 毒化整条检索面
+        # （`recall` → `TypeError: sequence item 0: expected str instance, bytes found`），
+        # 且 `export_all` → `TypeError: Object of type bytes is not JSON serializable`
+        # ⇒ M13 备份做不出来。修法：闸**下沉到本唯一写入汇聚点**，一处覆盖全部入口
+        # （含 #594 点名的 `set_anchor` / `add_structure_node` 不可变层两入口），
+        # 而不是逐个入口补——逐入口补必再漏。
+        # 口径与 #331 一致：**非 str ⇒ fail-closed 拒绝**，不做 `str(content)` 静默强转
+        # （那会把 dict 存成 repr 文本，属静默篡改语义，比拒绝更坏）。
+        # 判据来源：公开 issue #588 / #594（与 #331 同族，维护者建议「闸下沉 add_node，
+        # 一处覆盖全部入口」）＋ 本文件 `add_perception` 的 #331 先例。
+        # 边界（削掉的判别力/未覆盖面）：①本闸只判 **str**，不判内容语义；②不动
+        # `import_all` 的既有导入口径（其自身转换面不在本件范围）；③`content=None`
+        # 此前走 `STNode` 默认值，本闸使其 fail-closed（与 #331 同口径，属预期收紧）。
+        if not isinstance(node.content, str):
+            raise TypeError(
+                "#588/#594 add_node 拒绝非字符串 content（收到 %s）：非 str 会以 BLOB "
+                "静默落库，毒化检索面并使 export_all 失败（与 #331 同口径，闸已下沉至"
+                "唯一写入汇聚点）" % type(node.content).__name__
+            )
         existing = self.get_node(node.id)
         if existing is not None:
             if existing.layer in self.SHARED_LAYERS and self.role != Role.PRIMARY:
