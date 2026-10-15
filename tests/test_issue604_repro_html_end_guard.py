@@ -166,9 +166,11 @@ def test_g2_pi_cdata_unchanged():
     cdata_multi = "<![CDATA[\n```python\nHIDDEN_CD\n```\n]]>\n\n" + FENCE
     assert _visible_code(cdata_multi) == ["print('VISIBLE')"]
     # 直调读数（#604 题面）：`?>`/`]]>` 不是容器前缀、剥净不动
-    assert R._container_strip("?>") == "?>"
-    assert R._container_strip("]]>") == "]]>"
-    assert R._container_strip(">") == "", "裸 `>` 仍会被剥空（这正是 D2 要绕开的口径）"
+    # （#643 merge 适配：_container_strip 返回值改为 (剥净行, 可打断列表标记)
+    #  二元组——#612 需要第二个返回值；三处断言取 [0]，语义逐条不变）
+    assert R._container_strip("?>")[0] == "?>"
+    assert R._container_strip("]]>")[0] == "]]>"
+    assert R._container_strip(">")[0] == "", "裸 `>` 仍会被剥空（这正是 D2 要绕开的口径）"
 
 
 # ── G3 · D3：③型空注释重叠闭（#604） ───────────────────────────────────────
