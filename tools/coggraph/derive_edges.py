@@ -143,6 +143,10 @@ def main(argv=None):
     ap.add_argument("--generic-spread", type=int, default=5, help="标题散落在 >=N 个桶即判为泛化词（无锚定）")
     ap.add_argument("--per-node-cap", type=int, default=6)
     ap.add_argument("--small-bucket", type=int, default=8, help="小于该规模的桶做两两同桶边")
+    ap.add_argument("--tag-max-owners", type=int, default=400,
+                    help="R3：单个内容标签的最多 owners 数，超过即视为泛化标签不参与两两枚举"
+                         "（默认 400＝旧硬编码值；跳过数会告警并登记进 meta.skipped_generic_tags，"
+                         "不再静默归零——issue #634）")
     ap.add_argument("--sample", type=int, default=30)
     ap.add_argument("--seed", type=int, default=20260912)
     ap.add_argument("--write", action="store_true")
@@ -242,8 +246,14 @@ def main(argv=None):
             for tg in ts:
                 tag_index[tg].add((nid, ts))
     cand = collections.defaultdict(set)
+    skipped_generic = []
     for tg, owners in tag_index.items():
-        if len(owners) > 400:   # 太泛的内容标签也不参与
+        if len(owners) > args.tag_max_owners:
+            # 太泛的内容标签不参与两两枚举（#634：旧口径硬编码 400、整条 continue、
+            # stderr/meta 零可观测 ⇒ owners 400→401 时该标签贡献的全部候选对**阶跃归零**
+            # 且与「确实无强关联」读数不可区分。阈值参数化（默认 400 行为不变），
+            # 超限标签记录并在产物 meta.skipped_generic_tags 计数、stderr 告警。）
+            skipped_generic.append((tg, len(owners)))
             continue
         owners = list(owners)
         for i in range(len(owners)):
@@ -254,6 +264,12 @@ def main(argv=None):
                     continue
                 pair = (a, b) if a <= b else (b, a)
                 cand[pair].add(tg)
+    if skipped_generic:
+        # 与 R5 泛化词隔离的告警口径对齐（同类剪枝都要说一声；issue #634 G4）。
+        # 只报计数不报标签名（公开面卫生）。
+        print("  [R3] 内容标签 %d 个，其中泛化标签(owners>%d，跳过) %d 个"
+              "——这些标签下的候选对全部不参与 R3（可用 --tag-max-owners 调整）"
+              % (len(tag_index), args.tag_max_owners, len(skipped_generic)), file=sys.stderr)
     r3 = 0
     per_node = collections.Counter()
     # 上限会影响候选是否入选；必须在限额判断前固定顺序，而非仅在输出时排序。
@@ -400,6 +416,10 @@ def main(argv=None):
             "graph_sha": (g.get("meta") or {}).get("source_sha"),
             "generated_at": time.strftime("%Y-%m-%d %H:%M:%S"),
             "rules": dict(per_rule),
+            # #634：泛化标签剪枝必须**可观测**——skipped_generic_tags 让「R3 被剪到 0」
+            #   与「确实无强关联」在产物里可区分；tag_max_owners 记录本次生效阈值（默认 400）。
+            "skipped_generic_tags": len(skipped_generic),
+            "tag_max_owners": args.tag_max_owners,
             "counts": {"derived_edges": len(edges), "hubs": len(hubs),
                        "explicit_edges": len(explicit), "nodes": len(nodes)},
             "note": "推导边全部 derived=true；不写回认知图真源。",
