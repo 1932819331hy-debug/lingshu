@@ -170,8 +170,11 @@ def main(argv=None):
             prev = nid
         chains.append({"session": s, "nodes": len(items),
                        "span": [items[0][0], items[-1][0]],
-                       "range": [time.strftime("%Y-%m-%d %H:%M", time.localtime(items[0][0])),
-                                 time.strftime("%Y-%m-%d %H:%M", time.localtime(items[-1][0]))]})
+                       # #639：range 展示串改用 UTC（gmtime），与 R4 日枢纽（#360）同判据——
+                       # 同一 graph.json/_audit.jsonl 在任意 TZ 的机器上必须产出逐字相同的
+                       # 产物（可复现性优先于本地墙钟语义；span 仍是 epoch 数值不受影响）。
+                       "range": [time.strftime("%Y-%m-%d %H:%M", time.gmtime(items[0][0])),
+                                 time.strftime("%Y-%m-%d %H:%M", time.gmtime(items[-1][0]))]})
 
     chains.sort(key=lambda c: -c["nodes"])
     out = {
