@@ -93,11 +93,14 @@ PIL 机制行号 = Pillow 12.3.0 `GifImagePlugin.py:697-704` 与 `:771`；
 覆盖边界（如实，未验的部分）：
   · **不验**"GIF 在播放器里看起来是否动"（本环境无播放器/浏览器渲染器）⇒ 全部判据是
     PIL 读回读数 + 文件字节/像素读数，不是视觉判据；
-  · F 组金标**冻结在像素层**（解码后逐像素 sha256），**不**冻结 PNG 文件字节：PNG 字节
-    由打包进 Pillow 轮的 **zlib 实现**决定（本机 zlib-ng vs 记录基线的 stock zlib，同一
-    `PIL.__version__` 下字节仍不同 ⇒ 文件字节金标跨平台不可复现）。文件字节这一格改由
-    「同平台两次导出一致性」+「PNG 结构（IHDR/IDAT/IEND）」承担；两者都与压缩后端无关。
-    此边界如实登记；像素一变（产品被动过）仍必红。
+  · F 组金标是**两层**（2026-10-15 定案）：**像素层恒验** + **文件字节层按
+    `(PIL.__version__, Image.core.zlib_version)` 双档**。
+    —— PNG 文件字节由打包进 Pillow 轮的 **zlib 实现**决定（本机 zlib-ng vs 记录基线的
+    stock zlib，同一 `PIL.__version__` 下字节仍不同），故**单键（只看 PIL 版本）分档不够**；
+    双档之下，同一组合内**逐字节必须相等**（字节级判别力在场），未登记组合**显式 SKIP 并
+    打印当前组合**（不静默通过、不误红）。另加「PNG 结构」（IHDR/IDAT/IEND）与
+    「同平台两次导出一致性」两格兜底。
+    此边界如实登记；**像素一变必红，像素不变而字节变也必红（命中档时）**。
   · 不验超大尺寸（> `_PALETTE_BUDGET` 触发逐帧调色板回退）的**视觉**质量，只验回退路径
     仍确定、仍可读回（C 组）；
   · 不验并发写同一路径、不验 Windows 路径语义。
@@ -146,13 +149,33 @@ REPO_DATA = os.path.join(REPO, "lingshu", "data")
 #   压成 3408 B ⇒ 文件 sha 不同（本机 c5d21eb5…/3403 vs 金标 9fd99af8…/3465）。
 #   反证：把本机产物的 IDAT 抽出、用 stock zlib（level 6, Z_FILTERED）重压、其余 chunk
 #   原样拼回 ⇒ **逐字节 == 记录的文件 sha**（walk `9fd99af8…`、demo `59ba2304…`）。
-#   ⇒ 文件字节金标跨平台/跨轮次不可复现（版本串相同也不行），故冻结到**像素**这一层，
-#   另加「PNG 结构」（IHDR/IDAT/IEND，与压缩后端无关）与「同平台两次导出一致性」。
+#   ⇒ 文件字节金标**不能只按 PIL 版本分档**（版本串相同而 zlib 后端不同 ⇒ 字节仍变）。
+#   本端一度据此把整层降为像素级；**现已改为双键分档恢复字节层**（见下方 `_GOLDEN_PNG`），
+#   像素层保留为跨后端不变量恒验，另加「PNG 结构」与「同平台两次导出一致性」兜底。
 _GOLDEN_PIXELS = {
     "skeleton_walk.png": (
         "247c38432b4449ad03857c73f6ccb7fa5850ffee7704198f9d928165db174355", 1036800, (1440, 240)),
     "skeleton_demo.png": (
         "365e6a3166984e6351d5871a9cd9b15a20383461c700e8cbfa9f199aa69dda74", 1440000, (1200, 400)),
+}
+
+# 文件字节级金标（**作者原设计的那一层，2026-10-15 恢复**）：分档键从 `PIL.__version__`
+# 换成 **`(PIL.__version__, Image.core.zlib_version)`** —— PNG 文件字节由打包进 Pillow 轮的
+# zlib 实现决定，同一 `PIL.__version__` 下 zlib-ng 与 stock zlib 压出的 IDAT 长度不同。
+# ⇒ 同一组合内**逐字节必须相等**（保住字节级判别力）；未登记组合**显式 SKIP 并打印当前组合**
+#   （不静默通过、也不误红）。像素层（上方 `_GOLDEN_PIXELS`）在任何组合下都恒验。
+_ZLIB_VERSION = getattr(Image.core, "zlib_version", "unknown")
+_GOLDEN_PNG = {
+    # 记录机（Lead 出值的环境）：stock zlib
+    ("12.3.0", "1.3.1"): {
+        "skeleton_walk.png": ("9fd99af8acf41522b7687b812712f55e573bb7df2ee95309558f0a9b4c38ad00", 3465),
+        "skeleton_demo.png": ("59ba23047da29e96d82ace9221ca5e99764992e6aab45bcc8836126eefa2ecbe", 4068),
+    },
+    # 本机（Windows / zlib-ng 构建的 Pillow 轮）：2026-10-15 实测
+    ("12.3.0", "1.3.1.zlib-ng"): {
+        "skeleton_walk.png": ("c5d21eb5ad9df7237b3b20c7a0a3033f436e58deeba199a55e32d43155db3d45", 3403),
+        "skeleton_demo.png": ("b786d387c77e3eac088e2329434cc0eb3c4cfb7014dc2bea2ace2385ba2fcc09", 3988),
+    },
 }
 
 
@@ -690,6 +713,20 @@ def test_f1_demo_strip_bytes_frozen_and_gif_appended(tmp_path):
         assert (w, h) == size and bd == 8 and ct == 2, f"{name} 的 PNG IHDR 不符：{(w, h, bd, ct)}"
         types = [t for t, _ in _png_chunks(path)]
         assert types[0] == b"IHDR" and types[-1] == b"IEND" and b"IDAT" in types, types
+
+    # ---- 文件字节级金标：按 (Pillow 版本, zlib 实现) 双档，命中即**逐字节必须相等**
+    combo = (PIL_VERSION, _ZLIB_VERSION)
+    tier = _GOLDEN_PNG.get(combo)
+    if tier is None:
+        print(f"[F1] 字节层 SKIP：未登记组合 {combo}（像素层与 PNG 结构仍已验）")
+    else:
+        for name, path in (("skeleton_walk.png", strip_png), ("skeleton_demo.png", demo_png)):
+            sha, nbytes = tier[name]
+            got = _sha256(path); size = path.stat().st_size
+            print(f"[F1] {name} 字节档 {combo}: file_sha256={got[:16]}…/{size} "
+                  f"金标={sha[:16]}…/{nbytes}")
+            assert size == nbytes, f"{name} 文件字节数变了：{size} != {nbytes}"
+            assert got == sha, f"{name} 文件字节与金标不同（像素未变而字节变 ⇒ 编码/元数据被动过）"
 
     # ---- 追加的真 GIF
     assert open(gif, "rb").read(6) in (b"GIF87a", b"GIF89a"), "skeleton_walk.gif 不是合法 GIF"
