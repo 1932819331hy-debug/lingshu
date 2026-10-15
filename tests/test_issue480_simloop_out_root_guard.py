@@ -110,7 +110,11 @@ def test_g2_未设显式根则fail_closed(monkeypatch):
 
 
 def test_g3_显式根位于真源之内被拒(monkeypatch):
-    """G3：显式根**位于** MDCG_ROOT 之内 ⇒ 拒（仍是写真源）。"""
+    """G3：显式根**位于** MDCG_ROOT 之内 ⇒ 拒（仍是写真源）。
+
+    附带子腿：显式根＝真源**父目录**（根在真源之外）时，目标路径仍落回真源 ⇒
+    也必须拒（否则「根不在真源内」这条判据可被父目录根绕过）。
+    """
     td = tempfile.mkdtemp()
     lib = os.path.join(td, "mdcg_lib")
     os.makedirs(lib, exist_ok=True)
@@ -123,6 +127,14 @@ def test_g3_显式根位于真源之内被拒(monkeypatch):
     r = eng.wm_simloop("flush", {"out_path": out})
     assert r["status"] == "error", "G3 真源内输出根未被拒：%r" % (r,)
     assert not os.path.exists(out), "G3 被拒后仍落盘"
+
+    # 子腿：显式根 = 真源父目录 ⇒ 目标落回真源内，须拒。
+    # 目标用**尚不存在**的新档，避免 O_EXCL 腿（G4）把本腿的判别力掩盖掉。
+    node = os.path.join(lib, "structural", "inject_target.md")
+    monkeypatch.setenv(ENV, td)
+    r2 = eng.wm_simloop("flush", {"out_path": node})
+    assert r2["status"] == "error", "G3b 父目录根绕回真源未被拒：%r" % (r2,)
+    assert not os.path.exists(node), "G3b 被拒后仍落盘真源"
 
 
 def test_g4_目标已存在被拒(monkeypatch):

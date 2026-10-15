@@ -7112,7 +7112,9 @@ class SpacetimeMemoryEngine:
 
         #480：①未显式配置根 ⇒ fail-closed（不再回落 `MDCG_ROOT`）；
         ②配置的根若**等于或位于** `MDCG_ROOT` 之内 ⇒ fail-closed（否则等于
-        把输出根指回认知图真源，绕过 #324 的「不写真源」承诺）。"""
+        把输出根指回认知图真源，绕过 #324 的「不写真源」承诺）；
+        ③**目标路径本身**位于 `MDCG_ROOT` 之内 ⇒ fail-closed（堵住「显式根＝
+        真源父目录」这条绕过腿：根在真源之外，但目标仍落回真源）。"""
         roots = cls._simloop_out_roots()
         if not roots:
             raise ValueError(
@@ -7127,6 +7129,10 @@ class SpacetimeMemoryEngine:
                     "#480 flush 拒绝：输出根位于认知图真源 MDCG_ROOT 之内"
                     "（%s 在 %s 之下）⇒ fail-closed，不写真源" % (r, md))
         target = os.path.normcase(os.path.realpath(out_path))
+        if md_norm and (target == md_norm or target.startswith(md_norm + os.sep)):
+            raise ValueError(
+                "#480 flush 拒绝：目标路径位于认知图真源 MDCG_ROOT 之内"
+                "（%s 在 %s 之下）⇒ fail-closed，不写真源" % (out_path, md))
         for r in roots:
             root = os.path.normcase(os.path.realpath(r))
             if target == root or target.startswith(root + os.sep):
