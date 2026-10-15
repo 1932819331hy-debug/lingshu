@@ -264,7 +264,9 @@ def test_9_matching_entries_report_match_and_exit_0(tmp_path):
         "note64.txt": ("MATCH", None),
     }
     assert payload["exit_code"] == 0
-    # bytes 记录与实盘一致时差值为 0（信息字段，不为 0 也不判失败，但正例应为 0）
+    # bytes 记录与实盘一致时差值为 0。#610 起 bytes 参与判定（非零差值 ⇒
+    # BYTES_MISMATCH、退出 1，守卫见 tests/test_issue610_verify_manifest_bytes_guard.py）；
+    # 本正例登记的是精确值，差值必须为 0。
     for detail in payload["manifests"][0]["details"]:
         assert detail["bytes_delta"] == 0, detail
 

@@ -45,11 +45,28 @@
     MATCH/MISMATCH  实算 sha256（**LF 归一后**，见上「登记基准」）与记录值做
                **同长度前缀**比较（记录 16 位 → 比实算前 16 位；记录 64 位 → 全比）；
                `MATCH` 有正例测试（tests/test_manifest_integrity.py::test_9）。
-    `bytes` 存在时记录**LF 归一后**的字节数与差值，仅作信息，不影响判定。
+    BYTES_MISMATCH  #610：sha 全对之后还要过 bytes 这一关——`bytes` 字段**在场**
+               （条目登记了 `bytes`）且与实算（LF 归一后）字节数差值非零 ⇒ 该条
+               status 判 `BYTES_MISMATCH`（reason 形如 `bytes-delta+100` /
+               `bytes-delta-100`），计入 `bytes_mismatch` 计数并使退出码为 1
+               （默认与 `--strict` 都非 0）。修复前 bytes 差值只被算出来并渲染进
+               输出、对 status 与退出码**零参与**：`bytes=0`（谎报空文件）或
+               `bytes=10**12`（荒谬值）在 sha 正确时仍无声 `MATCH`、退出 0。
+               `bytes` **缺席**（条目没登记 `bytes`）或差值为 0 时保持原判定
+               （v0.1 形态 55 条全部没登记 `bytes`，行为与修复前完全一致）。
+               `bytes_mismatch` 计数本身是**跨状态**的（同 origins 的上报哲学）：
+               sha 不符 / 形状损坏的条目若也谎报 bytes 同样计入——只是 status
+               仍按下面的优先级取更靠前的问题，`BYTES_MISMATCH` 状态专门点名
+               「sha 全对、修复前会无声 MATCH」的那个子集。
 
-    判定优先级（四类计数是条目集的一个划分）：
+    判定优先级（五类 status 计数是条目集的一个划分；bytes_mismatch 是跨状态
+    计数，见上）：
     绝对路径 → MALFORMED ＞ 越界路径 → MALFORMED ＞ 文件不在盘 → MISSING ＞
-    指纹形状 → MALFORMED ＞ MATCH / MISMATCH。
+    指纹形状 → MALFORMED ＞ sha 前缀比较 → MISMATCH ＞ bytes 差值 →
+    BYTES_MISMATCH ＞ MATCH。
+    即：sha 判定本身与优先级**不变**（sha 不符仍判 MISMATCH，#610 只在 sha 判定
+    之后追加 bytes 这一关）；sha 不符但 bytes 也谎报的条目 status 仍是 MISMATCH
+    （bytes 谎报由 bytes_mismatch 计数出声）。
 
 来源字段（附加上报 · 不改判定）
     条目可带 `src`（导出源，如 `aeis.xxx`）或 `origin`（本仓原生开发标记）。
@@ -75,6 +92,12 @@
        `unparseable` 一列）；**目录里零清单、或清单在盘却零条目，也是 1**——这是刻意
        语义，不是空真：「没发现任何清单 / 一条也没登记出来」必须与「清单全部通过」
        在退出码上可区分（否则扫描面被清空时会静默变绿）。
+       **#610：存在 `bytes_mismatch`（登记了 `bytes` 且与实算差值非零）也是 1**
+       （默认与 `--strict` 都非 0）。与 sha MISMATCH 的口径差异是有意的：sha 分歧
+       可能是「指纹指向哪一侧」的编辑分歧（既有事实，只拦 `--strict`），而 `bytes`
+       是对同一份已 sha 校验文件的字节数断言——登记了却对不上即是谎报数据，不是
+       编辑分歧；且本仓当前登记 bytes 差值全为 0（v0.2 的 9 条全零、v0.1 未登记），
+       该判据不会误伤现有 gate。
     2  用法 / 路径错误：未知参数、多余位置参数、`--repo-root` 不存在或不是目录
        （与同批 `tools/time_core_lint.py` 的 `2` **完全一致**）。
        `_Parser.error` 覆写为退出 2，避免 argparse 默认码与本表冲突。
@@ -82,7 +105,8 @@
        分开，调用方无需解析 stdout 就能区分两者。`2` 与 `3` 语义互不重叠。
 
 输出
-    - 文本模式：每个清单一段（条目数、四类计数、sha256 长度分布、bytes 差值样例）
+    - 文本模式：每个清单一段（条目数、各状态计数（match / mismatch /
+      bytes_mismatch / missing / malformed）、sha256 长度分布、bytes 差值样例）
       + 末行总表。
     - `--json`：`{"manifests":[…], "summary":{…}, "exit_code":n}`，`sort_keys=True`，
       **LF 换行**（`reconfigure(newline="\\n")`，Windows 上不产生 CRLF，跨平台字节一致）。
@@ -138,6 +162,8 @@ STATUS_MATCH = "MATCH"
 STATUS_MISMATCH = "MISMATCH"
 STATUS_MISSING = "MISSING"
 STATUS_MALFORMED = "MALFORMED"
+# #610：sha 全对但登记 bytes 与实算差值非零——谎报字节数不再无声 MATCH。
+STATUS_BYTES_MISMATCH = "BYTES_MISMATCH"
 
 
 class _Parser(argparse.ArgumentParser):
@@ -168,6 +194,7 @@ def empty_origins() -> dict:
 
 def empty_summary() -> dict:
     return {"manifests": 0, "entries": 0, "match": 0, "mismatch": 0,
+            "bytes_mismatch": 0,
             "missing": 0, "malformed": 0, "unparseable": 0,
             "origins": empty_origins()}
 
@@ -380,10 +407,17 @@ def classify(root: Path, root_resolved: Path, raw_path: str, recorded_sha,
         return detail
 
     detail["actual_sha256"] = actual
-    if actual[: len(recorded_sha)] == recorded_sha:
-        detail["status"] = STATUS_MATCH
-    else:
+    if actual[: len(recorded_sha)] != recorded_sha:
         detail["status"] = STATUS_MISMATCH
+        return detail
+    # #610：sha 全对还要过 bytes 这一关。bytes_delta 仅在条目登记了 `bytes` 时
+    # 才被计算（见上方），缺席 = None（falsy）、一致 = 0（falsy）——只有
+    # 「在场且非零」才落到这里：谎报字节数不再是无声 MATCH。
+    if detail["bytes_delta"]:
+        detail["status"] = STATUS_BYTES_MISMATCH
+        detail["reason"] = "bytes-delta%+d" % detail["bytes_delta"]
+        return detail
+    detail["status"] = STATUS_MATCH
     return detail
 
 
@@ -395,6 +429,7 @@ def inspect_manifest(root: Path, manifest_path: Path) -> dict:
         "entries": 0,
         "match": 0,
         "mismatch": 0,
+        "bytes_mismatch": 0,
         "missing": 0,
         "malformed": 0,
         "sha256_lengths": [],
@@ -424,6 +459,14 @@ def inspect_manifest(root: Path, manifest_path: Path) -> dict:
     block["entries"] = len(details)
     block["match"] = sum(1 for item in details if item["status"] == STATUS_MATCH)
     block["mismatch"] = sum(1 for item in details if item["status"] == STATUS_MISMATCH)
+    # #610：bytes_mismatch 是**跨状态**计数（同 origins 的附加上报哲学）——
+    # 凡「登记了 bytes 且实算差值非零」都算谎报条数，无论该条 status 是什么
+    # （sha 不符 / 形状损坏的条目同样在谎报字节数；BYTES_MISMATCH 状态只负责
+    # 点名其中「sha 全对、原本会无声 MATCH」的子集）。文件没读到（MISSING/
+    # 路径不可信）时 delta 为 None，不可判，不计入。
+    block["bytes_mismatch"] = sum(1 for item in details
+                                  if item["recorded_bytes"] is not None
+                                  and item["bytes_delta"] not in (None, 0))
     block["missing"] = sum(1 for item in details if item["status"] == STATUS_MISSING)
     block["malformed"] = sum(1 for item in details if item["status"] == STATUS_MALFORMED)
     block["sha256_lengths"] = sorted(lengths)
@@ -447,7 +490,8 @@ def collect(root: Path):
     blocks = [inspect_manifest(root, path) for path in manifest_paths]
     summary = empty_summary()
     summary["manifests"] = len(blocks)
-    for key in ("entries", "match", "mismatch", "missing", "malformed"):
+    for key in ("entries", "match", "mismatch", "bytes_mismatch",
+                "missing", "malformed"):
         summary[key] = sum(b[key] for b in blocks)
     summary["unparseable"] = sum(1 for b in blocks if "error" in b)
     summary["origins"] = {name: sum(b["origins"][name] for b in blocks)
@@ -456,7 +500,7 @@ def collect(root: Path):
 
 
 def decide_exit(summary: dict, strict: bool) -> int:
-    """四码退出判定：0 成功 / 1 结构损坏（含零清单、零条目，刻意语义）/ 3 strict 口径分歧。
+    """四码退出判定：0 成功 / 1 结构损坏或 bytes 谎报（#610，含零清单、零条目）/ 3 strict 口径分歧。
 
     用法与路径错误（2）不经过本函数，由 `_Parser.error` 与 `main` 的 repo-root 校验直接返回。
     """
@@ -465,6 +509,11 @@ def decide_exit(summary: dict, strict: bool) -> int:
     if summary["manifests"] == 0 or summary["entries"] == 0:
         return EXIT_DEFECT
     if summary["unparseable"] or summary["missing"] or summary["malformed"]:
+        return EXIT_DEFECT
+    # #610：登记了 `bytes` 且与实算差值非零 = 谎报数据（非编辑分歧），默认模式
+    # 即失败（退出 1，不学 sha MISMATCH 只拦 strict——依据见模块头「退出码」1）。
+    # 刻意排在 strict 检查之前：同时存在 bytes 谎报与 sha 分歧时，报更严重的 1。
+    if summary["bytes_mismatch"]:
         return EXIT_DEFECT
     if strict and summary["mismatch"]:
         return EXIT_STRICT_MISMATCH
@@ -496,7 +545,11 @@ def _bytes_lines(block: dict) -> list:
     zeros = sum(1 for d in deltas if d == 0)
     lines.append("  bytes: records_with_bytes=%d/%d  delta(+%d/-%d/zero%d)"
                  % (len(with_bytes), block["entries"], positives, negatives, zeros))
-    for item in with_bytes[:BYTES_SAMPLE_LIMIT]:
+    # #610：样例优先展示非零差值（BYTES_MISMATCH 的病灶行），零差值仅作填充。
+    # 全零或全缺席时样例集合与旧版一致（排序稳定，确定性不受影响）。
+    sample = sorted(with_bytes, key=lambda item: (item["bytes_delta"] == 0,
+                                                  item["path"]))
+    for item in sample[:BYTES_SAMPLE_LIMIT]:
         lines.append("    %s: recorded=%s actual=%s delta=%s"
                      % (item["path"], item["recorded_bytes"],
                         item["actual_bytes"], item["bytes_delta"]))
@@ -511,18 +564,22 @@ def render_text(blocks, summary, exit_code, quiet) -> str:
             if "error" in block:
                 lines.append("  ! %s" % block["error"])
                 continue
-            lines.append("  entries=%d match=%d mismatch=%d missing=%d malformed=%d"
+            lines.append("  entries=%d match=%d mismatch=%d bytes_mismatch=%d "
+                         "missing=%d malformed=%d"
                          % (block["entries"], block["match"], block["mismatch"],
+                            block["bytes_mismatch"],
                             block["missing"], block["malformed"]))
             lines.append("  sha256 lengths: %s" % _length_distribution(block))
             lines.append(_origin_line(block["origins"]))
             lines.extend(_bytes_lines(block))
     lines.append("ORIGINS " + " ".join("%s=%d" % (name, summary["origins"][name])
                                          for name in ORIGIN_CLASSES))
-    lines.append("SUMMARY manifests=%d entries=%d match=%d mismatch=%d missing=%d "
-                 "malformed=%d unparseable=%d exit_code=%d"
+    lines.append("SUMMARY manifests=%d entries=%d match=%d mismatch=%d "
+                 "bytes_mismatch=%d missing=%d malformed=%d unparseable=%d "
+                 "exit_code=%d"
                  % (summary["manifests"], summary["entries"], summary["match"],
-                    summary["mismatch"], summary["missing"], summary["malformed"],
+                    summary["mismatch"], summary["bytes_mismatch"],
+                    summary["missing"], summary["malformed"],
                     summary["unparseable"], exit_code))
     return "\n".join(lines)
 
