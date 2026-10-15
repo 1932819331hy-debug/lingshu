@@ -648,7 +648,13 @@ class SimulationLoop:
                 if not fn.endswith(".md") or not os.path.isfile(path):
                     continue
                 try:
-                    text = open(path, encoding="utf-8").read()
+                    # #600（#412/#437 BOM 族的漏网读取点）：contextual/*.md 与
+                    # coggraph 读的是同一语料——带 BOM 的笔记在 encoding="utf-8"
+                    # 下首字符是 ﻿，startswith("---") 判否 ⇒ 整篇静默跳过
+                    # （先验不载入、无任何信号）。utf-8-sig 对无 BOM 文件逐字节
+                    # 等价、仅在 BOM 在场时剥掉它；#437 已按此口径修过 coggraph
+                    # 四处读取点，本处为库内漏网的第五处。
+                    text = open(path, encoding="utf-8-sig").read()
                 except OSError:
                     continue
                 fm = text.split("---")[1] if text.startswith("---") else ""
