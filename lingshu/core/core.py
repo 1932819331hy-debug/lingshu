@@ -7077,38 +7077,55 @@ class SpacetimeMemoryEngine:
     #: 缺陷：本门面的 `params` 由调用方（模型驱动面）给，`flush` 直接把它当
     #: 文件路径交给 `SimulationLoop.flush_payloads` ⇒ `open(out_path, "w")`
     #: **任意路径可写 + 覆盖式**（无白名单、无原子性）。
-    #: 修法：显式配置面优先（`LINGSHU_SIMLOOP_OUT_ROOT`，`os.pathsep` 多根），
-    #: 未配置则回落**认知图库根** `MDCG_ROOT`（本门面 `load` 分支的同一真源），
-    #: 两者皆无 ⇒ **fail-closed**（不写、返回 error）——与 #85 三级回落链同形
-    #: （显式配置 → 实际配置库 → 无则拒绝），不引入「未配置即放开」。
+    #: 修法：显式配置面（`LINGSHU_SIMLOOP_OUT_ROOT`，`os.pathsep` 多根），
+    #: 未配置 ⇒ **fail-closed**（不写、返回 error）——不引入「未配置即放开」。
+    #: （#480 起**不再回落** `MDCG_ROOT`，见下。）
     #: 判据来源：经验标定（本件 #324，仓内无「simloop 输出根」的理论章节）——
-    #: 口径取「显式面 → 认知图库根 → fail-closed」；追不到更早出处。
+    #: 口径取「显式面 → fail-closed」；追不到更早出处。
+    #:
+    #: issue #480（安全 P0）：**默认根不再回落 `MDCG_ROOT`**。缺陷——未设
+    #: `LINGSHU_SIMLOOP_OUT_ROOT` 时旧实现回落到认知图真源 `MDCG_ROOT`，于是
+    #: #324 修复后唯一允许写入的位置恰好是**认知图真源**；SUB 角色经
+    #: `wm_simloop("flush")` 可覆盖结构层受保护 `.md` 节点并注入任意正文
+    #: （实体 category 带 `\n` 即可向节点正文注入行），且返回 `status: ok`——
+    #: 与 `flush_payloads` 自己的注释「v1 不旁路写真源」直接矛盾。
+    #: 修法：输出根**必须显式配置**；且该根**不得等于或位于** `MDCG_ROOT` 之内
+    #: （否则仍是写真源）⇒ 否则 fail-closed。另加三道闸：目标限 `.md`、写文件类
+    #: 动作限 `Role.PRIMARY`、目标文件 `O_EXCL`（拒覆盖已存在文件）。
     SIMLOOP_OUT_ROOT_ENV = "LINGSHU_SIMLOOP_OUT_ROOT"
 
     @classmethod
     def _simloop_out_roots(cls) -> List[str]:
-        """`flush` 输出白名单根（显式配置面优先，回落认知图库根）。"""
+        """`flush` 输出白名单根（**仅显式配置面**；#480 起不再回落 MDCG_ROOT）。"""
         raw = os.environ.get(cls.SIMLOOP_OUT_ROOT_ENV, "")
-        roots = [p for p in str(raw).split(os.pathsep) if p.strip()] if raw else []
-        if not roots:
-            md = str(os.environ.get("MDCG_ROOT", "") or "").strip()
-            roots = [md] if md else []
-        return roots
+        return [p for p in str(raw).split(os.pathsep) if p.strip()] if raw else []
 
     @classmethod
     def _confine_simloop_out_path(cls, out_path: str) -> str:
-        """把 `flush` 的 `out_path` 收进白名单根；越界/未配置 ⇒ `ValueError`。
+        """把 `flush` 的 `out_path` 收进白名单根；越界/未配置/根在真源内 ⇒ `ValueError`。
 
         归一用 `realpath + normcase`（与 `lingshu/_pathguard._norm` 同口径）——
         软链/junction 别名不得绕过根判定。边界（如实标注）：判据是「归一后的
         目标路径落在某个根之下」，**不**拦「根之内的软链指向根外」这种
         （`realpath` 已解析目标侧，故实际已覆盖）；也不拦根目录自身被当文件写
-        （那是写失败，不是越界）。"""
+        （那是写失败，不是越界）。
+
+        #480：①未显式配置根 ⇒ fail-closed（不再回落 `MDCG_ROOT`）；
+        ②配置的根若**等于或位于** `MDCG_ROOT` 之内 ⇒ fail-closed（否则等于
+        把输出根指回认知图真源，绕过 #324 的「不写真源」承诺）。"""
         roots = cls._simloop_out_roots()
         if not roots:
             raise ValueError(
-                "#324 flush 拒绝：未配置输出根（LINGSHU_SIMLOOP_OUT_ROOT 或 "
-                "MDCG_ROOT 皆缺）⇒ fail-closed，不做任意路径写入")
+                "#324 flush 拒绝：未配置输出根（LINGSHU_SIMLOOP_OUT_ROOT 缺）"
+                "⇒ fail-closed，不做任意路径写入（#480：不再回落 MDCG_ROOT）")
+        md = str(os.environ.get("MDCG_ROOT", "") or "").strip()
+        md_norm = os.path.normcase(os.path.realpath(md)) if md else ""
+        for r in roots:
+            root = os.path.normcase(os.path.realpath(r))
+            if md_norm and (root == md_norm or root.startswith(md_norm + os.sep)):
+                raise ValueError(
+                    "#480 flush 拒绝：输出根位于认知图真源 MDCG_ROOT 之内"
+                    "（%s 在 %s 之下）⇒ fail-closed，不写真源" % (r, md))
         target = os.path.normcase(os.path.realpath(out_path))
         for r in roots:
             root = os.path.normcase(os.path.realpath(r))
@@ -7200,12 +7217,28 @@ class SpacetimeMemoryEngine:
         if action == "flush":
             out = p.get("out_path")
             if out:
-                # #324：模型驱动面给的路径先过白名单根闸（先判后写，越界即拒）
+                # #480：写文件类动作限 PRIMARY——SUB 无文件写权限（防经门面写文件）
+                if self.role != Role.PRIMARY:
+                    return {"status": "error", "error": (
+                        "#480 flush 拒绝：role=%s 无权写文件（写文件类动作限 PRIMARY）"
+                        % self.role.value)}
+                # #480：只允许 .md 扩展名（认知图节点载荷形态）
+                if os.path.splitext(str(out))[1].lower() != ".md":
+                    return {"status": "error", "error": (
+                        "#480 flush 拒绝：只允许 .md 扩展名（out_path=%s）" % out)}
+                # #324：模型驱动面给的路径先过白名单根闸（先判后写，越界即拒）；
+                # #480：根须显式配置且不得位于 MDCG_ROOT 之内
                 try:
                     out = self._confine_simloop_out_path(str(out))
                 except ValueError as e:
                     return {"status": "error", "error": str(e)}
-            r = sl.flush_payloads(out_path=out, brain=p.get("brain"))
+            try:
+                # #480：门面写文件用 O_EXCL 语义——目标已存在即拒（不覆盖真源节点）
+                r = sl.flush_payloads(out_path=out, brain=p.get("brain"),
+                                      overwrite=not bool(out))
+            except FileExistsError:
+                return {"status": "error", "error": (
+                    "#480 flush 拒绝：目标文件已存在，O_EXCL 拒覆盖（out_path=%s）" % out)}
             return {"status": "ok",
                     "flush": {k: r[k] for k in ("payload", "written", "note")}}
         if action == "wal":
