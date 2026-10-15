@@ -329,7 +329,7 @@
     {
      "file": "core.py",
      "src": "aeis.core",
-     "sha256": "7610414c5e00bbbd",
+     "sha256": "6985fd5ce8f3be3e",
      "rewrites": 34,
      "sanitized": 2,
      "patches": 2,
@@ -704,7 +704,7 @@
    "lingshu/world/wm_simloop.py": "aa84dde49ad8c837",
    "lingshu/world/world3d.py": "7b7527deb009dd70",
    "lingshu/world/world_model.py": "97a0f817684fa51e",
-   "lingshu/core/core.py": "7610414c5e00bbbd"
+   "lingshu/core/core.py": "6985fd5ce8f3be3e"
   }
  },
  "second_third_batch": {

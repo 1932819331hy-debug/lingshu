@@ -212,13 +212,23 @@ def _importer_is_lingshu() -> bool:
 
     判定：沿调用栈向上找第一个「有归属」的帧，看它属于 lingshu 包内还是宿主。
 
-      · 包内：模块名以 `lingshu` 开头，或模块文件位于本包根目录之下 ⇒ True
+      · 包内：模块名以 `lingshu` 开头，或**代码对象**来自本包根目录之下 ⇒ True
         （引擎自己的组件导入，须继续走 #156 的受控面收口）；
       · 宿主 / `__main__` / 其它库 ⇒ False（`return None` 交还后续 finder）。
 
     无法取得调用栈（非 CPython 实现等）时返回 True —— 保守维持 #156 的收口
     （宁可多收，不可放松安全面）。本函数**不改变**受控面本身的判定，只决定
     「找不到时是 raise 还是 return None」，故不放宽任何安全判据。
+
+    **判据取值面（#652④）**：第二判据取 `frame.f_code.co_filename`——它是**代码
+    对象**的编译期事实（这段代码编译自哪个文件），而**不是**模块全局
+    `__file__` / `__name__`（调用方随时可写）。旧实现取 `f_globals["__file__"]`，
+    于是「危险方向」可伪造：**包内文件执行的代码**把 `__file__` 改成包外路径、
+    `__name__` 改成宿主名 ⇒ 本函数返回 False ⇒ 交还 `PathFinder` ⇒ 该次裸名
+    导入逃出受控面（读 cwd/sys.path 上的同名模块）。实测读数见
+    `tests/test_issue652_importer_identity_guard.py`。取代码对象事实后，包内文件
+    无论怎样改模块全局都**不可能**再把自己判成宿主（正向伪造 lingshu 名仍为
+    True = fail-closed 方向，无害）。
     """
     try:
         frame = sys._getframe(1)
@@ -230,7 +240,7 @@ def _importer_is_lingshu() -> bool:
                 ("importlib", "lingshu.core.component_resolver")):
             if name == "lingshu" or name.startswith("lingshu."):
                 return True
-            f = frame.f_globals.get("__file__")
+            f = frame.f_code.co_filename
             if isinstance(f, str) and f:
                 try:
                     if os.path.abspath(f).startswith(_PKG_ROOT + os.sep):

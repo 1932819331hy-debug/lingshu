@@ -12,12 +12,12 @@
   —— 均为父进程真实凭据，原样透传。
 
 修法：**白名单放行**（fail-closed）替代黑名单剔除——只继承
-`_ENV_ALLOW_NAMES`（进程运行基座：PATH/PYTHON*/临时目录/区域… ＋ 两个**具名**部署
-配置项 `HIVE_JOBS_DIR`/`HIVE_EXE`）与 `_ENV_ALLOW_PREFIXES`（`PYTHON` / `LINGSHU_` /
-`LC_`）；继承 `MDCG_*` 仍剔除（防在役库被无意命中）。凭据若确需传入，必须经
-`extra_env` **显式**声明。选白名单而非「黑名单拦 `*_KEY/*_TOKEN/...`」的理由：黑名单
-对凭据面天然 fail-open——新出现的凭据名只要不撞模式就照旧泄露（本例 `IGCCSVC_DB`、
-`YOUR_STEP_API_KEY` 已证）；白名单是「不声明就不给」。
+`_ENV_ALLOW_NAMES`（进程运行基座：PATH/PYTHON 具名/临时目录/区域… ＋ 具名部署
+配置项 `HIVE_JOBS_DIR`/`HIVE_EXE`/`LINGSHU_KB`/`LINGSHU_DB`）与
+`_ENV_ALLOW_PREFIXES`（**仅** `LC_`）；继承 `MDCG_*` 仍剔除（防在役库被无意命中）。
+凭据若确需传入，必须经 `extra_env` **显式**声明。选白名单而非「黑名单拦
+`*_KEY/*_TOKEN/...`」的理由：黑名单对凭据面天然 fail-open——新出现的凭据名只要不撞
+模式就照旧泄露（本例 `IGCCSVC_DB`、`YOUR_STEP_API_KEY` 已证）；白名单是「不声明就不给」。
 
 #227 **续**（本轮扩展）：原修法把 `HIVE_` 整条列入 `_ENV_ALLOW_PREFIXES`，前缀过宽
 ⇒ `HIVE_API_KEY` / `HIVE_ORCH_TOKEN` / `HIVE_ORCH_TOKEN_FILE` /
@@ -25,13 +25,21 @@
 **4 failed / 3 passed**（W2/W3/W6/W7 红并逐名点名）。收敛：移除 `HIVE_` 前缀，
 只**具名**放行脑侧真读的两个非凭据名 `HIVE_JOBS_DIR`/`HIVE_EXE`。判定证据见 W8。
 
+#652 **续**（本轮再扩展，同一手法）：`PYTHON` / `LINGSHU_` 两条前缀亦过宽——
+`PYTHONSTARTUP` / `PYTHONHOME` 等解释器**启动期劫持**名被连带放行，`LINGSHU_` 连带
+放行**身侧**逃生口 `LINGSHU_ALLOW_CWD_IMPORTS`（`lingshu/_pathguard.py`，脑侧零读取
+点）。收敛为具名（见 `_ENV_ALLOW_NAMES`），`_ENV_ALLOW_PREFIXES` 仅余 `LC_`。
+同件 ①：`BRAIN_PYTHON` / `BRAIN_PYTHONPATH` / `BRAIN_ROOT` 是**父进程配置面**
+（`MCPClient.__init__` 在 `_brain_env` **之前**读），白名单管不到 ⇒ env 兜底值加
+fail-closed 校验。判定证据见 W9。
+
 断言组：
   W1 判据单测：`_env_is_allowed` 的形状表（凭据名一律 False，运行基座 True）。
   W2 `_brain_env` 直读：注入的凭据哨兵一个都不出现。
   W3 **真实父环境动态扫描**：父环境里任何「凭据形状」的名字都不得出现在子进程 env。
   W4 **反向断言**（防修死）：必需项仍在——PATH / PYTHONPATH（给定值）/
      PYTHONUTF8 / PYTHONIOENCODING / MDCG_ROOT（给定值）/ MDCG_STG_STATE="1"，
-     且具名 `HIVE_JOBS_DIR`/`HIVE_EXE` 与 `LC_*` / `PYTHON*` 前缀面仍透传。
+     且具名 `HIVE_JOBS_DIR`/`HIVE_EXE`/`LINGSHU_KB`/`LINGSHU_DB` 与 `LC_*` 前缀面仍透传。
   W5 `extra_env` **显式**注入口仍有效（含 MDCG_* 注入与 None 删除）。
   W6 **端到端**：`MCPClient` 真起子进程，子进程把自己 `os.environ` 报回，
      断言里面无凭据（证明封的是「真被 spawn 的子进程」而不只是 `_brain_env` 的返回值）。
@@ -39,6 +47,12 @@
      点名（否则本守卫对缺陷无感）。
   W8 **#227 续·HIVE_ 前缀收敛**（另立一条并写明理由）：四个凭据形状的 `HIVE_*`
      名不进子进程 env；脑侧真读的具名 `HIVE_JOBS_DIR`/`HIVE_EXE` 仍透传。
+  W9 **#652③·`PYTHON`/`LINGSHU_` 前缀收敛 ＋ #652①·父进程配置面**（同款另立）：
+     解释器启动劫持名（`PYTHONSTARTUP`/`PYTHONHOME`/…）与身侧逃生口
+     `LINGSHU_ALLOW_CWD_IMPORTS` 不再透传；脑侧真读的 `LINGSHU_KB`/`LINGSHU_DB`
+     与部署方继承的 CPython 配置名仍透传；`BRAIN_PYTHON`/`BRAIN_PYTHONPATH` 的
+     env 兜底值走 fail-closed 校验（相对路径/不存在 ⇒ `ValueError`），
+     显式参数不受此限（反向腿·防把功能修死）。
 
 运行（lingshu 仓根）：python -X utf8 tests/test_issue227_brain_env_credentials.py
                     / python -X utf8 -m pytest tests/test_issue227_brain_env_credentials.py
@@ -113,13 +127,20 @@ def test_w1_env_is_allowed_shape_table():
                  "HOME", "USERPROFILE", "LANG", "LC_CTYPE", "PYTHONPATH",
                  "PYTHONUTF8", "PYTHONIOENCODING",
                  "HIVE_JOBS_DIR", "HIVE_EXE",          # #227 续：具名放行（见 W8）
-                 "LINGSHU_COMPONENT_ROOT"):
+                 "LINGSHU_KB", "LINGSHU_DB"):          # #652③：具名放行（见 W9）
         assert _env_is_allowed(name) is True, name
     # #227 续：`HIVE_` 前缀已移除——凭据形状的 `HIVE_*` 与 hive 服务/执行器侧角色名
     # （`HIVE_ROLE`/`HIVE_NODE_ID` 由 hive/verify_runner.py 读，**不在**脑侧子进程面）
     # 一律 False；`HIVE_EXEC_PY` 等执行器配置名同理，确需者走 extra_env。
     for name in _HIVE_CRED_NAMES + ("HIVE_ROLE", "HIVE_NODE_ID", "HIVE_ANY",
                                     "HIVE_EXEC_PY", "HIVE_ORCH_PY"):
+        assert _env_is_allowed(name) is False, name
+    # #652③：`PYTHON` / `LINGSHU_` 宽前缀已移除（同 #227 续 手法，见 W9）——
+    # 解释器启动劫持名与身侧逃生口一律 False。
+    for name in ("PYTHONSTARTUP", "PYTHONHOME", "PYTHONINSPECT",
+                 "PYTHONEXECUTABLE", "PYTHONANY",
+                 "LINGSHU_ALLOW_CWD_IMPORTS", "LINGSHU_COMPONENT_ROOT",
+                 "LINGSHU_ANY"):
         assert _env_is_allowed(name) is False, name
     # 大小写无关（Windows 上 os.environ 键为大写；POSIX 上原样）
     assert _env_is_allowed("pythonpath") is True
@@ -168,16 +189,24 @@ def test_w4_required_items_survive():
     assert env["PYTHONIOENCODING"] == "utf-8"
     assert env.get("PATH"), "PATH 必须放行（子进程运行基座）"
     assert env["MDCG_LEGACY_ENV_AUTH"] == "1"          # extra_env 显式注入
-    # 前缀面：`PYTHON*` 仍透传；`HIVE_` 前缀已移除（#227 续）——改由具名项承担
-    assert _env_is_allowed("PYTHONANY") is True
+    # 前缀面：`LC_*` 仍透传；`HIVE_`（#227 续）与 `PYTHON`/`LINGSHU_`（#652③）
+    # 三条宽前缀均已移除——改由具名项承担（反向腿见 W8/W9）。
+    assert _env_is_allowed("LC_ALL") is True
     assert _env_is_allowed("HIVE_ANY") is False, "HIVE_ 前缀不得再放行"
+    assert _env_is_allowed("PYTHONANY") is False, "PYTHON 前缀不得再放行（#652③）"
+    assert _env_is_allowed("LINGSHU_ANY") is False, \
+        "LINGSHU_ 前缀不得再放行（#652③）"
     # 运行基座具名项确实在白名单里（逐项核对，防止误删）
     for name in ("PATH", "PATHEXT", "SYSTEMROOT", "TEMP", "HOME", "LANG"):
         assert name in _ENV_ALLOW_NAMES, name
     # #227 续：脑侧真读的两个非凭据 HIVE_* 具名在册（反向腿，防把功能修死）
     for name in _HIVE_CONFIG_NAMES:
         assert name in _ENV_ALLOW_NAMES, name
-    assert "PYTHON" in _ENV_ALLOW_PREFIXES and "HIVE_" not in _ENV_ALLOW_PREFIXES
+    # #652③：脑侧真读的两个 LINGSHU_* 与部署方继承的 CPython 配置面具名在册
+    for name in ("LINGSHU_KB", "LINGSHU_DB", "PYTHONPATH", "PYTHONUTF8",
+                 "PYTHONIOENCODING"):
+        assert name in _ENV_ALLOW_NAMES, name
+    assert _ENV_ALLOW_PREFIXES == ("LC_",), _ENV_ALLOW_PREFIXES
     assert not any(p.startswith("MDCG") for p in _ENV_ALLOW_PREFIXES), \
         "MDCG_ 不得进前缀白名单（继承的 MDCG_* 仍须剔除）"
 
@@ -315,6 +344,123 @@ def test_w8_hive_prefix_converged_named_only():
             "%s 应仍透传（脑侧 units 真读，别把功能修死）" % name
 
 
+#: #652③：`PYTHON` 宽前缀连带放行的**解释器启动劫持面**名（一律不得透传）。
+_PYTHON_LAUNCH_NAMES = ("PYTHONSTARTUP", "PYTHONHOME", "PYTHONINSPECT",
+                        "PYTHONEXECUTABLE")
+#: #652③：脑侧（`md_cg/whitebox_kb/**`）真读的两个 `LINGSHU_*`（须仍透传）。
+_LINGSHU_CONFIG_NAMES = ("LINGSHU_KB", "LINGSHU_DB")
+#: #652③：`LINGSHU_` 宽前缀连带放行的**身侧**逃生口（脑侧零读取点，不得透传）。
+_LINGSHU_BODY_ONLY_NAMES = ("LINGSHU_ALLOW_CWD_IMPORTS",
+                            "LINGSHU_COMPONENT_ROOT")
+
+
+def test_w9_python_lingshu_prefixes_converged_and_parent_env_validated():
+    """W9 · #652③ 前缀收敛 ＋ #652① 父进程配置面校验（另立一条并写明理由）。
+
+    为什么另立（同 W8 理由）：W1/W4 原有两处断言（`_env_is_allowed("PYTHONANY")
+    is True`、`"PYTHON" in _ENV_ALLOW_PREFIXES`）**编码的正是本轮要收敛的过宽
+    策略**，与修复目标相反；按「不改既有断言换绿灯」的口径，不改判据语义去凑绿，
+    而是新增本条并把理由写在这里（W1/W4 对应两行只做同步收紧＋就地标注）。
+
+    判定证据（两仓，均为「脑侧子进程真读什么」的直接读数）：
+      · `md_cg/` 内 `LINGSHU_*` 的读取点只有 `LINGSHU_KB`（`whitebox_kb/aeis_core/
+        core.py`）与 `LINGSHU_DB`（`whitebox_kb/wisdom/*.py`）；`LINGSHU_PYTHON` /
+        `LINGSHU_REPO` / `LINGSHU_DATA_ROOT` / `LINGSHU_COMPONENT_ROOT` 的读取点
+        **都在身体仓**（`scripts/bootstrap_watchdog.py` / `test/orchestrator_memory.py`
+        / `lingshu/_pathguard.py`），脑侧零命中 ⇒ 透传纯属扩大面。
+      · `LINGSHU_ALLOW_CWD_IMPORTS` 是 `lingshu/_pathguard.py` 的逃生口（`ALLOW_ENV`），
+        脑包 `md_cg/` 对它**零读取点** ⇒ 原被宽前缀放行给脑侧子进程无任何理由。
+      · 报告人自测 `PYTHONSTARTUP` 在 5 种启动形态下均不执行（需 tty）、`PYTHONHOME`
+        致启动失败——本守卫**不重复其行为对照**，只钉住「名字不得进子进程 env」
+        这一收敛目标（面收敛是目的，可利用性只是定级依据）。
+    ① 父进程配置面：`BRAIN_PYTHON` / `BRAIN_PYTHONPATH` 在 `MCPClient.__init__` 里、
+    **`_brain_env` 之前**被读，白名单管不到 ⇒ env 兜底值要求绝对路径＋存在性。
+    """
+    # 腿 1：三条宽前缀只剩 `LC_`
+    assert _ENV_ALLOW_PREFIXES == ("LC_",), _ENV_ALLOW_PREFIXES
+    for name in _PYTHON_LAUNCH_NAMES + _LINGSHU_BODY_ONLY_NAMES:
+        assert _env_is_allowed(name) is False, "%s 不该被放行（#652③）" % name
+    # 腿 2：注入假哨兵 ⇒ `_brain_env` 直读里一个都不出现
+    saved = {}
+    try:
+        for name in _PYTHON_LAUNCH_NAMES + _LINGSHU_BODY_ONLY_NAMES:
+            saved[name] = os.environ.get(name)
+            os.environ[name] = "/iso/sentinel-" + name.lower()
+        env = _brain_env("/iso/root", "/iso/brain-pkg")
+    finally:
+        for name, v in saved.items():
+            if v is None:
+                os.environ.pop(name, None)
+            else:
+                os.environ[name] = v
+    for name in _PYTHON_LAUNCH_NAMES + _LINGSHU_BODY_ONLY_NAMES:
+        assert name not in env, "%s 仍透传子进程 env（#652③）" % name
+    # 腿 3（反向腿·防修死）：脑侧真读的两个 LINGSHU_* 仍透传
+    saved_cfg = {}
+    try:
+        for name in _LINGSHU_CONFIG_NAMES:
+            saved_cfg[name] = os.environ.get(name)
+            os.environ[name] = "/iso/" + name.lower()
+        env2 = _brain_env("/iso/root", "/iso/brain-pkg")
+    finally:
+        for name, v in saved_cfg.items():
+            if v is None:
+                os.environ.pop(name, None)
+            else:
+                os.environ[name] = v
+    for name in _LINGSHU_CONFIG_NAMES:
+        assert env2.get(name) == "/iso/" + name.lower(), \
+            "%s 应仍透传（脑侧 whitebox_kb 真读，别把功能修死）" % name
+
+    # 腿 4（#652①）：env 兜底值 fail-closed 校验
+    from lingshu.world.brain_store import (  # noqa: PLC0415
+        _require_env_dir, _require_env_interpreter)
+    tmp = tempfile.mkdtemp(prefix="i652_parent_")
+
+    def _rejects(fn, *args):
+        try:
+            fn(*args)
+        except ValueError:
+            return True
+        return False
+
+    # 相对路径 ⇒ 拒（cwd 不受本模块控制）
+    assert _rejects(_require_env_interpreter, "python.exe"), \
+        "BRAIN_PYTHON 相对路径未被拒（#652①）"
+    assert _rejects(_require_env_dir, "brain_pkg", "BRAIN_PYTHONPATH"), \
+        "BRAIN_PYTHONPATH 相对路径未被拒（#652①）"
+    # 不存在 ⇒ 拒
+    missing = os.path.join(tmp, "nope")
+    assert _rejects(_require_env_interpreter, missing), \
+        "BRAIN_PYTHON 不存在路径未被拒（#652①）"
+    assert _rejects(_require_env_dir, missing, "BRAIN_PYTHONPATH"), \
+        "BRAIN_PYTHONPATH 不存在路径未被拒（#652①）"
+    # 合法值 ⇒ 放行（反向腿·防把功能修死）
+    assert _require_env_dir(tmp, "BRAIN_PYTHONPATH") == tmp
+    assert _require_env_interpreter(sys.executable) == sys.executable
+
+    # 腿 5（端到端接线·防「校验函数在、但 __init__ 没调它」）：
+    # MCPClient 在 env 兜底路径上必须真的走到校验——相对路径的 BRAIN_PYTHON
+    # 须在**起子进程之前**抛 ValueError（旧实现会一路走到 Popen）。
+    from lingshu.world.brain_store import MCPClient  # noqa: PLC0415
+    saved_bp = os.environ.get("BRAIN_PYTHON")
+    os.environ["BRAIN_PYTHON"] = "python.exe"           # 相对路径
+    try:
+        try:
+            MCPClient(pythonpath=tmp, request_timeout=3.0)
+            raised = None
+        except ValueError as e:
+            raised = e
+    finally:
+        if saved_bp is None:
+            os.environ.pop("BRAIN_PYTHON", None)
+        else:
+            os.environ["BRAIN_PYTHON"] = saved_bp
+    assert raised is not None, \
+        "MCPClient 未对 env 兜底的 BRAIN_PYTHON 做校验（#652①，接线断）"
+    assert "BRAIN_PYTHON" in str(raised), "错误文案未点名该变量：%r" % (raised,)
+
+
 _PASS: list = []
 _FAIL: list = []
 
@@ -329,6 +475,7 @@ def main() -> int:
         test_w6_spawned_child_env_carries_no_credentials,
         test_w7_predicate_has_teeth,
         test_w8_hive_prefix_converged_named_only,
+        test_w9_python_lingshu_prefixes_converged_and_parent_env_validated,
     ]
     for t in tests:
         try:

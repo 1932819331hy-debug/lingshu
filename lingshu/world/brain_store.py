@@ -37,11 +37,24 @@
   （#227 续）：脑侧子进程（`python -X utf8 -m md_cg.mcp_server`）只在
   `cg(op=ccg, action=units)` 工具面上经 `md_cg/units.py` 具名读 `HIVE_JOBS_DIR` /
   `HIVE_EXE`（二者已入 `_ENV_ALLOW_NAMES`），凭据形状的 `HIVE_API_KEY` /
-  `HIVE_ORCH_TOKEN(_FILE)` / `HIVE_SUBAGENT_API_KEY` 一律不透传。再注入下面的显式覆盖；
+  `HIVE_ORCH_TOKEN(_FILE)` / `HIVE_SUBAGENT_API_KEY` 一律不透传。**`PYTHON` /
+  `LINGSHU_` 前缀亦不再放行**（#652③）：`PYTHONSTARTUP` / `PYTHONHOME` 等解释器
+  启动劫持名、以及**身侧**逃生口 `LINGSHU_ALLOW_CWD_IMPORTS` 原被宽前缀连带放行；
+  已按同一手法改具名（见 `_ENV_ALLOW_NAMES`）。再注入下面的显式覆盖；
 - `pythonpath` 必须显式给出（参数或 `BRAIN_PYTHONPATH`），否则 `ValueError`；
 - `root` 未给出且 `BRAIN_ROOT` 为空时，脑侧将回落到其缺省根——**调用方务必
   显式给隔离/目标根**（测试与生产都不例外）；
 - `MDCG_STG_STATE=1` 由本层缺省注入（M1 状态读依赖 state_chain 开关）。
+
+**父进程配置面（#652①，勿与上面的白名单混淆）**：`BRAIN_PYTHON` /
+`BRAIN_PYTHONPATH` / `BRAIN_ROOT` 是在**本进程**里、**`_brain_env` 之前**被读的
+（`MCPClient.__init__`）——它们决定「拉起哪个解释器 / 从哪个目录取模块 / 库根在哪」。
+上面的 `_ENV_ALLOW_NAMES` / `_ENV_ALLOW_PREFIXES` **管不到它们**：白名单只决定
+「往子进程 env 里放什么」。故「白名单拦住了 `BRAIN_*` 不进子进程」**不能**说明这
+三个变量安全。处置：显式参数优先；env 兜底时 `BRAIN_PYTHON` / `BRAIN_PYTHONPATH`
+做 fail-closed 校验（绝对路径＋存在性，见 `_require_env_interpreter` /
+`_require_env_dir`）。可达性（如实）：前提是已能设置本进程环境变量 ⇒ 属**提权/
+持久化放大器**，非默认可达 RCE。
 
 用法（隔离示例；测试件见 `tests/test_brain_store.py`）：
 
@@ -119,15 +132,35 @@ _ENV_ALLOW_NAMES = frozenset({
     # hive 服务/执行器侧（`hive/serve_start.py` / `hive/exec.py` / `hive/orch.py`，
     # 由蜂巢自身进程树拉起）被读，**不在** `md_cg.mcp_server` 的读取面上。
     "HIVE_JOBS_DIR", "HIVE_EXE",
+    # #652③：原 `PYTHON` / `LINGSHU_` **宽前缀**收敛为**具名**（前缀过宽会把
+    # 解释器启动/行为劫持名与**身侧**逃生口一并放行给脑侧子进程）。具名清单＝
+    # 「脑侧子进程真读的」＋「部署方继承同义配置的余地」两类：
+    #   · CPython 配置/行为面：`PYTHONPATH` / `PYTHONUTF8` / `PYTHONIOENCODING`
+    #     三者由 `_brain_env` 显式注入（此处保留是为部署方继承同义配置）；
+    #     其余为纯行为开关（字节码缓存 / 缓冲 / 告警 / 故障处理器 / 哈希种子 /
+    #     用户 site / 安全路径 / 开发模式）——**均非「启动期执行任意代码」面**；
+    #   · 脑侧真读的 `LINGSHU_*` 只有 `LINGSHU_KB` / `LINGSHU_DB`
+    #     （`md_cg/whitebox_kb/**` 白盒引擎的知识库/数据库路径）。
+    # **不收**：`PYTHONSTARTUP` / `PYTHONHOME` / `PYTHONINSPECT` /
+    # `PYTHONEXECUTABLE`（解释器启动期劫持面）与 `LINGSHU_ALLOW_CWD_IMPORTS`
+    # （`lingshu/_pathguard.py` 的**身侧**逃生口，脑侧零读取点 ⇒ 透传纯属扩大面）。
+    "PYTHONPATH", "PYTHONUTF8", "PYTHONIOENCODING",
+    "PYTHONDONTWRITEBYTECODE", "PYTHONUNBUFFERED", "PYTHONWARNINGS",
+    "PYTHONFAULTHANDLER", "PYTHONHASHSEED", "PYTHONNOUSERSITE",
+    "PYTHONSAFEPATH", "PYTHONDEVMODE",
+    "LINGSHU_KB", "LINGSHU_DB",
 })
 
-#: 子进程 env **白名单·前缀**（部署方显式配置面）。`PYTHON*` 覆盖 PYTHONPATH /
-#: PYTHONUTF8 / PYTHONHOME / PYTHONIOENCODING / PYTHONDONTWRITEBYTECODE 等。
-#: 刻意**不含 `MDCG_`**——继承的 `MDCG_*` 仍须剔除（防在役库被无意命中），
-#: `MDCG_ROOT` / `MDCG_STG_STATE` 由 `_brain_env` 显式注入。
-#: 亦**不含 `HIVE_`**（#227 续）：前缀过宽会把凭据形状名整体放行；脑侧确需的两个
-#: 非凭据名 `HIVE_JOBS_DIR` / `HIVE_EXE` 走上面的 `_ENV_ALLOW_NAMES` **具名**放行。
-_ENV_ALLOW_PREFIXES = ("PYTHON", "LINGSHU_", "LC_")
+#: 子进程 env **白名单·前缀**（部署方显式配置面）。刻意**不含 `MDCG_`**——继承的
+#: `MDCG_*` 仍须剔除（防在役库被无意命中），`MDCG_ROOT` / `MDCG_STG_STATE` 由
+#: `_brain_env` 显式注入。**不含 `HIVE_`**（#227 续）：前缀过宽会把凭据形状名整体
+#: 放行；脑侧确需的两个非凭据名 `HIVE_JOBS_DIR` / `HIVE_EXE` 走上面的
+#: `_ENV_ALLOW_NAMES` **具名**放行。**不含 `PYTHON` / `LINGSHU_`**（#652③ 续收敛）：
+#: 同为「前缀过宽」——`PYTHON` 连带放行 `PYTHONSTARTUP` / `PYTHONHOME` 等解释器
+#: 启动劫持名，`LINGSHU_` 连带放行身侧逃生口 `LINGSHU_ALLOW_CWD_IMPORTS`；两条
+#: 前缀已按 #227 续的同一手法改**具名**（见上）。仅余 `LC_*`：区域/编码面，
+#: 无凭据形状名、无启动期执行面。
+_ENV_ALLOW_PREFIXES = ("LC_",)
 
 
 def _env_is_allowed(name: str) -> bool:
@@ -136,6 +169,56 @@ def _env_is_allowed(name: str) -> bool:
     if up in _ENV_ALLOW_NAMES:
         return True
     return any(up.startswith(p) for p in _ENV_ALLOW_PREFIXES)
+
+
+#: **父进程配置面**（issue #652①）——这三个名字在 `MCPClient.__init__` 里、**在
+#: `_brain_env` 之前**被读，用于决定「拉起哪个解释器 / 从哪个目录取模块 / 库根在
+#: 哪」。它们**不受 `_ENV_ALLOW_NAMES` / `_ENV_ALLOW_PREFIXES` 约束**：白名单只
+#: 决定「往子进程 env 里放什么」，管不到父进程读取的这三个变量。因此
+#: 「白名单拦住了 `BRAIN_*` 不进子进程」**不能**说明这三个变量安全。
+#: 可达性（如实）：前提是已能设置本进程环境变量；具备该能力者本已可影响本进程
+#: 启动（如 `PYTHONPATH`），故本面属**提权/持久化放大器**，非默认可达 RCE。
+#: 处置：`BRAIN_PYTHON` / `BRAIN_PYTHONPATH` 走**显式参数优先**，env 兜底时做
+#: fail-closed 校验（见 `_require_env_interpreter` / `_require_env_dir`）；`BRAIN_ROOT`
+#: 属数据根（脑侧可自建），只做声明不做存在性校验。
+_ENV_PARENT_CONFIG = ("BRAIN_PYTHON", "BRAIN_PYTHONPATH", "BRAIN_ROOT")
+
+
+def _require_env_interpreter(value: str) -> str:
+    """`BRAIN_PYTHON` 兜底值校验（#652①，fail-closed）。
+
+    该值决定**被拉起的可执行程序**，故要求绝对路径且是已存在的文件——
+    相对路径会按本进程 cwd 解析（cwd 可受外部影响），是比绝对路径更弱的面。
+    显式参数 `python=`（含 CLI `--brain-python`）不经本校验：那是调用方的显式
+    配置面，允许裸命令名（由 PATH 解析）。
+    """
+    if not os.path.isabs(value):
+        raise ValueError(
+            "BRAIN_PYTHON 必须是绝对路径（相对路径按本进程 cwd 解析，"
+            "该 cwd 不受本模块控制；#652① fail-closed）。显式参数 `python=` "
+            "不受此限，可传裸命令名")
+    if not os.path.isfile(value):
+        raise ValueError(
+            "BRAIN_PYTHON 指向的不是已存在的文件：%r（#652① fail-closed）"
+            % (value,))
+    return value
+
+
+def _require_env_dir(value: str, var: str) -> str:
+    """`BRAIN_PYTHONPATH` 兜底值校验（#652①，fail-closed）。
+
+    该值经 `_brain_env` 写进子进程 `PYTHONPATH`，CPython 启动期即按它解析模块
+    （含自动导入 `sitecustomize`）⇒ 等于「子进程启动期执行哪个目录的代码」。
+    故要求绝对路径且是已存在的目录。显式参数 `pythonpath=` 不经本校验。
+    """
+    if not os.path.isabs(value):
+        raise ValueError(
+            "%s 必须是绝对路径（#652① fail-closed；显式参数 `pythonpath=` 不受此限）"
+            % (var,))
+    if not os.path.isdir(value):
+        raise ValueError(
+            "%s 指向的不是已存在的目录：%r（#652① fail-closed）" % (var, value))
+    return value
 
 
 class BrainError(RuntimeError):
@@ -187,8 +270,17 @@ class MCPClient:
         if request_timeout is not None and (
                 not math.isfinite(request_timeout) or request_timeout <= 0):
             raise ValueError("request_timeout 必须是正的有限秒数或 None")
-        python = python or os.environ.get("BRAIN_PYTHON") or sys.executable
-        pythonpath = pythonpath or os.environ.get("BRAIN_PYTHONPATH")
+        # #652①：显式参数优先；env 兜底值**不可信**（父进程 env 决定被执行的
+        # 程序与模块）⇒ fail-closed 校验（绝对路径＋存在性）。见模块 docstring
+        # 「父进程配置面」。
+        if not python:
+            env_python = os.environ.get("BRAIN_PYTHON")
+            python = (_require_env_interpreter(env_python) if env_python
+                      else sys.executable)
+        if not pythonpath:
+            env_pp = os.environ.get("BRAIN_PYTHONPATH")
+            if env_pp:
+                pythonpath = _require_env_dir(env_pp, "BRAIN_PYTHONPATH")
         root = root or os.environ.get("BRAIN_ROOT")
         if not pythonpath:
             raise ValueError(

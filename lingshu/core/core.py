@@ -9278,8 +9278,11 @@ class SpacetimeMemoryEngine:
            **同款** fail-closed）；无密钥即抛 `PermissionError`，**先判后写**
            （闸在写入之前，整次导入回滚、零落库）。
         ②**列名白名单**：以 `PRAGMA table_info`（`_table_columns`）取库内真实
-           列集，与备份行键求交集；非白名单键**丢弃并计数上报**
-           （`discarded_keys`），不拼进 SQL。
+           列集，与备份行键的**跨行并集**求交集（#652②：旧实现只取首行键集合，
+           首行缺列会让后行同列真值一并被丢＝静默数据丢失；后行缺列则静默落
+           NULL 且不上报）；非白名单键**丢弃并计数上报**（`discarded_keys`），
+           不拼进 SQL；「行缺列」按表按列计数上报（`missing_columns`，键为列名、
+           值为缺该列的行数），使原先静默的 NULL 落库可观测。
         ③**硬配套**（设计者 2026-10-09 授权按推荐执行，措辞为「不可**静默**
            篡改」）：经密钥放行的不可变层写入**显式标注**（返回值
            `immutable_rows` / `requires_review=True`）＋**强制事后复核**（该标记
@@ -9372,6 +9375,7 @@ class SpacetimeMemoryEngine:
         counts = {}
         skipped = []
         discarded = {}
+        missing_columns = {}
         orphan_rows = []
         rejected_layer = []
         for table in self.M13_TABLES:
@@ -9383,12 +9387,30 @@ class SpacetimeMemoryEngine:
                 counts[table] = 0
                 continue
             # ② 列名白名单（PRAGMA table_info）：非白名单键丢弃并计数。
+            # #652②：键集合按**全部行**的并集计算，顺序＝跨行首次出现序（确定性
+            # ——`_table_columns` 回的是 set，直接迭代会引入非确定列序，故显式
+            # 按出现序累积）。旧实现只取首行（`list(rows[0].keys())`），两种后果
+            # 都在静默发生（值守复核实测）：
+            #   · 首行缺某列 ⇒ 该列整体不进 `cols`，**后行真值一并被丢**（回灌是
+            #     灾备/迁移路径 ⇒ 静默数据丢失，且 `discarded_keys` 为空）；
+            #   · 后行缺某列 ⇒ 该列在 `cols` 内、`r.get(col)` 落 NULL，返回值里
+            #     一个字都没有 ⇒ 调用方读不到「这一行缺列」。
+            # 现按并集取列（后行真值不再被首行形状吞掉），并把「缺列行数」按表按列
+            # 上报（`missing_columns`），使原先静默的 NULL 落库可观测。
             allowed = self._table_columns(table)
-            keys = list(rows[0].keys())
+            keys = []
+            for r in rows:
+                for k in r:
+                    if k not in keys:
+                        keys.append(k)
             cols = [k for k in keys if k in allowed]
-            dropped = [k for k in keys if k not in allowed]
+            dropped = sorted(k for k in keys if k not in allowed)
             if dropped:
-                discarded[table] = sorted(dropped)
+                discarded[table] = dropped
+            row_missing = {col: sum(1 for r in rows if col not in r) for col in cols}
+            row_missing = {col: n for col, n in row_missing.items() if n}
+            if row_missing:
+                missing_columns[table] = row_missing
             if not cols:
                 counts[table] = 0
                 continue
@@ -9454,6 +9476,7 @@ class SpacetimeMemoryEngine:
                      "target_id": r.get("target_id")} for r in orphan_rows[:20]],
                 "integrity_ok": not dangling and not orphan_rows,
                 "discarded_keys": discarded,
+                "missing_columns": missing_columns,
                 "immutable_rows": [i for i in immutable_rows if i],
                 "requires_review": bool(immutable_rows or guarded_meta or id_log_rows),
                 "rejected_invalid_layer": {"count": len(rejected_layer),
