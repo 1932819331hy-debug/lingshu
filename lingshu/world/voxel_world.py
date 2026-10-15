@@ -72,24 +72,28 @@ class VoxelWorld:
       - occupancy_at(t)：某时刻的 4D 时空占用（体素快照）
       - simulate(steps)：推进 N 步（实体按速度移动）
 
-    资源上界（lingshu #325 / #368）：
-      build_flatland 按 size² 建 dict、simulate 每步给每实体追加一个轨迹点，
-      三处都无上界 ⇒ 传入大 size / 大 steps / 长时推进可把内存吃穿。现加三条
-      上界（判据来源：**经验标定，追不到理论出处**——本仓理论稿未给体素世界
-      规模口径；取同仓 HISTORY_MAX 一类「常量 + 钳制」的既有手法）：
+    资源上界（lingshu #325 / #368 / #701）：
+      build_flatland 按 size² 建 dict、按 trees 放树、simulate 每步给每实体追加一个
+      轨迹点，四处都无上界 ⇒ 传入大 size / 大 trees / 大 steps / 长时推进可把内存
+      或 CPU 吃穿。现加四条上界（判据来源：**经验标定，追不到理论出处**——本仓理论稿
+      未给体素世界规模口径；取同仓 HISTORY_MAX 一类「常量 + 钳制」的既有手法）：
 
         MAX_SIZE  —— 区块边长上限，超出即钳到上界（size² 方块数随之有界）。
         MAX_STEPS —— 单次 simulate 步数上限，超出即钳到上界（防单次调用耗尽 CPU）。
         MAX_TRAIL —— 每实体时空轨迹保留点数上限，超出丢弃最旧（防长期推进无界增长）。
+        MAX_TREES —— 单次 build_flatland 放树数上限，超出即钳到上界（防单次调用耗尽 CPU）。
 
       削掉的判别力：MAX_TRAIL 生效后，轨迹只保留最近 MAX_TRAIL 个点，
       `trail()` 不再是「A→B 完整记录」、`occupancy_at(t)` 的按下标取值只对
-      保留窗口内有效（更早的历史被丢弃，无法回取）。未超上界时行为与旧版逐字相同。
+      保留窗口内有效（更早的历史被丢弃，无法回取）。MAX_TREES 生效后，
+      `build_flatland(trees > MAX_TREES)` 只放 MAX_TREES 棵（返回的 count 与
+      方块布局按钳后值给，超出部分无声丢弃）。未超上界时行为与旧版逐字相同。
     """
 
     MAX_SIZE = 128      # 区块边长上限：size²×2 层方块，128²×2≈3.3e4，可控
     MAX_STEPS = 10000   # 单次 simulate 步数上限
     MAX_TRAIL = 4096    # 每实体时空轨迹保留点数上限（超出丢弃最旧）
+    MAX_TREES = 4096    # 单次 build_flatland 放树数上限（与 MAX_TRAIL 同量级）
 
     def __init__(self, size: int = 16, ground_level: int = 1, seed: int = 0):
         self.size = min(int(size), self.MAX_SIZE)  # 区块边长（钳到 MAX_SIZE）
@@ -104,6 +108,7 @@ class VoxelWorld:
 
     def build_flatland(self, trees: int = 2, water: bool = True) -> int:
         """生成平地世界：地面（草/土）+ 可选树 + 可选水。返回方块数。"""
+        trees = min(int(trees), self.MAX_TREES)  # 放树数（钳到 MAX_TREES）
         count = 0
         for x in range(self.size):
             for z in range(self.size):
