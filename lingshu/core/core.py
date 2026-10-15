@@ -1065,7 +1065,8 @@ class LayeredStore:
     # 与实际 DDL 无强制绑定，故守卫须兼比结构，否则「版本匹配但结构陈旧」的库永远补不上。
     _SCHEMA_TABLES = frozenset(('nodes', 'edges', 'blindspots', 'skills', 'promotion_proposals',
                                 'protections', 'rejected_paths', 'verifier_standards',
-                                'escalation_points', 'action_logs', 'engine_meta', 'gap_history'))
+                                'escalation_points', 'action_logs', 'engine_meta', 'gap_history',
+                                'flywheel_reuse'))
     _SCHEMA_COLUMNS = {'nodes': ('semantic_coordinates', 'state_attributes', 'entity_id'),
                        'edges': ('source_evidence',), 'blindspots': ('predictability',),
                        'promotion_proposals': ('content_hash',)}
@@ -1496,6 +1497,17 @@ class LayeredStore:
                 ts REAL, d_norm REAL
             )
         ''')
+        # ---- v1.11 知识飞轮复用观测（FLYWHEEL-REV1）----
+        # #691 P0-b：`flywheel_reuse` 此前**只在** `_note_reuse` 里按需
+        # `CREATE TABLE IF NOT EXISTS`（运行时建）⇒ 它既不在 `_SCHEMA_TABLES`
+        # 也不在 `M13_TABLES`，导出/导入（自称「全库备份」）**不覆盖它**、
+        # 重启即丢跨进程复用观测。现把建表收进 `_init_tables`（与其它自建表同源，
+        # 构造期即存在）并同步进两处清单；`_note_reuse` 里的幂等建表保留作兜底。
+        c.execute('''
+            CREATE TABLE IF NOT EXISTS flywheel_reuse (
+                session_id TEXT, round INTEGER, node_id TEXT, ts REAL
+            )
+        ''')
         # 建表完成 → 落 schema 版本标记（下次启动只读化守卫据此跳过建表块）
         c.execute("INSERT OR REPLACE INTO engine_meta (key, value) VALUES ('_schema_version', ?)",
                   (str(self.SCHEMA_VERSION),))
@@ -1784,23 +1796,55 @@ class LayeredStore:
 
 
     def migrate_v17_coordinates(self) -> Dict:
-        """D-003 坐标分离：数据修改与迁移历史共用一个事务，任一步失败均回滚。"""
+        """D-003 坐标分离：数据修改与迁移历史共用一个事务，任一步失败均回滚。
+
+        #691 P1-c（坏 JSON 行崩构造期）：本方法由 `__init__` 调用，旧实现
+        **前置筛只挡「不含候选子串」的坏行**；只要库内存在 ≥1 条合法候选，
+        就会走全表 `SELECT` + 逐行 `json.loads` ⇒ 任一共存的坏 JSON 行（手工
+        改坏 / 外来备份，且不含 `"protocol_` 等子串）都会令构造期抛
+        `JSONDecodeError`，**整个引擎起不来**。同理前置筛自身对「含候选子串
+        但 JSON 非法」的行也会崩。
+        修法：两处 `json.loads` 逐行 try/except 具体异常（`ValueError` /
+        `TypeError`），坏行**跳过并计数**——计数经既有 `warnings.warn` 告警面
+        上报（不静默吞；`warn` 属既有审计动作，lint 计数零净增），返回值形状
+        保持 `{"migrated_nodes": N}` 不变（不破坏既有调用方契约）。**未**新增宽
+        `except Exception`；迁移**判据与阈值未动**（仍是顶层 `startswith` 三前缀）。
+        """
         # 常规启动通常已无旧字段：先做只读候选检查，避免每次启动争写锁。
         candidates = self.conn.execute(
             "SELECT spatial_coordinates FROM nodes WHERE "
             "instr(spatial_coordinates, '\"protocol_') > 0 OR "
             "instr(spatial_coordinates, '\"radical_') > 0 OR "
             "instr(spatial_coordinates, '\"neural_') > 0").fetchall()
-        if not any(any(k.startswith(("protocol_", "radical_", "neural_"))
-                       for k in json.loads(row[0] or "{}")) for row in candidates):
+        has_valid_candidate = False
+        for row in candidates:
+            try:
+                obj = json.loads(row[0] or "{}")
+            except (ValueError, TypeError):
+                # 坏 JSON 候选行：前置筛不崩（计数在下方全表循环统一做）。
+                continue
+            if isinstance(obj, dict) and any(
+                    k.startswith(("protocol_", "radical_", "neural_")) for k in obj):
+                has_valid_candidate = True
+                break
+        if not has_valid_candidate:
             return {"migrated_nodes": 0}
         migrated = 0
+        skipped_bad_rows = 0
         with self._structure_event_transaction() as c:
             c.execute("SELECT id, spatial_coordinates, semantic_coordinates FROM nodes")
             for row in c.fetchall():
                 nid, sp_json, se_json = row[0], row[1], row[2]
-                sp = json.loads(sp_json or "{}")
-                se = json.loads(se_json or "{}") if se_json else {}
+                # #691 P1-c：坏行跳过并计数（构造期不再崩）。
+                try:
+                    sp = json.loads(sp_json or "{}")
+                    se = json.loads(se_json or "{}") if se_json else {}
+                except (ValueError, TypeError):
+                    skipped_bad_rows += 1
+                    continue
+                if not isinstance(sp, dict):
+                    skipped_bad_rows += 1
+                    continue
                 semantic_keys = [k for k in sp if k.startswith(
                     ("protocol_", "radical_", "neural_"))]
                 if not semantic_keys:
@@ -1825,6 +1869,12 @@ class LayeredStore:
                     f"v1.7 坐标字段分离：{migrated} 节点语义键迁移至 semantic_coordinates",
                     "migration", extra_tags=["v1.7"], source="migrate_v17_coordinates",
                     metadata={"version": "v1.7", "migrated_nodes": migrated}, _cursor=c)
+        if skipped_bad_rows:
+            # #691 P1-c：坏行**不静默吞**——经既有告警面上报（`warn` 属既有审计动作，
+            # 不改返回值形状、不加宽 except 计数）。这些行原文未被改写，仍是待修数据。
+            warnings.warn(
+                "#691 坐标迁移跳过 %d 条坏 JSON 行（spatial/semantic 非法，原文未改）"
+                % skipped_bad_rows, RuntimeWarning, stacklevel=2)
         return {"migrated_nodes": migrated}
 
 
@@ -4127,13 +4177,31 @@ class LayeredStore:
         **排序键**，未采纳「拒绝未来 `created_at`」——那是另设「未来多久算非法」
         的容差口径，属设计者裁面，且会误伤时钟偏快机器所出备份的合法历史。
         """
+        # #691 P1-a：删除前须过**唯一保护谓词** `_is_forget_protected`——
+        # 旧实现直接 `DELETE`，`protect_node`（`protections` 行）或 `no_forget`
+        # 标签登记的快照**仍被删**（受保护节点被本清理面静默绕过保护）。
+        # 本件只补**保护谓词**（选面 `tags LIKE '%self_snapshot%'` 口径不动，
+        # 不顺手扩大改动面）；受保护件既不计入 `doomed` 也不删其关联边。
+        # 谓词直传入口（`node_id` + `tags`）与 `decay_cycle` 同款，判据本体同一段。
         c = self.conn.cursor()
-        c.execute("SELECT id FROM nodes WHERE layer='self' AND tags LIKE ? "
+        c.execute("SELECT id, tags FROM nodes WHERE layer='self' AND tags LIKE ? "
                   "ORDER BY rowid DESC", ("%self_snapshot%",))
-        ids = [r[0] for r in c.fetchall()]
-        if len(ids) <= keep:
+        rows = c.fetchall()
+        if len(rows) <= keep:
             return 0
-        doomed = ids[keep:]
+        protected = set(self.get_protected_nodes())
+        # keep 保留的是**最近** keep 条（rowid 降序前缀）；保护件在淘汰候选里跳过。
+        doomed = []
+        for nid, tags_json in rows[keep:]:
+            try:
+                _tags = json.loads(tags_json) if tags_json else []
+            except (ValueError, TypeError):
+                _tags = []
+            if self._is_forget_protected(None, protected, node_id=nid, tags=_tags):
+                continue
+            doomed.append(nid)
+        if not doomed:
+            return 0
         with self._lock:
             for nid in doomed:
                 # #93：先删边再删节点（外键开启后顺序反了会 FK constraint failed）。
@@ -6486,7 +6554,16 @@ class SpacetimeMemoryEngine:
                 self._commit_locked()
             if not approved:
                 # A-1：被拒绝的固化提案 → 被拒绝路径资产
-                content = node.content[:60] if node else proposal_id
+                # #691 P0-a（负记忆基座截断）：旧实现此处把正文截成
+                # `node.content[:60]` 落库，而匹配侧（`find_rejected_paths` /
+                # `add_promotion_proposal`）用的是**新内容全文**——
+                # `char_bigram_jaccard(全文, 截断60字+理由)` 的并集被全文撑大，
+                # 长且用词多样的正文（约 500 字以上）连**一字不改原文重提**都
+                # 落到阈值 0.15 之下而不被拦（改尾既非必要也非充分）。
+                # 修法：落库基座改用**完整正文**，与匹配侧的全文口径统一
+                # （不改阈值 0.15、不改匹配算法）。短文本判别力不受影响
+                # （全文对全文 + 理由，相似度仍远高于 0.15）。
+                content = node.content if node else proposal_id
                 self.register_rejected_path(
                     path_type="promotion",
                     description=f"固化提案被拒：{content}",
@@ -8527,11 +8604,16 @@ class SpacetimeMemoryEngine:
                          step_size=p.get("step_size", 1.0),
                          policy=p.get("policy", "predictive"),
                          fixed_action=p.get("fixed_action", "east"))
-            except ValueError as e:
+            except (ValueError, TypeError) as e:
                 # C 侧把「未知 policy / 未知动作 / 受控实体不在场 / 不合法步长」定为
                 # fail-closed（ValueError，且配置一律不变）。门面**不改**这条判据，
                 # 只把它包成与其它动作一致的门面返回形（模型驱动面拿得到可读原因，
                 # 而不是一个穿透门面的异常）。
+                # #691 Z3：**不可哈希**的 `fixed_action`（如 `[1]`）在 C 侧
+                # `validate_action` 的 `action not in ACTION_DELTAS` 处抛
+                # `TypeError: unhashable type`——旧门面只捕 `ValueError` ⇒ 该异常
+                # **穿透门面**（模型驱动面拿到裸异常而非可读 error dict）。
+                # 现把 `TypeError` 一并纳入捕获（同一 fail-closed 返回形，配置不变）。
                 return {"status": "error", "reason": "action_config_rejected",
                         "error": str(e)}
             return {"status": "ok", "action_config": cfg}
@@ -9303,32 +9385,14 @@ class SpacetimeMemoryEngine:
 
     # ==================== v1.7 多模态（MULTIMODAL-REV1 · D-001~D-005） ====================
 
-    #: v1.7 坐标迁移的**候选行前置筛**（issue #279：无待迁移行即短路，不做
-    #: Python 侧逐行 JSON 解析）。
-    #:
-    #: 必要性论证（为何是**超集**筛、不会漏行）：语义键是 JSON 对象的键，键在
-    #: 序列化文本中**必定**以 `"` 起头 ⇒ `"protocol_` / `"radical_` / `"neural_`
-    #: 三个子串在待迁移行里**必然出现**（假阴性不可能）。反向不成立：LIKE 大小写
-    #: 不敏感、`_` 为单字符通配、键值里含同样子串亦命中 ⇒ 有假阳性；但假阳性只是
-    #: 多进 Python 判一次 `startswith`，**不改变迁移结果集**（真判据仍是 Python 侧
-    #: `startswith`）。故结果集与「全表扫描」逐字等价，只省掉无谓的全表解析。
-    #: 边界（如实标注）：SQLite 仍要扫一遍 `spatial_coordinates` 文本（无索引可用），
-    #: 本筛消掉的是**每行一次 `json.loads` + 全表 `fetchall` 物化**，不是扫描本身。
-    #: 第二处边界（削掉的判别力）：**非 JSON 正文行**（如手工改坏/外来备份里的
-    #: `{'protocol_x': 1}` 单引号形态）在旧实现里会令本方法 `JSONDecodeError`
-    #: 抛到 `__init__`（构造期崩，把坏行变成显式故障）；本筛下该行不含 `"protocol_`
-    #: 子串 ⇒ 不再进 Python、**静默跳过**（构造不再崩，但坏行也不再被当场点名）。
-    #: 取此口径的理由：构造期崩溃会连带阻断整个引擎启动，代价高于「坏行不迁移」；
-    #: 坏行的独立检出属 `#267`（逐行容错）一族，不在本件范围。
-    _V17_CANDIDATE_SQL = (
-        "SELECT id, spatial_coordinates, semantic_coordinates FROM nodes "
-        "WHERE spatial_coordinates LIKE '%\"protocol_%' "
-        "OR spatial_coordinates LIKE '%\"radical_%' "
-        "OR spatial_coordinates LIKE '%\"neural_%'")
-
     @_transactional
     def migrate_v17_coordinates(self) -> Dict:
-        """迁移与留史共用存储事务；无遗留坐标时保持只读。"""
+        """迁移与留史共用存储事务；无遗留坐标时保持只读。
+
+        #691 Z4：删除死码 `_V17_CANDIDATE_SQL`（全仓零引用；其候选行前置筛的
+        必要性论证见 `LayeredStore.migrate_v17_coordinates`——本方法是该 store
+        方法的门面透传，真实现与内联前置筛都在 store 层）。
+        """
         return self.store.migrate_v17_coordinates()
 
     @_transactional
@@ -9850,10 +9914,13 @@ class SpacetimeMemoryEngine:
     #: `LayeredStore._SCHEMA_TABLES`（`_init_tables` 的 DDL 清单）——备份清单须覆盖
     #: 它，否则「全库」名不副实。`sqlite_sequence`（SQLite 内建自增簿记）**不**入清单。
     #: 该不变量由 `tests/test_issue270_m13_table_coverage_guard.py` 钉住。
+    #: #691 P0-b：清单此前漏掉运行时建的 `flywheel_reuse`（复用观测），
+    #: 「全库备份」不覆盖它 ⇒ 重启即丢；现该表已收进 `_init_tables`
+    #: （构造期即建）并补进本清单与 `_SCHEMA_TABLES`。
     M13_TABLES = ("nodes", "edges", "blindspots", "skills", "promotion_proposals",
                   "protections", "rejected_paths", "verifier_standards",
                   "escalation_points", "entities",
-                  "action_logs", "engine_meta", "gap_history")
+                  "action_logs", "engine_meta", "gap_history", "flywheel_reuse")
 
     def _existing_tables(self) -> Set[str]:
         """当前库实际存在的表名（以 sqlite_master 为准，不假设 DDL 全集）。"""
