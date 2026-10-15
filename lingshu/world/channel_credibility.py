@@ -43,6 +43,7 @@ import json
 import math
 import os
 import time
+import warnings
 from typing import Dict, List, Optional
 
 # 默认通道（对应 v3.4 三端口架构）
@@ -131,22 +132,66 @@ class ChannelCredibilityRegistry:
             return
         try:
             os.makedirs(os.path.dirname(self.persist_path), exist_ok=True)
+            # #651：落盘前过滤非注册键——_load 重启后只认 DEFAULT_CHANNELS
+            #（构造器先建的就是这六个键），写下去也只写这批，盘面与重载面
+            # 严格一致。_state 里混入的其它键（直改内部字典 / 旧版本残留）
+            # 不落盘：盘干净是第一道防线，_load 的 allowlist 是第二道。
+            payload = {ch: st for ch, st in self._state.items() if ch in DEFAULT_CHANNELS}
             with open(self.persist_path, "w", encoding="utf-8") as f:
-                json.dump(self._state, f, ensure_ascii=False, indent=1)
+                json.dump(payload, f, ensure_ascii=False, indent=1)
         except Exception:
             pass
 
     # ---- 更新 ----
 
+    def _registered_channels(self) -> set:
+        """合法通道集合（#651 写入闸口径）：DEFAULT_CHANNELS ∪ 注册表既有键。
+
+        与 ``_load`` 的 allowlist（``ch not in self._state: continue``）同口径：
+        构造期 ``_state`` 的键就是 DEFAULT_CHANNELS，故「已在 _state」与「在
+        DEFAULT_CHANNELS」在正常运行下重合——即**重启后真正能活下来的通道名**。
+        修前写入侧（_update 的 setdefault / reset 的直接赋值）对通道名零校验，
+        任意名静默建档：known=True、进 registry()，reset 带 persist 还会把自造键
+        固化到盘上——与同文件 _load 的过滤纪律相反（#651）。
+        """
+        return set(DEFAULT_CHANNELS) | set(self._state)
+
     def record_hit(self, channel: str, conf: float = 1.0, strong: bool = False) -> Dict:
-        """验证命中：a += n_effective（伪样本量加权）。strong=True 用强验证 α。"""
+        """验证命中：a += n_effective（伪样本量加权）。strong=True 用强验证 α。
+
+        通道名不在合法集合时按 #651 写入闸处理：warn + 跳过本次记账（见
+        ``_update`` docstring）。
+        """
         return self._update(channel, conf, strong, hit=True)
 
     def record_miss(self, channel: str, conf: float = 1.0, strong: bool = False) -> Dict:
-        """验证未命中：b += n_effective。"""
+        """验证未命中：b += n_effective。
+
+        通道名不在合法集合时按 #651 写入闸处理：warn + 跳过本次记账（见
+        ``_update`` docstring）。
+        """
         return self._update(channel, conf, strong, hit=False)
 
     def _update(self, channel: str, conf: float, strong: bool, hit: bool) -> Dict:
+        """记账一次验证（hit→a / miss→b），带写入侧通道名闸（#651）。
+
+        未知通道（不在 DEFAULT_CHANNELS ∪ 注册表既有键）：**warn + 跳过本次
+        记账**——不建档、不落盘，返回该名的中性先验快照（known=False，与查询
+        侧 #539 的「未知通道可区分」口径衔接）。选 warn 而非 raise：本方法是
+        数据驱动路径（anchored_verification / anchor_verify 把事件自带的通道名
+        透传进来），一条坏通道名的一次 hit 不应打断整条验证更新流；但完全
+        静默又等于把拼错/自造的通道当真通道统计（known=True 污染本进程的
+        B(t) 端口快照），故至少要有声响。
+        """
+        # #651 写入闸：未知通道 warn + 跳过本次记账（口径理由见上）。
+        if channel not in self._registered_channels():
+            warnings.warn(
+                "通道 %r 未注册，本次验证记账已跳过（合法通道：%s）——"
+                "拼错/自造的通道名不再静默建档（#651）"
+                % (channel, sorted(self._registered_channels())),
+                stacklevel=3,  # 指向 record_hit/record_miss 的真正调用方
+            )
+            return self.channel_state(channel)
         # #402：NaN/±inf 不得被钳制表达式放行——实测 Python 的 min(1.0, nan)=1.0
         #   会把 NaN 置信度抬成 1.0，注入满额伪样本量（n_eff）。非有限值一律
         #   fail-closed 归零（零伪样本量，后验不动）。
@@ -221,7 +266,22 @@ class ChannelCredibilityRegistry:
     # ---- 重置 ----
 
     def reset(self, channel: Optional[str] = None) -> None:
-        if channel:
+        """复位通道到先验，带写入侧通道名闸（#651）。
+
+        · ``channel=None``：全量复位（既有行为不变）；
+        · ``channel`` 非法（非 None 且不在 DEFAULT_CHANNELS ∪ 注册表既有键）：
+          **raise ValueError**。reset 是显式管理 API，调用方传错通道名属编程
+          错误——静默为任意名建档（known=True 进 registry、persist 落盘）会把
+          错误藏进状态里，与 normalize_part / load_shapes 的「非法即 raise」
+          纪律同口径（fail-closed）。空串同样 raise：修前 ``if channel:`` 把
+          ``""`` 当无参走全量复位，属于同一个零校验缺口。
+        """
+        if channel is not None:
+            if channel not in self._registered_channels():
+                raise ValueError(
+                    "未知通道 %r：reset 只接受已注册通道（%s）或 None（全量复位）"
+                    % (channel, sorted(self._registered_channels()))
+                )
             self._state[channel] = {"a": PRIOR_A, "b": PRIOR_B, "hits": 0.0, "misses": 0.0}
         else:
             for ch in self._state:

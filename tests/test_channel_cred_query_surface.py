@@ -102,8 +102,12 @@ def test_unknown_channel_is_distinguishable(reg):
         assert st["known"] is False, name
         assert known["known"] is True
     # 已知通道在 record 之后仍旧 known
-    reg.record_hit("visaul", conf=1.0)
-    assert reg.channel_state("visaul")["known"] is True
+    # #651 口径修正：原实现此处误用拼错的 "visaul"——注释意图是「已知通道
+    # record 后仍 known」，代码却顺带把「未知通道被 _update 静默建档」钉成了
+    # 规格。#651 写入闸生效后未知通道 warn+跳过（不建档），按注释本意改用
+    # "visual"；未知通道不再因一次 record 变 known 由 #651 守卫另行覆盖。
+    reg.record_hit("visual", conf=1.0)
+    assert reg.channel_state("visual")["known"] is True
 
 
 def test_unknown_channel_credibility_is_prior(reg):
