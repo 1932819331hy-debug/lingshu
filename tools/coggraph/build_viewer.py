@@ -312,7 +312,10 @@ def main(argv=None):
                 d_hubs[h["id"]] = dict(h)
         d_edges.extend(dd.get("edges", []))
     hubs_list = list(d_hubs.values())
-    d_edge_count = len(d_edges)
+    # #640：旧口径 `d_edge_count = len(d_edges)`（折叠前原始数）已退役——唯一消费点
+    #   是 vgraph["derived"]，而它必须与折叠损耗计数同口径（#618 的 dropped_selfloop/
+    #   merged_edges 恰从这批边里剔除），净数在折叠循环之后另算（derived_net）。
+    #   hubs 的 count 是节点数语义（R4，测试已锁），不属边口径，本件不动。
 
     # ---- 同义/重复归并：别名节点重映射到 canonical（仅视图层，不改真源）
     # #410：synonym_groups.json 是**待复核**候选（README/⑤ 宣称「不自动归并」）。
@@ -357,6 +360,12 @@ def main(argv=None):
         print("折叠损耗：自环丢弃 %d 条 / 同键合并 %d 条（同义折叠后 s==t 或同键重复被剔除，"
               "计数见 viewer_graph.json 顶层 dropped_selfloop / merged_edges）"
               % (selfloop_dropped, dup_merged))
+    # #640：derived 必须是**折叠后净数**——旧口径取折叠前 len(d_edges)，而
+    #   dropped_selfloop/merged_edges 恰从这批边里剔除 ⇒ 侧栏「全库 N 边」
+    #   （counts.edges + derived）系统性高估、偏差恒等于损耗量。源头修
+    #   （本端已裁口径，不采「侧栏直用 G.edges.length」）：此处改算折叠后
+    #   实际存活的推导边数。零损耗时与旧值一致 ⇒ #413 加法恒等不受影响。
+    derived_net = sum(1 for e in all_edges if e["derived"])
 
     deg = collections.Counter()
     for e in all_edges:
@@ -422,7 +431,7 @@ def main(argv=None):
     # #618：损耗计数恒写（含 0），供下游与 meta.counts.edges 对账（顶层口径同 derived，见 #413）。
     vgraph = {"meta": g["meta"], "nodes": vnodes, "edges": vedges,
               "layer_count": dict(layer_count), "edge_type_count": dict(et_count),
-              "derived": d_edge_count, "merged_aliases": merged_alias_count,
+              "derived": derived_net, "merged_aliases": merged_alias_count,
               "dropped_selfloop": selfloop_dropped, "merged_edges": dup_merged}
 
     os.makedirs(args.out, exist_ok=True)
