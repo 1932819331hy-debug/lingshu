@@ -9868,6 +9868,19 @@ class SpacetimeMemoryEngine:
         时显式 `BEGIN`，读完 commit）⇒ 导出是某一时刻的一致快照，不再出现
         「源库 integrity OK、备份里悬挂边、import_all 报 integrity_ok=False」。
         详见下方 `own_tx` 段内注释与 `tests/test_issue383_export_snapshot_guard.py`。
+
+        issue #698（静默覆盖）：目标路径已存在时本方法**覆盖**之——这是**既有契约**，
+        非缺陷：本方法自称「灾备基础」，重做备份必须能覆盖上一份；
+        `tests/test_issue330_export_all_atomic_guard.py` 的 D 用例即锁定「二次导出到
+        同一路径 ⇒ 覆盖」（本件**不改**该语义、不加拒覆盖、不动默认）。
+        `path` 由**调用方**给出、**不过** `_confine_*` 根闸——那两个闸的适用面是
+        world3d render / wm_simloop flush 的受保护产物，不是「凡签名含路径参数」；
+        灾备/迁移场景的目标本就在任意卷上，一律套根闸会直接打掉灾备能力。
+        本件只把「**静默**覆盖」改为**显式上报**：覆盖与否经返回值
+        `overwrote_existing`（bool）回报，不再静默。
+        边界（如实标注）：`overwrote_existing` 是**判定—替换之间**的一次
+        `os.path.exists` 读数，只要求「上报」，**不**提供排他创建/并发排他
+        （判定与 `os.replace` 之间存在竞态窗口；本件不引入先查后建语义）。
         """
         c = self.store.conn.cursor()
         # #383：整趟导出必须**共用一个读快照**。旧实现逐表各发一条
@@ -9909,6 +9922,9 @@ class SpacetimeMemoryEngine:
             if own_tx:
                 self.store.conn.commit()
         tmp_path = "%s.tmp-%s" % (output_path, uuid.uuid4().hex[:8])
+        # #698：覆盖已存在目标 ⇒ 显式上报（不改覆盖语义，只让「静默」消失）。
+        # 读数取在 `os.replace` **之前**——replace 之后目标必在，届时再查恒为 True。
+        overwrote_existing = os.path.exists(output_path)
         try:
             with open(tmp_path, "w", encoding="utf-8") as f:
                 json.dump(data, f, ensure_ascii=False, indent=2)
@@ -9921,7 +9937,8 @@ class SpacetimeMemoryEngine:
                 pass
             raise
         return {"exported_nodes": len(data.get("nodes", [])), "path": output_path,
-                "tables": len(data) - 1, "skipped_tables": skipped}
+                "tables": len(data) - 1, "skipped_tables": skipped,
+                "overwrote_existing": overwrote_existing}
 
     @_transactional
     def import_all(self, input_path: str, designer_key: str = None) -> Dict:
@@ -10613,6 +10630,20 @@ class SpacetimeMemoryEngine:
         importance/last_access 排序、硬上限 10）。返回体形状不变（`{"cycles": [...]}`
         ＋ `meta`）。判据来源：公开 issue #57（`export_structured_trajectories` 的
         `limit` 声明了却不生效）＋ 本方法 docstring「最近 N 条」。
+
+        issue #698（静默覆盖）：`output_path` 给出时本方法 `open(..., "w")` **直写**
+        该路径，目标已存在即**覆盖**（无根闸、无拒覆盖、无原子写——#330 只改了
+        `export_all` 的落盘原语，未及本方法）。`output_path` 由**调用方**给出、
+        **不过** `_confine_*` 根闸（那两个闸的适用面是 world3d render / wm_simloop
+        flush 的受保护产物）。本件只把「**静默**覆盖」改为**显式上报**：
+        **仅当 `output_path` 给出**（即真发生落盘）时，返回值在落盘内容之上**多带**
+        一个键 `overwrote_existing`（bool，读数取在 `open(..., "w")` **之前**）；
+        批量模式（`output_path is None`，无落盘）**不加键**，返回体形状与 #57 契约
+        逐字一致。**落盘文件内容形状不变**（`overwrote_existing` 只走返回值，
+        不写进文件）。
+        边界（如实标注）：该键是「判定—写入」之间的一次 `os.path.exists` 读数，
+        只要求「上报」，**不**提供排他创建（存在竞态窗口）；也不改本方法
+        `open(..., "w")` 的直写原语（#330 面，本件未动）。
         """
         if cycle_id:
             nodes = self.store.get_nodes_by_tag(f"cycle:{cycle_id}", limit=20)
@@ -10649,8 +10680,14 @@ class SpacetimeMemoryEngine:
             "condition_space": "轨迹导出 · 训练资产格式（有损投影）",
         })
         if output_path:
+            # #698：覆盖已存在目标 ⇒ 显式上报。读数取在写入**之前**（写后目标必在）。
+            # 只进返回值、不进文件：落盘内容形状与 #57 契约逐字不变。
+            overwrote_existing = os.path.exists(output_path)
             with open(output_path, "w", encoding="utf-8") as f:
                 json.dump(trajectory, f, ensure_ascii=False, indent=2)
+            reported = dict(trajectory)
+            reported["overwrote_existing"] = overwrote_existing
+            return reported
         return trajectory
 
     def export_structured_trajectories(self, limit: int = 10, output_path: str = None) -> Dict:
