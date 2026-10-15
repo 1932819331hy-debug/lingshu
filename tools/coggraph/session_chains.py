@@ -189,7 +189,13 @@ def main(argv=None):
         },
         "hubs": hubs,
         "edges": edges,
-        "chains": chains[:40],
+        # #648：chains 全量落盘，不再 chains[:40]——旧口径让同一份产物自相矛盾：
+        #   meta.sessions 写全量（45）、hubs/edges 不截断，chains 却只落前 40 条 ⇒
+        #   第 41 名起的会话「枢纽在、边在、链不在」。体积考量实测不成立：45 会话
+        #   产物 35180 B 中 chains 段 4680 B（13%），被截的 5 条仅 ~585 B（1.7%），
+        #   大头 edges（26185 B，74%）本就不截断；且 chains 无任何下游代码读
+        #   （build_viewer 只取 hubs/edges）。单一口径：meta.sessions == len(chains)。
+        "chains": chains,
     }
     os.makedirs(args.out, exist_ok=True)
     if args.write:
@@ -200,6 +206,9 @@ def main(argv=None):
              out["meta"]["counts"]["sequential_edges"], out["meta"]["counts"]["hub_edges"], len(hubs)))
     for c in chains[:8]:
         print("  %s  %s ~ %s  %d 节点" % (c["session"], c["range"][0], c["range"][1], c["nodes"]))
+    # #648：明细行是纯展示 top-N（数据本身全量在产物里），超样时显式披露，不再隐含
+    if len(chains) > 8:
+        print("  …（明细仅列前 8 条，共 %d 条，全量见 session_chains.json）" % len(chains))
     return 0
 
 
