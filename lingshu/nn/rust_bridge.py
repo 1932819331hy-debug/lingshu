@@ -8,6 +8,7 @@ Python 参考实现保留(hex_train/hex_hier),Rust 只做热区。
 """
 from __future__ import annotations
 import os
+import re
 import subprocess
 import time
 from pathlib import Path
@@ -15,11 +16,42 @@ from typing import Dict, List, Optional, Tuple
 
 import numpy as np
 
+#: 包根（`<repo>/lingshu/nn/rust_bridge.py` → `<repo>`）。缺省 hex_nn.exe
+#: 锚定于此，**不**按调用时 cwd 解析（#488）。
+_PKG_ROOT = Path(__file__).resolve().parents[2]
+
+#: 子进程环境中凭据形状名（`*_KEY` / `*_TOKEN` / `*_SECRET` / `*_PASSWORD` …）。
+_CREDENTIAL_ENV_RE = re.compile(
+    r"(?:^|_)(?:KEY|TOKEN|SECRET|PASSWORD|PASSWD|CREDENTIAL|CREDENTIALS)(?:_|$)",
+    re.IGNORECASE)
+
+
+class HexExeError(RuntimeError):
+    """hex_nn.exe 不可用/不可信（#488）：fail-closed，不静默回退。"""
+
+
+def _default_hex_exe() -> Path:
+    """包根锚定的缺省 hex_nn.exe（**绝对**路径；绝不按调用时 cwd 解析）。"""
+    return _PKG_ROOT / "hex_nn" / "target" / "release" / "hex_nn.exe"
+
+
+def _configured_hex_exe_candidates() -> List[str]:
+    """显式配置面（环境变量驱动，保持 #10 既有行为）：
+    `AEIS_HEX_NN` → `AEIS_HEX_NN_DIR/hex_nn.exe`，按优先级排列。"""
+    out: List[str] = []
+    direct = os.environ.get("AEIS_HEX_NN")
+    if direct:
+        out.append(direct)
+    d = os.environ.get("AEIS_HEX_NN_DIR")
+    if d:
+        out.append(os.path.join(d, "hex_nn.exe"))
+    return out
+
 
 def _locate_hex_exe() -> Path:
     """hex_nn.exe 探测链(不硬编码本机路径纪律):
     环境变量 AEIS_HEX_NN → 部署方声明目录 AEIS_HEX_NN_DIR 下的 hex_nn.exe
-    → 缺省相对路径 hex_nn/target/release/hex_nn.exe。
+    → 缺省**包根锚定**的绝对路径。
     (2026-09-24 故障迁移:旧机 2_ai 工作区已格式化;protocol-compiler
      远端=github.com/FuRongJun-1999/ChineseProgramming)
 
@@ -30,17 +62,68 @@ def _locate_hex_exe() -> Path:
     README.md` §三.③ 的导出精修先例「本机字面量 → 环境变量（缺省 …）」
     （`activation.py` 的 `LINGSHU_DATA_ROOT`）。故本处同样改为环境变量驱动，
     缺省取**仓内相对**路径（不再是任何机器绝对路径 / 占位符）。
+
+    #488 修：上面「缺省取仓内相对路径」正是漏洞本身——相对路径按**调用时
+    cwd** 解析，不可信目录下的同名文件会被 subprocess 直接执行；且该值在
+    import 时固定。现改为**包根锚定**的绝对路径，并在 `resolve_hex_exe()`
+    里于**调用时**做 `is_absolute()` + `is_file()` 校验、fail-closed。
+    本函数保留为 import 时的**宽松**快照（`HEX_EXE`），不做 fail-closed。
     """
-    candidates = [
-        os.environ.get("AEIS_HEX_NN"),
-        (os.path.join(os.environ["AEIS_HEX_NN_DIR"], "hex_nn.exe")
-         if os.environ.get("AEIS_HEX_NN_DIR") else None),
-        os.path.join("hex_nn", "target", "release", "hex_nn.exe"),
-    ]
-    for c in candidates:
-        if c and Path(c).is_file():
+    for c in _configured_hex_exe_candidates():
+        if Path(c).is_file():
             return Path(c)
-    return Path(candidates[-1])      # 保留旧缺省(run_rust_train 报 FileNotFoundError)
+    return _default_hex_exe()
+
+
+def resolve_hex_exe() -> Path:
+    """**调用时**解析 hex_nn.exe 并校验（#488）：
+    ①显式配置（AEIS_HEX_NN / AEIS_HEX_NN_DIR）优先——配置了但不可用则
+      fail-closed（抛 `HexExeError`，不回退缺省，避免配置错误被静默吞掉）；
+    ②未配置 → 包根锚定的绝对缺省；
+    ③任何候选都要求 `is_absolute()` 且 `is_file()`，否则抛 `HexExeError`。
+    绝不按调用时 cwd 解析——cwd 下的同名文件不得被当作 hex_nn.exe 执行。
+    """
+    configured = _configured_hex_exe_candidates()
+    if configured:
+        problems = []
+        for c in configured:
+            p = Path(c)
+            if not p.is_absolute():
+                problems.append("%s（非绝对路径）" % c)
+                continue
+            if p.is_file():
+                return p
+            problems.append("%s（文件不存在）" % c)
+        raise HexExeError(
+            "hex_nn.exe 显式配置不可用（#488 fail-closed，不回退缺省）："
+            + "；".join(problems)
+            + "。请把 AEIS_HEX_NN 设为存在的绝对路径，或清除该变量使用包根缺省。")
+    default = _default_hex_exe()
+    if not default.is_absolute():
+        raise HexExeError("hex_nn.exe 缺省路径非绝对（#488）：%r" % str(default))
+    if not default.is_file():
+        raise HexExeError(
+            "hex_nn.exe 缺省路径不存在（#488 fail-closed）：%s。"
+            "请构建 hex_nn 或用 AEIS_HEX_NN 指向绝对路径。" % default)
+    return default
+
+
+def _minimal_subprocess_env(extra: Optional[Dict[str, str]] = None
+                            ) -> Dict[str, str]:
+    """子进程最小环境（#488，兼修 #350 的透传面）：剔除 `AEIS_*` 前缀与
+    凭据形状名（`*_KEY` / `*_TOKEN` / `*_SECRET` / `*_PASSWORD` …），
+    只保留运行 hex_nn 必需的非敏感变量。显式 `extra`（RAYON_NUM_THREADS /
+    HEX_LR）在收窄之后叠加。"""
+    env: Dict[str, str] = {}
+    for k, v in os.environ.items():
+        if k.upper().startswith("AEIS_"):
+            continue
+        if _CREDENTIAL_ENV_RE.search(k):
+            continue
+        env[k] = v
+    if extra:
+        env.update(extra)
+    return env
 
 
 HEX_EXE = _locate_hex_exe()
@@ -123,19 +206,19 @@ def run_rust_train(lat: np.ndarray, obj_idx: np.ndarray, shape_idx: np.ndarray,
     """打包→调 hex_nn→解包。返回 (D 曲线, 最终权重, 秒)。
     mode: train(串行坐标下降) | train_par(并行批量评估-收敛)。
     threads: train_par 的 rayon 线程数(经环境变量)。"""
+    exe = resolve_hex_exe()          # #488：调用时解析 + fail-closed（先于任何落盘）
     wd = workdir or Path("data/rust_bridge")
     wd.mkdir(parents=True, exist_ok=True)
     pack_data(lat, obj_idx, shape_idx, wd / "data.bin")
     pack_plan(plan, wd / "plan.bin")
     pack_vec(vec0, k1, k2, wd / "vec.bin", k3=k3)
-    env = None
-    if threads or lr != 0.1:
-        import os
-        env = dict(os.environ)
-        if threads:
-            env["RAYON_NUM_THREADS"] = str(threads)
-        env["HEX_LR"] = str(lr)
-    subprocess.run([str(HEX_EXE), mode, str(wd / "data.bin"),
+    extra: Dict[str, str] = {}
+    if threads:
+        extra["RAYON_NUM_THREADS"] = str(threads)
+    if lr != 0.1:
+        extra["HEX_LR"] = str(lr)
+    env = _minimal_subprocess_env(extra)     # #488：子进程最小环境（不透传凭据）
+    subprocess.run([str(exe), mode, str(wd / "data.bin"),
                     str(wd / "plan.bin"), str(wd / "vec.bin"),
                     str(wd / "out.bin")], check=True, env=env)
     return unpack_out(wd / "out.bin")
