@@ -104,6 +104,9 @@ class UnifiedWorldModel:
         self._patterns: Dict = {}              # 推断模式（relations/speed/entropy）
         self._motion_estimates: Dict[str, Tuple[float, float]] = {}
         self._motion_directions: Dict[str, Tuple[float, float, float]] = {}
+        # #418：运动估计的**可读读数**（evidence/confidence/max_obs_dt/…），
+        # 与 world_learner 写进 per_entity 的 motion_* 字段同一套语义
+        self._motion_detail: Dict[str, Dict] = {}
         self.relation_history: List[Dict] = []  # 被替代关系留痕，当前边用于预测
         self._rng = random.Random(seed)
         # 推断参数
@@ -282,16 +285,31 @@ class UnifiedWorldModel:
 
     def _motion_stats(self, eid: str, window: int = 8,
                       observations=None) -> Tuple[float, float]:
-        """真实观测位移/dt；没有新样本不能更新成零速度。"""
+        """真实观测位移/dt；**没有新样本不得覆盖已学估计**（#418，与 world_learner 同口径）。
+
+        口径（与 `WorldLearner._motion_stats` **逐字一致**，改一处必须改两处）：
+          · `stats is None`（连更早的真实观测对都没有）⇒ 回落已学估计，再回落默认
+            `(0.0, 0.3)`；
+          · `stats[2] > 0`（窗口内有**新证据**，含"测得静止"）⇒ **测量优先**，覆盖；
+          · `stats[2] == 0`（估计来自更早的真实观测对，`motion_detail()["evidence"]
+            == "context_only"`）⇒ **保留上一轮已学估计**，不得用上下文证据直接覆盖；
+            只有**首次**（尚无已学估计）才采用"上一次真实观测对"，否则会回落默认
+            `speed=0.3`（#418 主症状：可用样本被丢）；
+          · 方向：非空则更新；**只有新证据**才允许清空（缺失 ≠ 测得静止，#39）。
+        可读读数落在 `self._motion_detail[eid]`（与 `learn()` 写进 per_entity 的
+        `motion_*` 字段同一套语义），两处可并排对照。
+        """
         if observations is None:
             observations = ObservationWindow(self.history, window)
         stats = observations.motion(eid)
+        self._motion_detail[eid] = observations.motion_detail(eid)
         if stats is not None:
-            self._motion_estimates[eid] = stats[:2]
             if stats[3] is not None:
                 self._motion_directions[eid] = stats[3]
-            else:
+            elif stats[2] > 0:
                 self._motion_directions.pop(eid, None)
+            if stats[2] > 0 or eid not in self._motion_estimates:
+                self._motion_estimates[eid] = stats[:2]
         return self._motion_estimates.get(eid, (0.0, 0.3))
 
     def _pair_tendency(self, a: str, b: str, window: int = 8) -> float:

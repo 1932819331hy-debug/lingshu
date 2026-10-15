@@ -430,8 +430,13 @@ _as2 = next((n for n in ast.walk(_tree)
              if isinstance(n, ast.FunctionDef) and n.name == "apply_shared_sync"), None)
 if _as2 is not None:
     _asrc = ast.get_source_segment(SRC, _as2) or ""
-    check('J apply_shared_sync 冲突判定只取 layer, content 两列',
-          "SELECT layer, content FROM nodes WHERE id=?" in _asrc, '')
+    #: ★本行随 lingshu#463 翻转：原 pin 把**旧缺陷口径的 SQL 文本**当要求
+    #: （"冲突判定只取 layer, content 两列"），修复后必然过期。现改为钉**新口径**：
+    #: 判同走声明字段面 helper，且**旧两列口径的文本必须已退役**（回退即红）。
+    check('J apply_shared_sync 判同走声明字段面 helper（旧两列口径已退役）',
+          "_shared_sync_existing_row(" in _asrc
+          and "_shared_sync_field_diffs(" in _asrc
+          and "SELECT layer, content FROM nodes WHERE id=?" not in _asrc, '')
     check('J apply_shared_sync 两个返回键名未变（existing_layer 仍为 str）',
           '"existing_layer": _xl.value' in _asrc, '')
     check('J apply_shared_sync 的 identical/conflicts/overwrite 分支仍在',

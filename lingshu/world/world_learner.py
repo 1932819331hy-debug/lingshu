@@ -119,17 +119,30 @@ class WorldLearner:
 
     def _motion_stats(self, eid: str, window: Optional[int] = None,
                       observations=None) -> Tuple[float, float]:
-        """真实位移/dt；窗口无样本时保留已学参数，不把缺失当静止。"""
+        """真实位移/dt；**没有新样本不得覆盖已学估计**（#418 口径）。
+
+        口径（与 `UnifiedWorldModel._motion_stats` **逐字一致**，改一处必须改两处）：
+          · `stats is None` ⇒ 回落已学估计，再回落默认 `(0.0, 0.3)`；
+          · `stats[2] > 0`（窗口内有新证据，含"测得静止"）⇒ **测量优先**，覆盖；
+          · `stats[2] == 0`（估计来自更早的真实观测对，`evidence == "context_only"`）
+            ⇒ 保留上一轮已学估计，不得用上下文证据直接覆盖；只有**首次**（尚无已学
+            估计）才采用"上一次真实观测对"，否则会回落默认 `speed=0.3`（#418 主症状：
+            可用样本被丢）；
+          · 方向：非空则更新；**只有新证据**才允许清空（缺失 ≠ 测得静止，#39）。
+        """
         if observations is None:
             observations = ObservationWindow(self.history, window or self.window, nested=True)
         stats = observations.motion(eid)
+        previous = self.model.get("per_entity", {}).get(eid)
         if stats is not None:
             if stats[3] is not None:
                 self._motion_directions[eid] = stats[3]
-            else:
+            elif stats[2] > 0:
                 self._motion_directions.pop(eid, None)
-            return stats[:2]
-        previous = self.model.get("per_entity", {}).get(eid, {})
+            if stats[2] > 0 or previous is None:
+                return stats[:2]
+        if previous is None:
+            previous = {}
         return previous.get("persistence", 0.0), previous.get("speed_est", 0.3)
 
     def _pair_tendency(self, a: str, b: str, window: Optional[int] = None
@@ -149,6 +162,9 @@ class WorldLearner:
 
         学得模型（白箱可审计）：
           - per_entity: speed_est / persistence（方向持续性）
+            + #418 运动读数：motion_schema / motion_evidence（window |
+            window+context | context_only）/ motion_confidence（长间隔降权后的
+            加权占比）/ max_obs_dt / long_interval_pairs
           - relations: (a → b, seek/flee, 置信)（趋向-远离点积）
           - stochastic_targets: 追逐随机目标的实体（可达域传播 D1）
         """
@@ -159,11 +175,18 @@ class WorldLearner:
         for eid in eids:
             pers, speed = self._motion_stats(eid, w, observations)
             samples = observations.motion(eid)
+            detail = observations.motion_detail(eid)
             model["per_entity"][eid] = {
                 "speed_est": speed, "persistence": pers,
                 "samples": samples[2] if samples else 0,
                 "last_observed": self.nodes[eid].last_seen,
-                "stale": self.nodes[eid].last_seen < self.tick}
+                "stale": self.nodes[eid].last_seen < self.tick,
+                # #418：把"这个速度是怎么来的"写成数据（不静默、可审计）
+                "motion_schema": detail["schema"],
+                "motion_evidence": detail["evidence"],
+                "motion_confidence": detail["confidence"],
+                "max_obs_dt": detail["max_obs_dt"],
+                "long_interval_pairs": detail["long_interval_pairs"]}
         # 关系候选（趋向/远离）
         for a in eids:
             best_t, best_c, best_n = None, 0.0, 0

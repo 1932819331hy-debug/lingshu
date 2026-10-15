@@ -171,14 +171,20 @@ def test_g4_whole_repo_zero_over_baseline():
     assert res.returncode == 0, data
     assert data["new_over_baseline"] == [], data
     assert data["actual_total"] == data["baseline_total"], data
-    assert data["actual_total"] >= 146, ("基线合计低于 #653 登记值 146"
-                                         "（#609 重测 144 ＋ #653 新增 2），"
+    #: ★2026-10-15（本笔 PR #615）146 → 144：**真实修复导致的下降**，不是放宽判据——
+    #: `lingshu/core/core.py` 78→77（FTS 索引挂载腿补 `warnings.warn`）、
+    #: `lingshu/core/retrieval.py` 1→0（`_doc()` 宽 except 改窄为 `(TypeError, ValueError)`）。
+    #: 反向保护未动：上面 `actual_total == baseline_total` 与 `new_over_baseline == []` 仍是硬判据
+    #: （把计数调回高值或新增静默宽 except 都会立刻判红）。
+    assert data["actual_total"] >= 144, ("基线合计低于本笔登记值 144"
+                                         "（#609 重测 144 ＋ #653 新增 2 − 本笔真实修复 2），"
                                          "判据可能被偷偷放宽")
     assert data["unparsable"] == [], data
     # #609 重测的落点：core.py 计数已同步进基线（46→76；#653 再 76→78，
     # `_tolerant_edges` 边侧逐行容错新增 2 条，见基线文件 #653 登记行）
     core = next(r for r in data["per_file"] if r["file"] == "lingshu/core/core.py")
-    assert core["silent"] == core["baseline"] == 78, core
+    #: 78 → 77：同上（本笔给 FTS 挂载腿补 `warnings.warn` ⇒ 该处不再静默）。
+    assert core["silent"] == core["baseline"] == 77, core
 
 
 def test_g4_baseline_file_documents_609_retest():
@@ -188,4 +194,6 @@ def test_g4_baseline_file_documents_609_retest():
     assert "#609 判定 AST 化后重测" in text, text
     # #653 起基线值 76→78（`_tolerant_edges` 新增 2，见基线 #653 登记行）——
     # 本断言跟随当前基线值，追溯链 = #609 历史区「46→76」＋ #653 登记行「76→78」。
-    assert "lingshu/core/core.py\t78" in text, text
+    #: 78 → 77：本笔真实修复（FTS 挂载腿补 `warnings.warn`）；追溯链 = #609「46→76」
+    #: ＋ #653「76→78」＋ 本笔「78→77（真实修复）」。
+    assert "lingshu/core/core.py\t77" in text, text

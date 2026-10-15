@@ -473,14 +473,49 @@ class _ConnShim:
     ——issue #366：实体名跨场景不唯一，不作台账键）。
     其它 SQL 抛 NotImplementedError（不静默吞）；状态事件未入账时抛
     `BrainError`（同样不静默吞）。legacy 侧 `commit()` 为无操作。
+
+    **能力声明（issue #596）**：本垫片补齐 `DBAPI` 形状的连接协议
+    （`execute` / `executemany` / `commit` / `rollback`）并**显式声明边界**
+    ——`atomic_batch = False`（不保证批量原子性）。消费方
+    （`scene_model.ingest_scene` 的写入段）据此选路，不再用 AttributeError
+    做能力探测：声明为假 ⇒ 直接逐条，不走「批量→失败→回滚→重试」。
+
+    **状态输入的三种语义**（falsy 状态 = 「无状态可写」合法静默 / 非空且未落账
+    必抛 `BrainError` / 非空且落账成功正常返回）见 `execute` 的 docstring
+    ——那里写清了"为什么静默是对的"，免得下一轮把它当缺陷再报一次。
     """
 
     UPDATE_PREFIX = "UPDATE NODES SET STATE_ATTRIBUTES"
+
+    #: 能力声明：`False` = 本连接**不保证** `executemany` 的批量原子性。
+    #: 真 sqlite 连接没有这个属性 ⇒ 消费方 `getattr(conn, "atomic_batch", True)`
+    #: 取缺省真，走批量；本垫片声明为假，消费方直接逐条。
+    #: 为什么必须声明而不是"补上 executemany 就等于有事务"：见 `rollback`。
+    atomic_batch = False
 
     def __init__(self, store: "BrainStore"):
         self.store = store
 
     def execute(self, sql, params=None):
+        """翻译一条 legacy 状态写语句 → 脑侧状态事件。
+
+        **三态语义（钉在这里；别当缺陷再报一次）** —— 对齐仓内既有口径
+        `tests/test_state_write_observable.py` 的 T3：「空状态（`名称|类别|坐标|`）
+        属**无状态可写**，不报警、重建回落 neutral」。
+
+        | 输入 | 行为 | 告警 | 台账 |
+        |---|---|---|---|
+        | **falsy 状态**（`None` / `""`，或 payload 无 `state` 键） | 「**无状态可写**」⇒ **合法静默**：`BrainStore.record_state` 第一句就 `if not state: return False`（**不发 RPC**），本方法**不抛** | **无** | **不落** |
+        | **非空状态 + `record_state` 返回 False** | 账该落却没落（脑端 RPC 回 `ok=False`）⇒ 抛 `BrainError` | **必须可见**（调用方 `ingest_scene` 转 `RuntimeWarning`，见 T2） | 不落 |
+        | **非空状态 + 落账成功** | 正常返回 `self`（DBAPI 形状） | 无 | 落 1 条 |
+
+        为什么 falsy **不**等同于"写失败"（这是仓内既有口径，不是本件新发明）：
+        `ingest_scene` 对**第 4 字段留空**的行给出 `state=""` —— 那是**格式合法**
+        的输入，语义是"该实体本轮没有状态"，不是"状态写失败了"（T3 的既有断言）。
+        若把它当失败，则所有不带状态的场景行每次导入都刷 `RuntimeWarning`
+        ⇒ 告警失去判别力，T2「台账不可写必须告警」也就跟着不可信了。
+        反过来，**非空**状态失败必须响亮——这正是上面第二行的抛错。
+        """
         if not isinstance(sql, str) or not sql.strip().upper().startswith(self.UPDATE_PREFIX):
             raise NotImplementedError("brain conn 垫片只翻译状态写语句；收到：%r"
                                       % (str(sql)[:80],))
@@ -494,6 +529,41 @@ class _ConnShim:
                 "节点正文已写入、台账未落，重建世界会与节点内容不一致"
                 % (node_id, state))
         return self
+
+    def executemany(self, sql, seq_of_params):
+        """逐条翻译落账（与逐条 `execute` 路径**逐位等价**），返回处理条数。
+
+        为什么"批量"在这里只能是逐条（issue #596）：本垫片背后是**跨进程 RPC**
+        （`store.record_state` → `client.call("cg", {op: state_event})`），物理上
+        **不存在真事务**——第 k 条失败时，前 k−1 条已即时落进 append-only 事件台账，
+        撤不回来。故此处逐条调用 `execute`，语义与逐条路径完全相同，只是把连接
+        **协议的形状**补齐，让消费方不必再用 AttributeError 探测能力。
+
+        任一条抛错立即向上抛（不吞、不假装部分成功）。调用方判断"能否靠批量兜底"
+        的唯一依据是 `atomic_batch`——本类恒 `False`，所以 `ingest_scene` 在脑侧
+        直接走逐条，不会先批量再回退。
+        """
+        n = 0
+        for params in (seq_of_params or ()):
+            self.execute(sql, params)
+            n += 1
+        return n
+
+    def rollback(self):
+        """**显式无操作** —— 这不是"假装回滚成功"，是确无可回滚。
+
+        物理事实（决定本方法只能是 no-op）：`record_state` → `client.call("cg", …)`
+        是对**另一进程（脑端 MCP）**的 RPC，每条状态事件在 `execute` 返回时就已
+        即时落账（append-only 台账），本层**没有隐式事务可撤销**。
+
+        写进协议是为了让调用方不必用 AttributeError 探测能力（issue #596），
+        **不是**承诺"批量失败可以靠它回退"。调用方必须看 `atomic_batch`：本类为
+        `False` ⇒ 批量部分失败不可回退 ⇒ 消费方**不得**走"批量→失败→rollback→
+        逐条重试"——那会把已成功落账的事件**重复落账**（append-only），且重试若
+        成功连告警都不会发（实测 3 实体、第 2 条失败 ⇒ 5 次 state_event、
+        台账 4 行、首实体 2 行、0 告警）。
+        """
+        return None
 
     def commit(self):        # noqa: D102 —— 事件已即时落账，无事务
         pass

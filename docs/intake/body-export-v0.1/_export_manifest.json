@@ -108,7 +108,7 @@
     {
      "file": "scene_model.py",
      "src": "aeis.scene_model",
-     "sha256": "0cce56055028e004",
+     "sha256": "7da16366de9e052a",
      "rewrites": 4,
      "sanitized": 0,
      "patches": 0,
@@ -266,7 +266,7 @@
     {
      "file": "world_learner.py",
      "src": "aeis.world_learner",
-     "sha256": "80943255192950d9",
+     "sha256": "dff96d6120d1287f",
      "rewrites": 8,
      "sanitized": 0,
      "patches": 0,
@@ -279,7 +279,7 @@
     {
      "file": "world_model.py",
      "src": "aeis.world_model",
-     "sha256": "690041d299ed421c",
+     "sha256": "027e62b8a72e839e",
      "rewrites": 4,
      "sanitized": 0,
      "patches": 0,
@@ -329,7 +329,7 @@
     {
      "file": "core.py",
      "src": "aeis.core",
-     "sha256": "af7c93c0842ca661",
+     "sha256": "726f0b428f6e18fc",
      "rewrites": 34,
      "sanitized": 2,
      "patches": 2,
@@ -667,6 +667,13 @@
   "integration_base": "777e18f62dfe6918ad271437b887c78d020f0ea4",
   "benchmark_base": "c22385cb2d75f36bc12fd1de4449edbf92be8698",
   "metrics_migration": "docs/world_model_metrics_migration.md",
+  "issues_20261015_rebuild_eb497f2": {
+   "date": "2026-10-15",
+   "kind": "local_fork_modification",
+   "base_commit": "eb497f2ab2d067bc97fcca32281bab5a93e5c7e8",
+   "note": "重建于最新 main（S3 公开面整改 + CI 首跑三红处置后续）；sha256 核验 LF 归一后的工作树文件。",
+   "previous_sha256": {"scene_model.py": "0cce56055028e004", "world_learner.py": "80943255192950d9", "world_model.py": "690041d299ed421c", "core.py": "af7c93c0842ca661"}
+  },
   "inference_window_update": {
    "date": "2026-10-12",
    "base_commit": "cb3a6ea2dbd9771d685b2bf5c1fe398abe69e419",

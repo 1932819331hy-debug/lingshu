@@ -412,30 +412,60 @@ def ingest_scene(agent, scene_desc, store=None, tag: str = "spatial",
         # 状态写入 state_attributes（store 直接更新）。
         # 状态未入账不阻断导入（节点已建，世界仍可加载），但必须可观测：
         # 否则节点正文写着状态、重建世界却回落 neutral，两边静默矛盾。
-        # ★优化（本笔）：旧实现**每个实体**一次 `execute` + `commit()`（N 次 fsync）。
-        # 现改为**先登记、循环后一次 `executemany` + 一次提交**；批量失败时
-        # **回落到逐条路径**（保留原有的逐实体告警文案与「不阻断导入」语义）。
-        # ⇒ 常见路径省 N−1 次提交；失败路径逐位等同旧实现。
+        # ★优化（#515 引入，本件 #596 补齐消费侧）：旧实现**每个实体**一次
+        # `execute` + `commit()`（N 次 fsync）。现改为**先登记、循环后一次写**；
+        # 但"一次写"到底是**批量还是逐条**，由**连接能力**决定（见下方选路）——
+        # 脑侧垫片声明 `atomic_batch=False`（跨进程 RPC、无真事务）⇒ 直接逐条，
+        # 不再"批量→吃 AttributeError→回滚→逐条重试"（那条路会把已落账的重复落账）。
         _pending_states.append((name, state, node.id))
         written.append(node.id)
     if _pending_states:
-        try:
-            store.conn.executemany(
-                "UPDATE nodes SET state_attributes=? WHERE id=?",
-                [(json.dumps({"state": _st}), _nid)
-                 for _nm, _st, _nid in _pending_states])
-            store.conn.commit()
-        except Exception:                                         # noqa: BLE001
-            # 批量失败 ⇒ 回退到逐条（旧路径）：先把可能已开的隐式事务丢掉，
-            # 再逐条重试并逐条告警——粒度和文案与改动前逐位一致。
+        # ---- 按连接能力选路（issue #596：不再用 AttributeError 做能力探测）----
+        # · `atomic_batch` 为真（真 sqlite 连接没有该属性 ⇒ `getattr(..., True)`
+        #   取缺省真）：`executemany` + 一次 `commit()`（省 N−1 次 fsync）；失败先
+        #   `rollback()` **撤销整批**再逐条重试 ⇒ **不重复落账**。
+        # · 为假（脑侧 `_ConnShim`：`record_state` 是对另一进程的 RPC，没有真事务）：
+        #   **直接逐条**，不滑进"批量→失败→回滚→重试"。
+        #
+        # ★ 为什么"补协议"必须与"按能力选路"一起做（本件的真实价值，不只是 issue
+        #   说的"#515 的优化在脑侧是死路径"）：一旦只给垫片补上 `executemany` 而
+        #   消费方不改，脑侧就会真的走批量路径；批量**部分失败**时 `rollback()` 在
+        #   物理上撤不回已落账的事件（`record_state` 是 append-only 台账），回落
+        #   逐条会把**已成功的那几条重复落账**。实测（3 实体、第 2 条 `state_event`
+        #   失败）：只补协议 ⇒ 5 次 `state_event`、台账 4 行、首实体 **2 行**、
+        #   告警 **0 条**（重试成功 ⇒ 连告警都没有，完全不可观测）；按能力选路 ⇒
+        #   3 次调用、台账 2 行、各实体**至多 1 行**、失败那条照旧告警 1 条。
+        _batched = False
+        if getattr(store.conn, "atomic_batch", True):
             try:
-                store.conn.rollback()
-            except (AttributeError, sqlite3.Error):
-                # best-effort 清事务：脑侧 store 的 `conn` 是 `_ConnShim`（无
-                # `rollback`，AttributeError 属**常态**而非异常）；真 sqlite 连接
-                # 无活动事务时 rollback 为 no-op。故此处收窄到这两种预期失败，
-                # 不放宽成 `except Exception`（那会把「库读坏」这类真错静默吞掉）。
-                pass
+                store.conn.executemany(
+                    "UPDATE nodes SET state_attributes=? WHERE id=?",
+                    [(json.dumps({"state": _st}), _nid)
+                     for _nm, _st, _nid in _pending_states])
+                store.conn.commit()
+                _batched = True
+            except (sqlite3.Error, NotImplementedError):
+                # 批量失败 ⇒ 回退到逐条（旧路径）：先把可能已开的隐式事务丢掉，
+                # 再逐条重试并逐条告警——粒度和文案与改动前逐位一致。
+                #
+                # ★ 异常类型**收窄**（issue #596 顺手项，见 tools/silent_except_lint.py
+                #   的既有审计口径 (b)「改窄到具体异常类型」）：
+                #   · `sqlite3.Error`：真连接批量写失败（`rollback` 能撤销整批，重试安全）；
+                #   · `NotImplementedError`：连接不支持该批量语句形态（转逐条即正解）。
+                # **故意不收** `RuntimeError`：脑侧 `BrainError` 派生自 RuntimeError，
+                # 代表"跨进程 RPC 记账失败、物理上不可撤销"。若 `atomic_batch` 被误声明
+                # 为真而走了这条批量路，必须**响亮抛出**（不吞、不假装回滚成功），否则
+                # 就会滑进"回滚（no-op）→ 逐条重试 → 已落账的重复落账、且重试成功时连
+                # 告警都没有"的静默错账——正是本件要消除的那条路径。故"不阻断导入"的
+                # 契约只覆盖**已识别的**批量失败；非预期异常交给上层暴露。
+                try:
+                    store.conn.rollback()
+                except (AttributeError, sqlite3.Error):
+                    # best-effort 清事务：真 sqlite 连接无活动事务时 rollback 为 no-op；
+                    # 无 rollback 的连接只可能抛 AttributeError。故此处收窄到这两种预期
+                    # 失败，不放宽成 `except Exception`（那会把「库读坏」这类真错静默吞掉）。
+                    pass
+        if not _batched:
             for _nm, _st, _nid in _pending_states:
                 try:
                     store.conn.execute(

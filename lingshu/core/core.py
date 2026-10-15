@@ -25,6 +25,7 @@ import time
 import math
 import uuid
 import os
+import warnings
 import hmac as _hmac
 import threading
 import weakref
@@ -1095,7 +1096,21 @@ class LayeredStore:
                 self._fts = _retrieval.FTSIndex.attach(self)
             else:
                 _retrieval.FTSIndex.detach(self)
-        except Exception:
+        except Exception as exc:                       # noqa: BLE001
+            # 可选特性（FTS 索引）挂载失败 ⇒ 降级为「无 FTS」，构造期不因此整体崩。
+            # ★**不静默**（silent_except_lint 基线登记段的口径：宽 except 必须带
+            #   warn/log/print/raise/audit 之一——本处取 `warnings.warn`）：
+            #   否则挂载失败在**默认配置下完全无声**，用户只看到「检索结果变少」，
+            #   无从知道派生索引根本没建起来。
+            # 为何保持宽 except 而不改窄成固定元组：`attach`/`detach` 内部已各自
+            #   收掉自己的 sqlite 预期失败面（`attach` → `sqlite3.OperationalError`；
+            #   `detach` → `sqlite3.Error`，见 `lingshu/core/retrieval.py`），
+            #   所以此处兜的是**开放面**（未知 sqlite / 环境 / API 漂移）。
+            #   改窄会把「未知但无害」的失败升级成构造期硬崩——那是比静默更重的
+            #   缺陷，且属超出本件的语义变更。故按纪律取「补 warn」而非「改窄」。
+            warnings.warn(
+                "FTS 索引挂载失败，已降级为无 FTS（检索候选将退回原路径）：%s: %s"
+                % (type(exc).__name__, exc), RuntimeWarning, stacklevel=2)
             self._fts = None
 
     def _connect(self, dsn: str):
@@ -9020,6 +9035,190 @@ class SpacetimeMemoryEngine:
                 "layers": shared,
                 "note": "原始视觉数据不进共享层（盲区60/61）；仅共享层（锚点/结构）跨实例同步"}
 
+    # ──────────── #463：共享层同步的**判同面**（唯一真源 = `SHARED_SYNC_FIELDS`）────────────
+    #
+    # 为什么单独成段：**判同口径**与**导出字段面**必须同源，否则同一份契约的两个落点
+    # 各自演化 —— #165 把导出改成 `SHARED_SYNC_FIELDS` 全字段，接收端却仍只比
+    # `layer`+`content` 两列 ⇒ 载荷带了全字段、判同只看两列 ⇒ 内容以外的字段变化
+    # 被吞掉且回报 `identical`（#463 的静默分叉）。
+    # 本段只做**归一 + 比对**：不引入任何新语义（不合并策略、不裁决、不降级字段）。
+
+    @classmethod
+    def _shared_canon_json(cls, value, empty: str = "{}"):
+        """JSON 列 → **规范文本**（带类型标记；**数值按数值归一**）；归一不了回 `None`。
+
+        取 `None` 作"不可比"标记是安全的：本函数**成功时恒返回 `str`**，故 `None`
+        不可能等于任何合法规范文本。方向保守 —— 不可比 ⇒ 调用方记为差异
+        （宁可报冲突且可解释，不可报 `identical` 掩盖分叉）。
+        空值回落 `empty` 与 `prepare_shared_sync` 的 `json.loads(col or "{}")`
+        **逐字对齐**，这样"库里的 TEXT"与"载荷里的 dict"两侧同源。
+        序列化交给 `_shared_canon_value`（逐字见那里对"数值归一"与"方向保证"的说明）。
+        """
+        if isinstance(value, str):
+            try:
+                value = json.loads(value or empty)
+            except (TypeError, ValueError):
+                return None
+        elif value is None:
+            try:
+                value = json.loads(empty)
+            except (TypeError, ValueError):
+                return None
+        try:
+            return cls._shared_canon_value(value)
+        except (TypeError, ValueError):
+            return None
+
+    @classmethod
+    def _shared_canon_value(cls, v) -> str:
+        """#615 F4：递归生成 JSON 值的规范文本 —— **带类型标记** + **数值按数值归一**。
+
+        为什么不再用 `json.dumps(..., sort_keys=True)`：JSON 只有一个 number 类型，
+        但 Python 侧 `int` 与 `float` 是**两个**类型，落成文本即分叉
+        （`{"n": 0}` vs `{"n": 0.0}`、`{"n": 1}` vs `{"n": 1.0}`）⇒
+        **数值相等的两条记录被判成差异**（假冲突）。本函数把整值浮点折成同值整数十进制，
+        使其与 `int` 同形。
+
+        方向保证（**只少报假冲突，绝不变成少报真差异**）：
+          · 折叠**仅当** `v.is_integer()`，且折叠目标 `int(v)` 与该浮点**数值相等**
+            （Python 的 `int == float` 是精确比较）⇒ 折叠不会把**不等**的值并到一起：
+              `10**300`（int）与 `1e300`（float）数值本就不等，折叠后文本仍不同 ⇒ 照报冲突；
+              `2**53+1`（int）与 `2.0**53`（float）同理。
+          · 非数值一律先打**类型标记**：字符串 `"0"` → `s:"0"` 与数值 `0` → `n:0` 仍判不同；
+            布尔 `true` 与数值 `1`、`null` 与数值 `0`、`[]` 与 `{}` 亦判不同 ⇒
+            **非数值面语义与改前一致**。
+          · `NaN` 自等（与 `json.dumps` 的文本口径一致）⇒ 幂等重放不因此假冲突。
+          · 键按 `str(k)` 排序 ⇒ 与 `sort_keys=True` 同序，且不吃混合键类型。
+        """
+        if v is None:
+            return "null"
+        if isinstance(v, bool):                        # bool 是 int 子类，必须先判
+            return "true" if v else "false"
+        if isinstance(v, int):
+            return "n:" + str(v)
+        if isinstance(v, float):
+            if v != v:
+                return "n:nan"                         # NaN 自等
+            if v == float("inf"):
+                return "n:inf"
+            if v == float("-inf"):
+                return "n:-inf"
+            if v.is_integer():
+                return "n:" + str(int(v))              # 0.0 → 0；1e2 → 100
+            return "n:" + repr(v)
+        if isinstance(v, str):
+            return "s:" + json.dumps(v, ensure_ascii=False)
+        if isinstance(v, (list, tuple)):
+            return "[" + ",".join(cls._shared_canon_value(x) for x in v) + "]"
+        if isinstance(v, dict):
+            return "{" + ",".join(
+                json.dumps(str(k), ensure_ascii=False) + ":"
+                + cls._shared_canon_value(v[k])
+                for k in sorted(v, key=lambda k: str(k))) + "}"
+        return "o:" + repr(v)
+
+    @classmethod
+    def _shared_field_key(cls, field: str, value):
+        """#463：某一声明字段的**可比形态**。返回 `(key, ok)`；`ok=False` ⇒ 必然记为差异。
+
+        规范化口径（**判同专用** —— 不改任何写入口径/落库形态）：
+          · `tags`                     顺序无关（`sorted`，重复保留）：标签是集合语义
+          · `spatial_coordinates` / `semantic_coordinates` / `state_attributes`
+            / `condition_space`        → **规范文本**（类型标记 + **数值按数值归一**，
+                                        见 `_shared_canon_value`）：dict 与库里 TEXT 同源，
+                                        且 `0` / `0.0` 这类同值异型**不再假冲突**（#615 F4）
+          · `importance` / `confidence` → `_finite_clamp(v, 0, 1, default=0.5)`
+                                       （与 `STNode` 声明的字段默认值同口径，非有限值
+                                        归一到 0.5 而非随类型偶然取 0.0/1.0）
+          · `layer`                    → `MemoryLayer(v).value`
+          · `temporal_coordinate`      → `None` 原样；否则 `float`
+          · 其余（`id`/`content`/`modality`/`entity_id`）→ 原文比较（`None` 原样）
+        """
+        if field == "tags":
+            tags = value
+            if isinstance(tags, str):
+                try:
+                    tags = json.loads(tags or "[]")
+                except (TypeError, ValueError):
+                    return None, False
+            if tags is None:
+                tags = []
+            if not isinstance(tags, (list, tuple)):
+                return None, False
+            return sorted(str(t) for t in tags), True
+        if field in ("spatial_coordinates", "semantic_coordinates",
+                     "state_attributes", "condition_space"):
+            key = cls._shared_canon_json(value)
+            return key, key is not None
+        if field in ("importance", "confidence"):
+            return _finite_clamp(value, 0.0, 1.0, default=0.5), True
+        if field == "layer":
+            try:
+                return MemoryLayer(value).value, True
+            except (TypeError, ValueError):
+                return None, False
+        if field == "temporal_coordinate":
+            if value is None:
+                return None, True
+            try:
+                return float(value), True
+            except (TypeError, ValueError):
+                return None, False
+        return (value if value is None else str(value)), True
+
+    @staticmethod
+    def _shared_value_summary(value, limit: int = 80) -> str:
+        """差异记录里的**值摘要**（截断；保证 JSON 可序列化，便于跨进程回传）。"""
+        try:
+            s = json.dumps(value, ensure_ascii=False, sort_keys=True, default=str)
+        except (TypeError, ValueError):
+            s = repr(value)
+        return s if len(s) <= limit else s[:limit] + "…"
+
+    def _shared_sync_existing_row(self, nid):
+        """取接收侧既有节点的**声明字段面**（一条 `SELECT`，列 = `SHARED_SYNC_FIELDS`）。
+
+        ⇒ 与**写入字段面同口径**（不是 `SELECT *`：不取 `access_count`/`created_at`
+        这类不参与同步的列，也不随 `nodes` 表加列而漂移），且每条目**只发一条**查询。
+        `fetchone()` 为 `None` ⇔ 该 id 不存在（与旧 `existing is None` 同义）。
+        """
+        cols = ", ".join(self.SHARED_SYNC_FIELDS)
+        c = self.store.conn.cursor()
+        c.execute(f"SELECT {cols} FROM nodes WHERE id=?", (nid,))
+        row = c.fetchone()
+        if row is None:
+            return None
+        return dict(zip(self.SHARED_SYNC_FIELDS, row))
+
+    def _shared_sync_field_diffs(self, existing: Dict, incoming: Dict) -> List[Dict]:
+        """逐声明字段比两侧 → 差异清单。
+
+        **空清单 ⇔ 逐字段全同 ⇔ 才允许报 `identical`**；否则每条给出差异**字段名**
+        与两侧值摘要（冲突必须可解释 —— 章程）。
+
+        ★**两条保守取舍（已知会"吞"掉差异，如实标注 · 不改方向）**：
+          ① `tags` 走**集合语义**（`sorted`，顺序无关）⇒ 两侧标签**顺序不同**判 `identical`。
+             后果：接收端 `tags` 的**顺序不会被重建**（`overwrite=True` 亦不重排）。
+             ⇒ `apply_shared_sync` docstring 里"逐字段一致"一句**不含顺序维度**，
+               这是刻意的（标签在 `LayeredStore` 侧按 `get_nodes_by_tag` / `tags LIKE ?`
+               检索，顺序无语义）。
+          ② `importance` / `confidence` 经 `_finite_clamp(v, 0, 1)` **归一后**比较 ⇒
+             **越界值**（如源端 `2.0`、接收端 `1.0`）归一后同值，判 `identical` 且不落库。
+             越界值本属违约输入（写入口 `add_node` 已钳制），此处不再二次报警。
+          两条都是"宁可少报冲突"的方向；反向的**假冲突**（数值等价表示被判差异）
+          已在 #615 F4 修掉（见 `_shared_canon_value`）——两者方向相反，别混。
+        """
+        diffs = []
+        for f in self.SHARED_SYNC_FIELDS:
+            ke, oke = self._shared_field_key(f, existing.get(f))
+            ki, oki = self._shared_field_key(f, incoming.get(f))
+            if oke and oki and ke == ki:
+                continue
+            diffs.append({"field": f,
+                          "existing": self._shared_value_summary(existing.get(f)),
+                          "incoming": self._shared_value_summary(incoming.get(f))})
+        return diffs
+
     def apply_shared_sync(self, payload, overwrite: bool = False) -> Dict:
         """接收端（#165 · 尽力而为）：把 `prepare_shared_sync` 的载荷按 layer 无损重建。
 
@@ -9027,10 +9226,25 @@ class SpacetimeMemoryEngine:
           condition_space/confidence/state_attributes）。
         - **仅接受共享层**（`LayeredStore.SHARED_LAYERS`）条目；载荷里出现本地层
           ⇒ 记入 `rejected`，**不落库**（章程：本地层实例独立，越界）。
-        - **冲突显式报告**：接收侧已有同 id 节点时——内容/层完全一致 ⇒ 记入
-          `identical`（幂等重放，不重写）；不一致 ⇒ 记入 `conflicts` 并**默认不覆盖**
-          （`overwrite=False`）；仅当显式 `overwrite=True` 才落库，且仍留在
-          `conflicts` 里（**绝不静默覆盖**——章程：共享层跨实例一致，冲突须可解释）。
+        - **冲突显式报告（#463 收窄判据）**：接收侧已有同 id 节点时——按
+          `SHARED_SYNC_FIELDS` **逐声明字段**比对（`tags` 顺序无关；JSON 列按规范文本；
+          `importance`/`confidence` 按 `STNode` 声明的默认值归一）。**逐字段全同**才记入
+          `identical`（幂等重放，不重写）；**任一字段不同** ⇒ 记入 `conflicts`（每条带
+          差异**字段名** `fields` 与两侧值摘要 `diff`）并**默认不覆盖**（`overwrite=False`）；
+          仅当显式 `overwrite=True` 才落库，且仍留在 `conflicts` 里（**绝不静默覆盖**
+          ——章程：共享层跨实例一致，冲突须可解释）。
+          ⚠ 收窄前（#165 遗留）判据只有 `layer`+`content` 两列 ⇒ 改了 `tags`/
+          `confidence`/`importance`/`state_attributes` 的载荷被判成 `identical` 且
+          **不落库** ⇒ 元数据静默分叉（正是 issue #463 报的症状）。
+          取数与写入**同字段面**：一条 `SELECT`（列 = `SHARED_SYNC_FIELDS`），非 `SELECT *`、
+          不随条目数变 N+1。
+          ⚠ **"逐字段一致"的边界（两条保守取舍，详见 `_shared_sync_field_diffs`）**：
+            ① `tags` 是**集合语义** —— 两侧标签顺序不同仍判 `identical`，且接收端
+               **不重建顺序**（顺序在检索面无语义）；
+            ② `importance`/`confidence` 经 `_finite_clamp` **归一后**比较 —— 越界值
+               （源端 `2.0`/接收端 `1.0`）归一后同值，判 `identical` 且不落库。
+            反向的**假冲突**（`{"n":0}` vs `{"n":0.0}` 这类数值等价表示）已修
+            （#615 F4）：数值按**数值**比较，非数值面语义不变。
         - 解析失败（缺字段/坏 JSON）的条目记入 `failed`，不毒化整批。
 
         边界（未做，如实声明）：①**未接入**任何自动同步编排（无网络传输、无后台
@@ -9068,22 +9282,24 @@ class SpacetimeMemoryEngine:
                 rejected.append({"id": nid, "layer": layer.value,
                                  "reason": "本地层不入共享层（章程：实例独立）"})
                 continue
-            # ★优化（本笔 · 零行为变更）：本段只用接收侧既有节点的 **layer** 与
-            # **content** 两列做冲突判定，旧实现 `self.store.get_node(nid)` 是
-            # `SELECT *`（读整行 + 建 `STNode`），每进来一条就发一次。改为直取两列。
-            # `fetchone()` 为 None ⇔ 该 id 不存在（与旧 `existing is None` 同义）；
-            # `MemoryLayer(...)` 与 `STNode.from_row` 同款裸露转换 ⇒ 失败语义一致。
-            _cx = self.store.conn.cursor()
-            _cx.execute("SELECT layer, content FROM nodes WHERE id=?", (nid,))
-            _xr = _cx.fetchone()
-            if _xr is not None:
-                _xl = MemoryLayer(_xr[0])
-                same = (_xl == node.layer and _xr[1] == node.content)
-                if same:
+            # ★#463（本笔）：判同**按声明字段面**逐字段比对 —— 不再只比 `layer`+`content`。
+            # 旧口径只比两列 ⇒ 源端改了 `tags`/`confidence`/`importance`/
+            # `state_attributes` 等**内容以外**的字段后重放，接收端判为"完全一致"、
+            # 进 `identical` 且**不落库** ⇒ 元数据变化被吞掉却回报成功，两实例
+            # **静默分叉**（issue #463 的最小复现即此）。
+            # 取数：一条 `SELECT`，列 = `SHARED_SYNC_FIELDS`（与 `prepare_shared_sync`
+            # 同一常量 ⇒ 与写入字段同口径；不是 `SELECT *`，也不随条目数变 N+1）。
+            _erow = self._shared_sync_existing_row(nid)
+            if _erow is not None:
+                _xl = MemoryLayer(_erow["layer"])
+                _diffs = self._shared_sync_field_diffs(_erow, item)
+                if not _diffs:
                     identical.append(nid)
                     continue
                 conflicts.append({"id": nid, "incoming_layer": layer.value,
-                                  "existing_layer": _xl.value})
+                                  "existing_layer": _xl.value,
+                                  "fields": [d["field"] for d in _diffs],
+                                  "diff": _diffs})
                 if not overwrite:
                     continue
             try:

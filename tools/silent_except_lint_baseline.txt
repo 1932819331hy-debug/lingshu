@@ -22,14 +22,17 @@
 #   真正不再被计数，只能改窄异常类型或补 warn/log/raise/audit 动作。
 # ── 登记面 · 用户登记（--update-baseline 保留本段逐字）──
 # 2026-10-13 5603e28（第二/三批工作树） lingshu/world/seven_layer_loop.py:42 F08 合并重复导入回退，静默宽捕获 2→1、总数 114→113；仅收紧登记，不增豁免、不放宽 lint 判据。
+# 2026-10-15 (本笔) 总数 146 → 144，**只下调、无上调**（真实修复，非放宽判据）：
+#   · lingshu/core/core.py 78 → 77：FTS 索引挂载腿的宽 except **补 `warnings.warn`**（不再静默）
+#   · lingshu/core/retrieval.py 1 → 0（条目移除）：`_doc()` 的 `except Exception` **改窄**为 `(TypeError, ValueError)`
+#   ⇒ 二者都按本文件语义「真正让它不再被计数」，不是把判据放宽。
 # ── 登记面 · 结束 ──
 
 lingshu/_pathguard.py	17
 lingshu/core/component_resolver.py	7
-lingshu/core/core.py	78
+lingshu/core/core.py	77
 lingshu/core/longterm_gate.py	11
 lingshu/core/provenance.py	4
-lingshu/core/retrieval.py	1
 lingshu/core/structure_service.py	0
 lingshu/nn/hex_cnn.py	0
 lingshu/world/brain_store.py	1
@@ -44,7 +47,7 @@ lingshu/world/world3d.py	2
 lingshu/world/world_learner.py	3
 lingshu/world/world_model.py	2
 
-# TOTAL 146
+# TOTAL 144
 
 # 2026-10-15 2d3bf15e（PR #429 重放） lingshu/core/core.py 47→46：#329 的 `_write_structure_record` 由「except Exception: return None」改为向调用方传播（留史失败即回滚，见 core.py 该处 docstring）⇒ 少 1 条静默；新增 lingshu/core/structure_service.py = 0。仅按合并态实读登记，不增豁免、不放宽 lint 判据。
 

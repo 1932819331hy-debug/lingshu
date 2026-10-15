@@ -156,7 +156,10 @@ def grams(text: str) -> List[str]:
 def _doc(content: str, tags_json: str) -> str:
     try:
         tags = json.loads(tags_json) if tags_json else []
-    except Exception:
+    except (TypeError, ValueError):
+        #: ⚠ 收窄到 json 解析的**真实失败面**（`json.JSONDecodeError` ⊂ `ValueError`；
+        #: `tags_json` 非字符串则 `TypeError`）。原为宽 `except Exception` 且静默
+        #: ⇒ 既让 `silent_except_lint` 超基线，也会把「库读坏」这类真错一并吞掉。
         tags = []
     # 结构容器标签（chapter:7 / session:3）是元数据，不进全文索引：否则「chapter」的拉丁二元组
     # 与单个数字会成为与内容无关的可匹配词项，打标签本身就会改变排序。
