@@ -386,10 +386,10 @@ class LongTermMemoryGate:
                         "UPDATE nodes SET importance=?, tags=?, confidence=?, layer=? "
                         "WHERE id=?",
                         # #672：`node.importance` 是**库内读回值**（存量行可能越界，
-                    # 如 1e6/inf）——`max` 会让它原样写回，绕过上面入口处的钳制。
-                    # 与姊妹腿 `promote_from_context` 对称，落库前过同一口径。
-                    # default 取 `imp`（入口已归一），以保住 #587 守卫③
-                    # 「合法 hint 的 max 合并语义不动」。
+                        # 如 1e6/inf）——`max` 会让它原样写回，绕过上面入口处的钳制。
+                        # 与姊妹腿 `promote_from_context` 对称，落库前过同一口径。
+                        # default 取 `imp`（入口已归一），以保住 #587 守卫③
+                        # 「合法 hint 的 max 合并语义不动」。
                     (_finite_clamp(max(node.importance, imp), 0.0, 1.0,
                                    default=imp),
                          _json.dumps(tags_merged, ensure_ascii=False),

@@ -10541,8 +10541,10 @@ class SpacetimeMemoryEngine:
         matches = []
         for point in self.store.list_escalation_points(enabled_only=True):
             trigger, condition = point["trigger"], point["condition"]
-            if not (signal in trigger or trigger in signal
-                    or signal in condition or condition in signal):
+            # #656：NULL 经 `or ""` 归一后，`"" in signal` 恒真 ⇒ 空侧不得参与匹配
+            # （fail-closed，与函数开头 `if not signal: return []` 同口径）。
+            if not ((trigger and (signal in trigger or trigger in signal))
+                    or (condition and (signal in condition or condition in signal))):
                 continue
             bound = _parse_escalation_value_bound(condition)
             if bound is not None:
