@@ -1856,7 +1856,13 @@ def sweep_aabb(a, va, b, vb, dt):
         lo = cb[i] - rb[i] - ra[i]                       # 膨胀箱（Minkowski 和）
         hi = cb[i] + rb[i] + ra[i]
         if abs(v[i]) <= _EPS:
-            if ca[i] < lo or ca[i] > hi:
+            # ★修复（issue #703 · 通路②）：本轴**无相对运动**时，若 `ca[i]` 落在
+            #   膨胀箱边界上（`== lo`/`== hi`）即两箱在该轴**恒相切**。本仓全节口径
+            #   是「贴着不算重叠」（`aabb_overlap` 用严格 `<`）⇒ 该轴永不严格重叠
+            #   ⇒ 整对**永不重叠**。原实现用严格 `<`/`>` 只排「分离」，把「恒相切」
+            #   当成「区间内全时段重叠」⇒ 仅 z 相切、沿 x 切向滑移的箱对被报
+            #   `hit=True/toi=0`（实测 entry=-0.5、exit=+0.5），场景层据此回退冻结。
+            if ca[i] <= lo or ca[i] >= hi:
                 return _no_hit()
             continue
         t1 = (lo - ca[i]) / v[i]
@@ -1875,7 +1881,13 @@ def sweep_aabb(a, va, b, vb, dt):
             t_exit = t2
         if t_entry > t_exit:
             return _no_hit()
-    if axis_i is None or t_entry > dt or t_exit < 0.0:
+    # ★修复（issue #703 · 通路①）：闭区间窗口 `[t_entry, t_exit]` 需在 `(0, dt)` 内
+    #   有**非空内部**才算「真重叠」（口径同上：「贴着不算重叠」⇒ 端点相切不算）。
+    #   · `t_exit <= 0.0`：窗口整体落在过去（x 相切 + 相离时 t_exit == -0.0，原用
+    #     严格 `<` 漏掉 `-0.0`）⇒ 无未来重叠；
+    #   · `t_entry >= dt`：窗口起点不早于 dt（含 `t_entry == dt` 的「末端恰好相切」）
+    #     ⇒ 在 `(0, dt]` 内没有内部重叠。
+    if axis_i is None or t_entry >= dt or t_exit <= 0.0:
         return _no_hit()
     toi = max(0.0, t_entry)
     normal = [0.0, 0.0, 0.0]

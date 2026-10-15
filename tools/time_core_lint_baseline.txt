@@ -15,12 +15,12 @@ lingshu/world/physics.py:563:R3      # 运动学外推：匀加速/抛体/沿坡
 lingshu/world/physics.py:564:R3      # 运动学外推：slope_friction 沿坡速度 v_s=v_s0+a·τ，tau 非保持率
 lingshu/world/physics.py:566:R3      # 运动学外推：横向匀速漂移/世界坐标分解 p=p0+drift·τ，tau 非保持率
 lingshu/world/physics.py:969:R1      # 物理量：`_log_cosh`（softplus）用于 drag2 位置闭式，纯函数无时间衰减语义
-lingshu/world/physics.py:2401:R1      # 物理阻尼：欠阻尼振子包络 exp(-ζωt)，非时间核
-lingshu/world/physics.py:2404:R1      # 物理阻尼：临界阻尼响应 (1+ωt)·exp(-ωt)，非时间核
-lingshu/world/physics.py:2406:R1      # 物理阻尼：欠阻尼振子包络 exp(-ζωt)，非时间核
-lingshu/world/physics.py:2422:R1      # 物理量：对数衰减率 exp(-2πζ/√(1-ζ²))，非时间核
-lingshu/world/physics.py:2521:R1      # 物理量：对数衰减率 exp(-2πζ/√(1-ζ²))，非时间核
-lingshu/world/physics.py:2545:R3      # 运动学外推：匀加速/抛体/沿坡闭式 p=p0+v0·τ+½a·τ²，tau=流逝时间非保持率
+lingshu/world/physics.py:2413:R1      # 物理阻尼：欠阻尼振子包络 exp(-ζωt)，非时间核
+lingshu/world/physics.py:2416:R1      # 物理阻尼：临界阻尼响应 (1+ωt)·exp(-ωt)，非时间核
+lingshu/world/physics.py:2418:R1      # 物理阻尼：欠阻尼振子包络 exp(-ζωt)，非时间核
+lingshu/world/physics.py:2434:R1      # 物理量：对数衰减率 exp(-2πζ/√(1-ζ²))，非时间核
+lingshu/world/physics.py:2533:R1      # 物理量：对数衰减率 exp(-2πζ/√(1-ζ²))，非时间核
+lingshu/world/physics.py:2557:R3      # 运动学外推：匀加速/抛体/沿坡闭式 p=p0+v0·τ+½a·τ²，tau=流逝时间非保持率
 lingshu/world/shade_paint.py:215:R1      # 色调映射：软肩曲线 1-exp(-(v-S)/S)（呈现层光学变换），非时间演化
 lingshu/world/stable_lease.py:88:R1      # 既有：手写同核 exp(-γ·t)（与 time_core.cred_factor 同一指数核），未转交统一时间核
 
