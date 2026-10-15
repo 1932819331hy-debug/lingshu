@@ -401,11 +401,27 @@ def load_shapes(path: str, source: str = None) -> Tuple[int, int]:
 
 
 def dump_shapes(path: str, source: str = "builtin", only=None) -> int:
-    """把形状库写成可交换描述。返回类别数。"""
-    cats = list(only) if only else sorted(SHAPE_LIBRARY)
-    doc = {"schema": SHAPES_SCHEMA, "source": source, "pos_origin": "bbox_center",
-           "shapes": {c: [dict(p) for p in SHAPE_LIBRARY[c]] for c in cats
-                      if SHAPE_LIBRARY.get(c)}}
+    """把形状库写成可交换描述。返回类别数。
+
+    #597：`pos_origin` 按**待导出类别的真实口径**如实写出（`shape_origin()`），
+    不再硬编码 `"bbox_center"`——误标的 anchor 口径件在任何再载入时都会被
+    `load_shapes` 的 `_recenter_parts` 归零，枢轴锚点被挪走（实测位移 0.75）。
+    内置库全为 bbox_center ⇒ 纯内置导出与旧实现逐字节一致。
+    fail-closed：schema `lingshu.shapes/1` 的 `pos_origin` 是**文件级单一值**，
+    待导出类别混用两种口径时**拒绝导出**（写出去必有一侧被误标）——按口径
+    分组导出（`only=[...]`），与本模块「非法即 raise、不写半截」的纪律一致。
+    """
+    cats = [c for c in (list(only) if only else sorted(SHAPE_LIBRARY))
+            if SHAPE_LIBRARY.get(c)]
+    origins = {_SHAPE_ORIGINS.get(c, "bbox_center") for c in cats}
+    if len(origins) > 1:
+        raise ValueError(
+            "dump_shapes：待导出类别混用坐标口径 %s——schema %s 的 pos_origin "
+            "是文件级单一值，混源导出必有一侧被误标（#597）。"
+            "请按口径分组导出（only=[...]）。" % (sorted(origins), SHAPES_SCHEMA))
+    doc = {"schema": SHAPES_SCHEMA, "source": source,
+           "pos_origin": origins.pop() if origins else "bbox_center",
+           "shapes": {c: [dict(p) for p in SHAPE_LIBRARY[c]] for c in cats}}
     with open(path, "w", encoding="utf-8", newline="\n") as f:
         json.dump(doc, f, ensure_ascii=False, indent=1, sort_keys=True)
         f.write("\n")
