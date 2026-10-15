@@ -89,11 +89,23 @@ class ChannelCredibilityRegistry:
         try:
             with open(self.persist_path, encoding="utf-8") as f:
                 data = json.load(f)
-            for ch, st in data.items():
-                if ch in self._state and isinstance(st, dict):
-                    self._state[ch].update({k: float(st.get(k, self._state[ch][k])) for k in ("a", "b", "hits", "misses")})
         except Exception:
-            pass
+            # 只兜「文件级」失败（不可读 / 非 JSON）——整体保持构造器先验。
+            return
+        for ch, st in data.items():
+            if ch not in self._state or not isinstance(st, dict):
+                continue
+            # #601：逐通道防护。旧实现把整段循环包进同一个 try——某个通道的
+            # 值不可解析（ValueError/TypeError）时循环当场中断：坏值之前的通道
+            # 已落状态、**之后的健康通道被静默弃养**（保持先验），且随后任一次
+            # _update 触发的全量 save() 会把这份残缺状态固化回盘（永久丢失）。
+            # 与 _sanitize 的纪律同口径：单个通道有毒**只丢该通道**（保持构造器
+            # 先验），不牵连其他通道。dict 推导在异常时整体失败、update 不会
+            # 写入半套值，故毒通道不会留下「一半新一半旧」的混合状态。
+            try:
+                self._state[ch].update({k: float(st.get(k, self._state[ch][k])) for k in ("a", "b", "hits", "misses")})
+            except (TypeError, ValueError):
+                continue
         self._sanitize()
 
     def _sanitize(self) -> None:
