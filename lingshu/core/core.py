@@ -764,10 +764,26 @@ class SelfModel:
         obj = cls()
         if not isinstance(data, dict):
             return obj
-        names = {f.name for f in _dc_fields(cls)}
+        fields = {f.name: f for f in _dc_fields(cls)}
+        # #479：快照重建类型闸——类型不符注解的字段取默认（整体仍可重建，不逐字段抛）。
+        # 第一道闸在 import_all 密钥面（#479），本层防「快照已入库后被其他路径污染」二级面。
         for k, v in data.items():
-            if k in names:
+            if k not in fields:
+                continue
+            ann = fields[k].type
+            ok = (isinstance(v, str) if ann is str
+                  else isinstance(v, list) if ann in (List[str], List[Dict])
+                  else isinstance(v, dict) if ann is Dict
+                  else True)
+            if ok:
                 setattr(obj, k, v)
+        if isinstance(obj.trust_state, dict):
+            ts = obj.trust_state
+            for kk in ("p_trust", "p_gap", "e_weight"):
+                if kk in ts:
+                    ts[kk] = _finite_clamp(ts[kk], 0.0, 1.0, default=0.5)
+            if "t_total" in ts:
+                ts["t_total"] = _finite_clamp(ts["t_total"], 0.0, float("inf"), default=0.0)
         return obj
 
 
@@ -5573,6 +5589,11 @@ class SpacetimeMemoryEngine:
     #: `update_self` 下选错）。
     SELF_MODEL_META_KEY = "self_model_snapshot"
 
+    #: #479：import_all 需密钥的 engine_meta 治理键（身份/信任持久面）。
+    #: 纯技术键（_schema_version/_last_decay_at）无治理载荷，不在闸面——整表拒绝
+    #: 会打掉 schema 版本恢复（值守复核 6164742040 权衡段，编排侧裁定收窄到载荷键）。
+    ENGINE_META_GUARDED_KEYS = frozenset({SELF_MODEL_META_KEY})
+
     def _save_self_model(self) -> None:
         """把运行态自我模型整份写入 `engine_meta` 权威键（#33 落库出口）。
 
@@ -9168,20 +9189,41 @@ class SpacetimeMemoryEngine:
         """
         with open(input_path, "r", encoding="utf-8") as f:
             data = json.load(f)
-        # ① 不可变层覆盖闸（先判后写，fail-closed）：备份中声明的不可变层行。
-        immutable_rows = [r.get("id") for r in data.get("nodes", [])
-                          if r.get("layer") in {lyr.value for lyr in self.store.IMMUTABLE_LAYERS}]
-        if immutable_rows and not verify_designer(designer_key):
-            raise PermissionError(
-                "D-007 设计者认证失败：备份含不可变层（anchor/structure/self）行 "
-                f"（{len(immutable_rows)} 条），密钥无效或未配置 AEIS_DESIGNER_KEY"
-                "（fail-closed，零落库）")
+        # ① 不可变层覆盖闸（先判后写，fail-closed）。
+        # #478：闸判据从「备份声明层」扩为**双列**——声明层或库内旧行 layer 任一属
+        # IMMUTABLE ⇒ 按不可变行处理（需密钥）。旧实现只查声明层 ⇒ 对库内受保护行
+        # 声明 layer=knowledge 即无密钥改写/降级/删除（值守复核 6187575720）。
+        imm_values = {lyr.value for lyr in self.store.IMMUTABLE_LAYERS}
         c = self.store.conn.cursor()
         existing = self._existing_tables()
+        prior_layer = {}
+        if "nodes" in existing:
+            prior_layer = {rid: lyr for rid, lyr in c.execute("SELECT id, layer FROM nodes")}
+        immutable_rows = [r.get("id") for r in data.get("nodes", [])
+                          if r.get("layer") in imm_values or prior_layer.get(r.get("id")) in imm_values]
+        # #478（编排侧裁定 2026-10-15，二次校正）：换层行的**攻击面**已由上方双列闸闭合
+        # ——任一侧属 IMMUTABLE 的既有 id 换层必然进 immutable_rows ⇒ 无密钥 PermissionError、
+        # 零落库。持密钥的换层**放行但显式标注**（沿 #125 硬配套契约：labeled＋audited＋
+        # requires_review），不另设 ValueError——否则打掉 #125 既证的「密钥放行换层」合法场景
+        # （test_issue125 族 c1 回归逮住，量具正常、我方判据过严）。
+        relayer_rows = [r.get("id") for r in data.get("nodes", [])
+                        if r.get("id") in prior_layer and r.get("layer") != prior_layer[r.get("id")]
+                        and (prior_layer.get(r.get("id")) in imm_values or r.get("layer") in imm_values)]
+        # #479（编排侧裁定 2026-10-15）：engine_meta 治理载荷行与 action_logs 带 id 行
+        # 同走密钥闸；灾备恢复由恢复者持密钥执行（#570/#566 同族契约）。
+        guarded_meta = [row.get("key") for row in data.get("engine_meta", [])
+                        if row.get("key") in self.ENGINE_META_GUARDED_KEYS]
+        id_log_rows = [row for row in data.get("action_logs", []) if row.get("id") is not None]
+        if (immutable_rows or guarded_meta or id_log_rows) and not verify_designer(designer_key):
+            raise PermissionError(
+                "D-007 设计者认证失败：备份含需密钥治理面行（不可变层 "
+                f"{len(immutable_rows)} 条 / engine_meta 治理快照 {len(guarded_meta)} 条 / "
+                f"action_logs 带 id 行 {len(id_log_rows)} 条）（fail-closed，零落库）")
         counts = {}
         skipped = []
         discarded = {}
         orphan_rows = []
+        rejected_layer = []
         for table in self.M13_TABLES:
             if table not in existing:
                 skipped.append(table)
@@ -9215,21 +9257,36 @@ class SpacetimeMemoryEngine:
                 orphan_rows = [r for r in rows if r not in keep]
                 rows = keep
             for r in rows:
-                # #574：importance 值域钳制（与 add_node 同款）
-                # 旧实现绕过 add_node 直接 INSERT，越界值原样落库
-                if table == "nodes" and "importance" in r:
-                    r["importance"] = _finite_clamp(
-                        r.get("importance"), 0.0, 1.0, default=0.5)
+                if table == "nodes":
+                    # #478 变体：layer 无效（缺失/NULL/大小写变体/未知名）的行——落库后
+                    # 读面 `MemoryLayer(row[8])` 抛 ValueError（节点从读取面消失）＝毒行
+                    # ⇒ 拒行并报告（值守复核复现体含 NULL 变体）。
+                    if r.get("layer") not in {m.value for m in MemoryLayer}:
+                        rejected_layer.append({"id": r.get("id"),
+                                               "layer": repr(r.get("layer"))[:40]})
+                        continue
+                    # #574：importance 值域钳制（与 add_node 同款）
+                    # 旧实现绕过 add_node 直接 INSERT，越界值原样落库
+                    if "importance" in r:
+                        r["importance"] = _finite_clamp(
+                            r.get("importance"), 0.0, 1.0, default=0.5)
                 c.execute(f"INSERT OR REPLACE INTO {table} ({col_sql}) VALUES ({placeholders})",
                           tuple(r.get(col) for col in cols))
             counts[table] = len(rows)
         # ③ 硬配套：审计只追加（`action_logs` 无更新/删除路径）。
+        if guarded_meta or id_log_rows:
+            self.store.log_action(
+                "import_governance_override",
+                f"经密钥放行导入治理面行：engine_meta 快照 {len(guarded_meta)} 条 / "
+                f"action_logs 带 id 行 {len(id_log_rows)} 条（#479：须事后复核）",
+                outcome={"requires_review": True})
         if immutable_rows:
             self.store.log_action(
                 "import_immutable_override",
                 f"经密钥放行导入不可变层行 {len(immutable_rows)} 条（#125 硬配套：须事后复核）",
                 node_ids=[i for i in immutable_rows if i],
-                outcome={"requires_review": True, "immutable_rows": len(immutable_rows)})
+                outcome={"requires_review": True, "immutable_rows": len(immutable_rows),
+                         "relayer_rows": len(relayer_rows)})
         self.store.conn.commit()
         # 恢复自检：导入后跑 `PRAGMA foreign_key_check` 体检。经上方 #93 预筛，正常
         # 路径下应恒为空；保留本步作为「白名单列裁剪后仍出现悬挂」的兜底观测
@@ -9248,7 +9305,9 @@ class SpacetimeMemoryEngine:
                 "integrity_ok": not dangling and not orphan_rows,
                 "discarded_keys": discarded,
                 "immutable_rows": [i for i in immutable_rows if i],
-                "requires_review": bool(immutable_rows)}
+                "requires_review": bool(immutable_rows or guarded_meta or id_log_rows),
+                "rejected_invalid_layer": {"count": len(rejected_layer),
+                                           "sample": rejected_layer[:20]}}
 
     def verify_integrity(self) -> Dict:
         """M13：完整性校验（边引用节点存在性 + 表计数）

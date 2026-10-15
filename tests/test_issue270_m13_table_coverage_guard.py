@@ -60,7 +60,7 @@ def test_a_清单覆盖引擎自建表全集():
         assert t in M13, "#270：OBS-REV1 表 %s 未进备份清单" % t
 
 
-def test_b_三张表逐表往返数据仍在():
+def test_b_三张表逐表往返数据仍在(monkeypatch):
     """B：不是「只进清单」——三张表的数据必须真的经 export→import 存活。"""
     src = SpacetimeMemoryEngine(":memory:")
     src.add_perception("备份往返探针记忆", skip_dedup=True)
@@ -80,8 +80,11 @@ def test_b_三张表逐表往返数据仍在():
         "B 三张表在场时不应被计入 skipped：%r" % (res["skipped_tables"],))
 
     # 回灌侧：数据实际存活
+    # #479 契约迁移（2026-10-15 编排侧裁定）：备份含 action_logs 带 id 行/engine_meta
+    # 治理快照 ⇒ 恢复须持设计者密钥（灾备由恢复者持钥执行）。原断言一字未动，仅调用点补密钥。
+    monkeypatch.setenv("AEIS_DESIGNER_KEY", "guard-270")
     dst = SpacetimeMemoryEngine(":memory:")
-    imp = dst.import_all(path)
+    imp = dst.import_all(path, designer_key="guard-270")
     for t in OBS_TABLES:
         assert t in imp["imported"], "#270：回灌未覆盖 %s" % t
 
