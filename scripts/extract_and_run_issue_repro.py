@@ -49,9 +49,11 @@
   · 开启：行首（允许前导空白）`{3,}` 或 ~{3,}；info string = 同行其后剩余文本。
   · 闭合：同行定界符字符、长度不短于开启者、且该行除定界符外无其它字符
     （围栏内写的 ` ```js ` 只算代码内容，不算闭合）。
-  · **代码行去缩进**：开启围栏前有 N 个空格缩进时，块内每行去掉行首至多 N 个空格
-    （CommonMark 围栏语义）。旧实现照抄原文行 ⇒ `  ```python` / `  print(1)` 抽出的
-    代码带 2 空格缩进、落盘即成 `IndentationError`，把**合法复现判成失败**（#362①）。
+  · **代码行去缩进**：开启围栏前有 N 列缩进（空格 1 列、tab 展开到下一制表位——
+    CommonMark §2.2 列宽口径）时，块内每行去掉行首至多 N **列**。旧实现只数/只剥
+    空格字符 ⇒ `  ```python` / `  print(1)` 抽出的代码带缩进落盘即成
+    `IndentationError`（#362①）；tab 缩进的围栏更是一个字符都不剥、整块带 tab 落盘
+    同样 `IndentationError`——合法复现被判失败（#599）。
   · **引用块（`>`）内的围栏算块**：行首 `>` 标记（每层后可跟一个空格，可嵌套）
     剥掉后再判围栏与代码行（CommonMark 块引用语义）。旧实现不认 `>` ⇒ 报告人写在
     引用块里的复现脚本**整块抽不到**（#362②）。
@@ -247,10 +249,45 @@ def _bq_strip(line, max_depth=None):
     return s, depth
 
 
+def _indent_width(s):
+    """行首缩进的**列宽**（#599；CommonMark §2.2「制表符」口径）。
+
+    空格记 1 列；制表符展开到下一制表位（按 4 列宽制表位：`w += 4 - (w % 4)`）；
+    遇其它字符即停。为什么按列不按字符：`_FENCE_OPEN` 用 `\\s` 认围栏（tab 缩进的
+    围栏**合法**），而旧实现 `len(head) - len(head.lstrip(" "))` 只数空格 ⇒ tab
+    缩进的围栏 indent=0、`_dedent` 一个字符都不剥 ⇒ 块内每行带着 tab 落盘即
+    `IndentationError`，合法复现被静默判死（#599）。
+    """
+    w = 0
+    for ch in s:
+        if ch == " ":
+            w += 1
+        elif ch == "\t":
+            w += 4 - (w % 4)
+        else:
+            break
+    return w
+
+
 def _dedent(line, n):
-    """去掉行首至多 n 个空格（CommonMark：围栏缩进量从块内代码行剥掉）。"""
-    k = 0
-    while k < n and k < len(line) and line[k] == " ":
+    """去掉行首至多 n **列**缩进（#599；CommonMark 围栏语义＋§2.2 列宽口径）。
+
+    按列宽推进（空格 1 列、tab 展开到下一制表位），剥到累计列宽 ≥ n 或遇非缩进
+    字符为止——与 `_indent_width` 同口径，tab 缩进的围栏才能把块内 tab 一并剥掉。
+    `n <= 0` 直接返回原文（一个字符都不剥）。制表符跨过 n 列边界时整枚剥除
+    （列宽口径下不存在「剥半个 tab」）。
+    """
+    if n <= 0:
+        return line
+    k, w = 0, 0
+    while k < len(line):
+        ch = line[k]
+        if ch == " " and w < n:
+            w += 1
+        elif ch == "\t" and w < n:
+            w += 4 - (w % 4)
+        else:
+            break
         k += 1
     return line[k:]
 
@@ -289,9 +326,10 @@ def _extract_fenced_blocks(text):
       · **块引用**：行首 `>` 标记（可嵌套）剥掉后再判围栏与代码行；开启行的引用
         深度即该块的深度，代码行/闭合行只剥到同深度（非引用块里代码行的 `>` 是
         字面量，不剥）。
-      · **缩进**：开启围栏前有 N 个空格时，块内每行去掉行首至多 N 个空格——旧实现
-        照抄原文行，`  ```python` / `  print(1)` 抽出的代码带缩进、落盘即
-        `IndentationError`，把合法复现判成失败。
+      · **缩进**：开启围栏前有 N 列缩进（空格 1 列、tab 展开到制表位，CommonMark
+        §2.2 列宽口径）时，块内每行去掉行首至多 N 列——旧实现照抄原文行，
+        `  ```python` / `  print(1)` 抽出的代码带缩进、落盘即 `IndentationError`
+        （#362①）；tab 缩进围栏则一个字符都不剥、整块带 tab 落盘（#599）。
     """
     lines = text.replace("\r\n", "\n").replace("\r", "\n").split("\n")
     blocks = []
@@ -357,7 +395,7 @@ def _extract_fenced_blocks(text):
         # 保守按非空白处理；⑥⑦ 打断段落的判据只在文本段落场景起作用）。
         prev_blank = False
         delim = m.group(1)
-        indent = len(head) - len(head.lstrip(" "))
+        indent = _indent_width(head)   # #599：按列宽（tab→制表位），与 _dedent 同口径
         info = head[m.end():].strip()
         lang = info.split()[0].lower() if info else ""
         j = i + 1
