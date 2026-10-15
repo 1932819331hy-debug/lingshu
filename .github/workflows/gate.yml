@@ -87,18 +87,18 @@ jobs:
       matrix:
         include:
           # 3.12 = README「代码主体」节声明的**已测版本矩阵**
-          #        （numpy 2.3.5/2.4.2/2.5.3 · Pillow 12.2.0/12.3.0）——阻断主门禁。
+          #        （numpy 2.3.5/2.4.2/2.5.3 · Pillow 12.3.0）——阻断主门禁。
           - python-version: "3.12"
             experimental: false
             deps_label: ""
             pinned_deps: ""
-          # 3.12 · **依赖下界档**（#209）：钉死 extras 下界（numpy==2.3.5 / Pillow==12.2.0）——
+          # 3.12 · **依赖下界档**（#209）：钉死 extras 下界（numpy==2.3.5 / Pillow==12.3.0）——
           #        默认装的是区间内**最新**，下界从未被覆盖；下界装不上/跑不通即本档红。
           #        与 3.13 同按**未测档** advisory（本机未跑该组合）。
           - python-version: "3.12"
             experimental: true
             deps_label: " · 依赖下界"
-            pinned_deps: "numpy==2.3.5 Pillow==12.2.0"
+            pinned_deps: "numpy==2.3.5 Pillow==12.3.0"
           # 3.13 = **未测档**（README 未覆盖 ⇒ 如实标注降级）：
           #        advisory，失败/装不上依赖不阻断主门禁；实测全绿后再置 experimental: false。
           - python-version: "3.13"
@@ -118,7 +118,7 @@ jobs:
           cache-dependency-path: pyproject.toml
 
       - name: 安装依赖（pip install -e ".[full,dev]"）
-        # full = numpy>=2.3.5,<2.6 + Pillow>=12.2,<13（README 已测区间，pyproject 已声明）；
+        # full = numpy>=2.3.5,<2.6 + Pillow>=12.3,<13（README 已测区间，pyproject 已声明）；
         # dev  = pytest + PyYAML>=6.0,<7（pyproject [project.optional-dependencies] 已声明）。
         #        PyYAML 是**测试件的运行依赖**：tests/test_coggraph_public_paths.py 子进程调用
         #        tools/coggraph/export_coggraph.py，后者模块级 `import yaml`（#163）。只写散文
