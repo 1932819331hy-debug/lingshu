@@ -58,6 +58,16 @@ def neutral_path(p):
     return tail_seg(p) if is_abs_path(p) else p
 
 
+def neutral_title(t):
+    """#625：TITLE_RE 捕获的真源「功能名」若本身是绝对路径（正文写「功能名：<绝对路径>」），
+    必须与同节点 ref_root 同口径掩码——末段＋sha1(原文)前 8 位短指纹（neutral_root_id 同款，
+    保区分度：同末段不同原文指纹不同）。未掩码时该串会原样进 graph.json/viewer_graph.json/
+    naming_report.json 三个公开产物。"""
+    if t and is_abs_path(t):
+        return "%s#%s" % (tail_seg(t) or "root", hashlib.sha1(t.encode("utf-8")).hexdigest()[:8])
+    return t
+
+
 def neutral_root_id(p):
     p = str(p or "")
     if not is_abs_path(p):
@@ -114,7 +124,7 @@ def parse_md(path):
         return None
     body = t[m.end():]
     tm = TITLE_RE.search(body)
-    title = tm.group(1).strip() if tm else (fm.get("id") or os.path.basename(path))
+    title = neutral_title(tm.group(1).strip()) if tm else (fm.get("id") or os.path.basename(path))
     sha = hashlib.sha256(t.encode("utf-8", "replace")).hexdigest()[:12]
     return fm, body, title, sha
 
