@@ -43,22 +43,37 @@ issue 建议的口径（本工具头部登记，供维护者后续整改时对�
 没有独立的豁免机制可照搬）。要真正"豁免"某处，只能收窄异常类型或补审计动作，
 让工具**数不到**它；或把它写进基线计数（本批即如此）。
 
-检测口径（**照抄 issue 的统计脚本**，为的是基线可与 issue 旧读数对表）
+检测口径（宽 except 判定照抄 issue 统计脚本；静默判定 #609 起改 AST 结构判定）
 ----------------------------------------------------------------------
 遍历 AST，对每个 `ast.ExceptHandler`：
   · 宽 except 判定：`n.type is None`（裸 except）或 `ast.unparse(n.type)` 含子串
     `"Exception"`（覆盖 `Exception` / `BaseException` / 元组里含 Exception）；
-  · 静默判定：`ast.unparse(n.body)` 中**不含**下列任一子串：
-    `warn` / `log` / `print` / `raise` / `audit` / `error`。
+  · 静默判定（**#609 起 AST 结构判定**，见 handler_has_audit_action）：handler 体内
+    存在下列任一才算"有记录动作"（否则静默）——
+      a) `ast.Call` 且被调函数**名字链**（`Name.id` / 各级 `Attribute.attr`，如
+         `logger.warning` 的 "logger"/"warning"、`logging.exception` 的
+         "logging"/"exception"）任一环节含 `warn` / `log` / `print` / `raise` /
+         `audit` / `error` 任一子串（**名字层面匹配**，非整个 body 文本）；
+      b) `ast.Raise` 语句（结构性判定）。
+    历史口径（#170～#608）：对 `ast.unparse(n.body)` 整体做上述子串匹配（照抄
+    issue 统计脚本，为基线可对表）。#609 证伪：纯赋值 `fingerprint = None` /
+    `logger = None`（连调用都没有）、`error_count += 1`（仅自增计数器）等
+    **标识符恰含 token 子串**即被误判"已记录"而放行——端到端对照：同构的
+    10 宽 except 文件，写 `pass` 判红 exit 1、写 `fingerprint = None` 放行
+    exit 0，门禁对两者无区分力。新判定是旧口径的**收紧**（旧命中 ⊆ 新命中
+    的反面），收紧量已按 #609 全仓重测并同步进基线。
 命中数按文件聚合：`wide`（宽 except 数）、`silent`（其中静默数）。
 
 已知局限（如实登记）
 --------------------
-L1 静默判定是**子串启发式**，不是数据流分析：
-   · 假阴（把"有记录"判成静默的可能性）：`raise` 出现在 handler 外的同体表达式、
-     或 `logging` 经别名（`lg.info(...)` 不含 `log` 子串时）——本口径会**少算**静默；
-   · 假阳（把"其实没记录"判成有记录）：handler 体内出现**恰好叫 `errors` 的变量**、
-     或 `print` 只出现在字符串里——本口径会**多算**"有记录"。
+L1 静默判定在 #609 后仍是**名字链启发式**，不是数据流分析（但已消灭"纯赋值
+   伪记录"这一最大假阳面）：
+   · 假阴（把"有记录"判成静默的可能性）：`logging` 经完全无关的别名
+     （`lg.info(...)` 名字链不含 `log` 子串时）——本口径会**少算**静默；
+   · 假阳（把"其实没记录"判成有记录）：被调函数**名字本身**恰含 token 子串
+     （如 `printable(x)` / `error_count.clear()` 这类调用名）仍会命中——但
+     纯赋值 `fingerprint = None` / `logger = None` / `error_count += 1`
+     已不再命中（#609 修复面）。
    故本工具是"可机械复现的下界估计"，不是精确语义判定。
 L2 宽 except 的"改窄到具体类型"建议**不**由本工具判定——工具只数"有没有记录动作"，
    不判 handler 捕获的类型是否够窄（那需要逐处人工裁量）。
@@ -107,13 +122,19 @@ import sys
 from pathlib import Path
 from typing import Dict, List, Optional, Sequence, Tuple
 
-LINT_VERSION = 2
+LINT_VERSION = 3   # v3 = #609 静默判定 AST 化（调用名链匹配 + raise 语句）；v2 = #408 unparsable fail-closed
 
 REPO_ROOT = Path(__file__).resolve().parents[1]
 DEFAULT_SCAN_DIR = "lingshu"
 DEFAULT_BASELINE_REL = "tools/silent_except_lint_baseline.txt"
 
-# 判定"有记录动作"的子串（照抄 issue 统计脚本，勿改——基线可对表）
+# 判定"有记录动作"的子串。
+# 历史口径（#170 起）：对 ast.unparse(handler 体) 整体做子串匹配（照抄 issue 统计
+# 脚本，为基线可对表）——已证伪（#609）：纯赋值 `fingerprint = None` / `logger = None` /
+# `error_count += 1` 等标识符恰含 token 子串即被误判"已记录"放行。
+# #609 起改为 **AST 结构判定**（见 handler_has_audit_action）：token 只在**被调函数的
+# 名字链**（Name.id / 各级 Attribute.attr）层面匹配，另加 ast.Raise 语句结构性判定。
+# token 清单本身保持不变（与 #170 历史读数可对表）。
 AUDIT_TOKENS: Tuple[str, ...] = ("warn", "log", "print", "raise", "audit", "error")
 
 MAX_SNIPPET = 160
@@ -124,6 +145,57 @@ REG_END = "# ── 登记面 · 结束 ──"
 
 
 # ---------------------------------------------------------------- 单文件扫描
+def _call_name_chain(func: ast.AST) -> List[str]:
+    """收集被调表达式的**名字链**（仅 Name.id / 各级 Attribute.attr）。
+
+    print(...)            → ["print"]
+    logger.warning(...)   → ["logger", "warning"]
+    logging.exception(...→ ["logging", "exception"]
+    self.log(...)         → ["self", "log"]
+    funcs[0](...) / (get())(...) → []（下标/括号包裹等无名字链）
+
+    名字链任一环节含 AUDIT_TOKENS 子串即算"有记录动作"——故 `logging.exception`
+    经环节 "logging"（含 "log"）命中、`logger.warning` 经 "warning"（含 "warn"）
+    命中。#609：匹配只在**名字层面**进行，不再对 unparse 的整个 handler 体文本
+    做子串匹配（后者会把 `fingerprint = None` / `logger = None` / `error_count
+    += 1` 等纯赋值误判为"已记录"）。
+    """
+    names: List[str] = []
+    node = func
+    while isinstance(node, ast.Attribute):
+        names.append(node.attr)
+        node = node.value
+    if isinstance(node, ast.Name):
+        names.append(node.id)
+    names.reverse()
+    return names
+
+
+def handler_has_audit_action(handler_body: Sequence[ast.stmt]) -> bool:
+    """AST 结构判定：handler 体内是否存在「记录动作」（#609 起）。
+
+    满足下列任一即算有：
+      a) 存在 ast.Call，且被调函数名字链（见 _call_name_chain）任一环节含
+         AUDIT_TOKENS 任一子串（函数名/属性名层面匹配，非整个 body 文本）；
+      b) 存在 ast.Raise 语句（结构性判定，不靠 "raise" 子串）。
+
+    与 #170 历史口径（unparse 整体子串匹配）的关系：新判定是旧判定的**收紧**——
+    凡新判定命中者旧判定必命中（名字必出现在 unparse 文本中；raise 语句亦然），
+    反之不然（纯赋值/字符串字面量中的 token 不再命中）。收紧量已按 #609 重测
+    并同步进基线（见 tools/silent_except_lint_baseline.txt 的 #609 重测记录）。
+    """
+    for stmt in handler_body:
+        for sub in ast.walk(stmt):
+            if isinstance(sub, ast.Raise):
+                return True
+            if isinstance(sub, ast.Call):
+                if any(tok in name
+                       for name in _call_name_chain(sub.func)
+                       for tok in AUDIT_TOKENS):
+                    return True
+    return False
+
+
 def scan_source(text: str) -> Dict:
     """扫描一段源码，返回 {wide, silent, hits, unparsable}。
 
@@ -145,8 +217,8 @@ def scan_source(text: str) -> Dict:
         if not (node.type is None or "Exception" in ty):
             continue
         wide += 1
-        body = ast.unparse(node.body)
-        if any(tok in body for tok in AUDIT_TOKENS):
+        # #609：AST 结构判定（调用名链匹配 + raise 语句），取代 unparse 子串匹配
+        if handler_has_audit_action(node.body):
             continue
         silent += 1
         ln = getattr(node, "lineno", 0)
@@ -202,7 +274,7 @@ def render_baseline(counts: Dict[str, int],
         "# 格式：<仓内相对路径><TAB><静默数>   （`#` 起为注释）",
         "# 语义：每文件**允许存在**的静默宽 except 上限；超上限或出现基线外新文件 ⇒ 退出 1。",
         "# 基线来源：HEAD b846086 实测（python -X utf8 tools/silent_except_lint.py --update-baseline）。",
-        "#   口径 = issue #170 统计脚本逐字（宽 except=Exception/裸；静默=handler 体无 warn/log/print/raise/audit/error）。",
+        "#   口径：宽 except=Exception/裸；静默=#609 起 AST 结构判定（调用名链含 warn/log/print/raise/audit/error 子串，或 raise 语句）。",
         "#   两组读数对表：issue 原基线 a215d8b = 108/81；本 worktree b846086 实测 = 151 宽 / 114 静默。",
         "#   （并行批次已改源码的那棵树会更高——本基线取**本工作区** b846086 的值，"
         "不与其它工作区混比。）",
