@@ -82,6 +82,62 @@ def content_grams(terms: Sequence[str]) -> List[str]:
     return kept or toks
 
 
+# ---------- 结构锚定（LINGSHU_ANCHOR=1；默认关闭，与 LINGSHU_FTS 独立） ----------
+# 问句点名一个「容器」（第七章 / 第3次会话 / chapter 7）时，容器本身就是最强的检索信号：
+# 容器里的内容不会复述「第七章」「在讲什么」这些字，字面检索因此系统性落空。
+# 契约：写入方用标签 `<kind>:<n>` 标记容器（chapter:7、session:3）；查询侧解析锚点 →
+# 取同标签节点 → 按容器内相关度排在最前，不足 limit 再用原排序补齐。无锚点 → 原路径逐位不变。
+ANCHOR_FLAG = "LINGSHU_ANCHOR"
+_CN_DIGIT = {"零": 0, "〇": 0, "一": 1, "二": 2, "两": 2, "三": 3, "四": 4, "五": 5,
+             "六": 6, "七": 7, "八": 8, "九": 9}
+_NUM = r"([0-9]{1,4}|[零〇一二两三四五六七八九十百]{1,6})"
+# (正则, 容器种类)。只认「第N+量词」与英文 chapter/session N 两种显式写法，不猜隐式指代。
+ANCHOR_PATTERNS = (
+    (re.compile("第" + _NUM + r"\s*[章回]"), "chapter"),
+    (re.compile("第" + _NUM + r"\s*[次场轮]?\s*(?:会话|对话|聊天)"), "session"),
+    (re.compile(r"\bchapter\s+([0-9]{1,4})\b", re.I), "chapter"),
+    (re.compile(r"\bsession\s+([0-9]{1,4})\b", re.I), "session"),
+)
+
+
+CONTAINER_TAG = re.compile(r"^(?:chapter|session):[0-9]+$")
+
+
+def anchor_enabled() -> bool:
+    return os.environ.get(ANCHOR_FLAG, "").strip() == "1"
+
+
+def cn_number(s: str) -> Optional[int]:
+    """阿拉伯数字或 1–999 的中文数字（十五、二十、一百零三）；无法解析返回 None。"""
+    if s.isdigit():
+        return int(s)
+    if not s or any(ch not in _CN_DIGIT and ch not in "十百" for ch in s):
+        return None
+    total, cur = 0, None
+    for ch in s:
+        if ch in _CN_DIGIT:
+            cur = _CN_DIGIT[ch]
+        else:
+            unit = 10 if ch == "十" else 100
+            total += (1 if cur is None else cur) * unit
+            cur = None
+    total += cur or 0
+    return total or None
+
+
+def parse_anchors(query: str) -> List[str]:
+    """问句中显式点名的容器 → 标签列表（保序去重），如「第十五章」→ ['chapter:15']。"""
+    out: List[str] = []
+    for pat, kind in ANCHOR_PATTERNS:
+        for m in pat.finditer(query or ""):
+            n = cn_number(m.group(1))
+            if n is not None:
+                tag = f"{kind}:{n}"
+                if tag not in out:
+                    out.append(tag)
+    return out
+
+
 def grams(text: str) -> List[str]:
     """字符二元组（段内），单字段保留单字；保序去重。
 
@@ -102,7 +158,10 @@ def _doc(content: str, tags_json: str) -> str:
         tags = json.loads(tags_json) if tags_json else []
     except Exception:
         tags = []
-    text = (content or "") + " " + " ".join(str(t) for t in tags if t is not None)
+    # 结构容器标签（chapter:7 / session:3）是元数据，不进全文索引：否则「chapter」的拉丁二元组
+    # 与单个数字会成为与内容无关的可匹配词项，打标签本身就会改变排序。
+    text = (content or "") + " " + " ".join(str(t) for t in tags
+                                            if t is not None and not CONTAINER_TAG.match(str(t)))
     return " ".join(grams(text))
 
 
@@ -230,6 +289,31 @@ class FTSIndex:
                 break
             inner = inner << 2  # 内层放大 4 倍
         return [(tuple(r)[:-1], -float(r["_b"])) for r in rows[:want]]
+
+    def scores_within(self, query_terms: Sequence[str], nids: Sequence[str]) -> dict:
+        """{nid: BM25 正分}：只在给定节点集合内打分（结构锚定的容器内排序）；未命中者不出现。"""
+        toks: List[str] = []
+        seen = set()
+        for t in query_terms:
+            for g in grams(t):
+                if g not in seen:
+                    seen.add(g)
+                    toks.append(g)
+        if not toks or not nids:
+            return {}
+        self.sync()
+        match = " OR ".join('"' + g + '"' for g in toks[:MAX_QUERY_GRAMS])
+        conn = self.store.conn
+        out = {}
+        ids = list(nids)
+        for i in range(0, len(ids), 500):  # 分批，避开 SQLite 变量上限
+            part = ids[i:i + 500]
+            sql = ("SELECT m.nid AS nid, f.rank AS b FROM nodes_fts f JOIN nodes_fts_map m "
+                   "ON m.frid = f.rowid WHERE nodes_fts MATCH ? AND m.nid IN (%s)"
+                   % ",".join("?" for _ in part))
+            for r in conn.execute(sql, [match] + part).fetchall():
+                out[r["nid"]] = -float(r["b"])
+        return out
 
     def temporal_neighbors(self, nids: Sequence[str], layers=None,
                            window: float = NEIGHBOR_WINDOW_S) -> List[Tuple[str, tuple]]:

@@ -158,7 +158,7 @@ def engine():
 
 def flags():
     keys = ("LINGSHU_FTS", "LINGSHU_FTS_CONTEXT", "LINGSHU_RETRIEVAL_NO_TOUCH",
-            "LINGSHU_CONTRADICTION", "LINGSHU_TMS")
+            "LINGSHU_CONTRADICTION", "LINGSHU_TMS", "LINGSHU_ANCHOR")
     return {k.replace("LINGSHU_", "").lower(): os.environ.get(k, "0") for k in keys}
 
 

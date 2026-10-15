@@ -7,7 +7,7 @@ cd "$(dirname "$0")"
 export PYTHONDONTWRITEBYTECODE=1 PYTHONWARNINGS=ignore
 python fetch_data.py
 mkdir -p results; : > results/raw.jsonl
-OFF="LINGSHU_FTS=0 LINGSHU_FTS_CONTEXT=0 LINGSHU_RETRIEVAL_NO_TOUCH=0 LINGSHU_CONTRADICTION=0 LINGSHU_TMS=0"
+OFF="LINGSHU_FTS=0 LINGSHU_FTS_CONTEXT=0 LINGSHU_RETRIEVAL_NO_TOUCH=0 LINGSHU_CONTRADICTION=0 LINGSHU_TMS=0 LINGSHU_ANCHOR=0"
 run() { local cfg="$1"; shift; echo ">> [$cfg] $*" >&2
         env $OFF $(cfg_env "$cfg") python "$@" 2>/dev/null | sed "s/^{/{\"cfg\": \"$cfg\", /" >> results/raw.jsonl; }
 cfg_env() { case "$1" in
@@ -18,7 +18,9 @@ cfg_env() { case "$1" in
   fts_no_touch) echo "LINGSHU_FTS=1 LINGSHU_RETRIEVAL_NO_TOUCH=1";;
   contra) echo "LINGSHU_CONTRADICTION=1";;
   fts_contra) echo "LINGSHU_FTS=1 LINGSHU_CONTRADICTION=1";;
-  all) echo "LINGSHU_FTS=1 LINGSHU_FTS_CONTEXT=1 LINGSHU_RETRIEVAL_NO_TOUCH=1 LINGSHU_CONTRADICTION=1 LINGSHU_TMS=1";;
+  anchor) echo "LINGSHU_ANCHOR=1";;
+  fts_ctx_anchor) echo "LINGSHU_FTS=1 LINGSHU_FTS_CONTEXT=1 LINGSHU_ANCHOR=1";;
+  all) echo "LINGSHU_FTS=1 LINGSHU_FTS_CONTEXT=1 LINGSHU_RETRIEVAL_NO_TOUCH=1 LINGSHU_CONTRADICTION=1 LINGSHU_TMS=1 LINGSHU_ANCHOR=1";;
 esac; }
 # 开关名自检：每个 LINGSHU_* 必须是源码里真实读取的变量名（防错拼 / 截断名被 env 当程序名或静默不生效）
 for v in $(printf '%s\n' "$OFF" "$(cfg_env all)" | tr ' ' '\n' | sed -n 's/^\(LINGSHU_[A-Z_]*\)=.*/\1/p' | sort -u); do
@@ -29,6 +31,12 @@ SCALE="10000"; [ "${FULL:-0}" = 1 ] && SCALE="10000 50000"
 for c in base fts fts_ctx; do
   for a in "hmb A" "hmb B" "hmb B_full"; do run $c bench_search.py $a; done
   for n in $SCALE; do run $c bench_search.py hmbscale $n; ORDER=shuffle run $c bench_search.py hmbscale $n; run $c bench_search.py locomo $n; done
+done
+# 1b) 结构锚定（写入容器标签 chapter:N；改前 / 只开锚定 / FTS+语境 关↔开锚定，含按题型拆分）
+for c in base anchor fts_ctx fts_ctx_anchor; do
+  for a in "hmb A" "hmb B" "hmb B_full"; do CONTAINER_TAGS=1 run $c bench_search.py $a; done
+  CONTAINER_TAGS=1 run $c bench_search.py locomo 0
+  for cut in A B; do run $c bench_anchor.py $cut; done
 done
 # 2) recall 端到端（三轮连续查询）
 for c in base no_touch all; do for cut in A B; do run $c bench_recall_drift.py $cut 3; done; done
