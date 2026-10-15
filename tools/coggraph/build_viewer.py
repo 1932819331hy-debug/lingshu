@@ -339,10 +339,33 @@ def main(argv=None):
     def canon(x):
         return alias_to_canon.get(x, x)
 
+    # ---- #645：R5 同名 phantom 边过滤（折叠循环之前，消费侧口径）——
+    # derive_edges 的 R5 在正文里搜标题，同名组（a1/a2/a3 同标题）里 a2/a3 的
+    # 正文首行 `# 功能名：<自身标题>` 会匹配到组首 a1 ⇒ 产出 a2→a1 / a3→a1 的
+    # 「互引」边——这是同名声明（自身标题行递归），不是被别的概念引用（#359）。
+    # 审计侧 naming_report 的 Q1 deg（:74）与 r5_in（:95-97/#606）两处都已按
+    # 「提及者标题 == 被提及标题」滤掉，本端旧实现零过滤 ⇒ 被审计判「不存在」的边
+    # 在视图侧画成「正文互引」（body_crossref 在 DEFAULT_EDGE_ON 默认可见集合）
+    # 且计入 degree。与 naming_report 完全同口径（title_of 的 strip 语义一致）；
+    # derive_edges 产出侧不动（审计与视图共用真源，过滤是消费侧口径问题）。
+    # 损耗计数可见（#618 纪律）：stdout 折叠损耗行新增一类 + 顶层 phantom_r5_dropped 恒写。
+    title_of = {n["id"]: (n.get("title") or "").strip() for n in g["nodes"]}
+    phantom_r5_dropped = 0
+    d_edges_kept = []
+    for e in d_edges:
+        if (e.get("rule") == "R5_body_crossref"
+                and title_of.get(e.get("s"), "") == title_of.get(e.get("t"), "")):
+            phantom_r5_dropped += 1     # 同名 phantom：与 naming_report #359/#606 同口径剔除
+            continue
+        d_edges_kept.append(e)
+    d_edges = d_edges_kept
+
     # #618：折叠损耗必须可见，不再静默丢边。两类损耗分别计数——
     #   L1 自环丢弃（折叠后 s==t；真源 export 侧无 s==t 防护，可自带 a->a）；
     #   L2 同键合并（两条真关系折叠后撞 (s,t,type,derived) 同键，并成一条）。
     #   L3 别名节点剔除（下方 vnodes 过滤）是 #410 的刻意设计，不属损耗、不告警。
+    #   L4 R5 同名 phantom（#645，上方已在上游剔除）：同名标题行递归互引，非损耗
+    #      语义的折叠，但同走「计数可见」纪律（判据见上方 #645 块）。
     all_edges, seen_edge = [], set()
     selfloop_dropped, dup_merged = 0, 0
     for e in g["edges"] + d_edges:
@@ -356,10 +379,11 @@ def main(argv=None):
             continue
         seen_edge.add(k)
         all_edges.append({"s": s, "t": t, "type": e["type"], "derived": bool(e.get("derived"))})
-    if selfloop_dropped or dup_merged:
-        print("折叠损耗：自环丢弃 %d 条 / 同键合并 %d 条（同义折叠后 s==t 或同键重复被剔除，"
-              "计数见 viewer_graph.json 顶层 dropped_selfloop / merged_edges）"
-              % (selfloop_dropped, dup_merged))
+    if selfloop_dropped or dup_merged or phantom_r5_dropped:
+        print("折叠损耗：自环丢弃 %d 条 / 同键合并 %d 条 / 同名 phantom %d 条"
+              "（同义折叠后 s==t、同键重复、R5 同名标题行递归互引（#645）被剔除，"
+              "计数见 viewer_graph.json 顶层 dropped_selfloop / merged_edges / phantom_r5_dropped）"
+              % (selfloop_dropped, dup_merged, phantom_r5_dropped))
     # #640：derived 必须是**折叠后净数**——旧口径取折叠前 len(d_edges)，而
     #   dropped_selfloop/merged_edges 恰从这批边里剔除 ⇒ 侧栏「全库 N 边」
     #   （counts.edges + derived）系统性高估、偏差恒等于损耗量。源头修
@@ -429,10 +453,12 @@ def main(argv=None):
     doc = (HTML.replace("%%LAYER_COLOR%%", json.dumps(LAYER_COLOR))
                .replace("%%RULE_COLOR%%", json.dumps(RULE_COLOR)))
     # #618：损耗计数恒写（含 0），供下游与 meta.counts.edges 对账（顶层口径同 derived，见 #413）。
+    # #645：phantom_r5_dropped 同恒写（含 0）——R5 同名 phantom 剔除量与 #618 两类损耗同纪律。
     vgraph = {"meta": g["meta"], "nodes": vnodes, "edges": vedges,
               "layer_count": dict(layer_count), "edge_type_count": dict(et_count),
               "derived": derived_net, "merged_aliases": merged_alias_count,
-              "dropped_selfloop": selfloop_dropped, "merged_edges": dup_merged}
+              "dropped_selfloop": selfloop_dropped, "merged_edges": dup_merged,
+              "phantom_r5_dropped": phantom_r5_dropped}
 
     os.makedirs(args.out, exist_ok=True)
     # #620：cytoscape 校验前置到产物落盘之前——官方/自备的判定要登记进
