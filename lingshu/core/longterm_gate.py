@@ -325,7 +325,7 @@ class LongTermMemoryGate:
         二者不一致的旧行为已修（lingshu #224）。
         """
         engine = self.engine
-        from .core import MemoryLayer
+        from .core import MemoryLayer, _finite_clamp
         # 已存在性检查（同内容重复快照 → 提升而非新建）。
         # #217：限定在调用方可写的本地层——不限层时会命中锚点/结构/自我层，
         # 后续裸 SQL 更新绕过 add_node 的 IMMUTABLE_LAYERS + Role 校验，
@@ -340,7 +340,19 @@ class LongTermMemoryGate:
             pass
 
         ev = self.evaluate(content, source, tags, existing_id)
+        # #587：值域闸**单点收口**——本门控有两处**裸 SQL**写 importance
+        # （下方「已存在」分支与 `promote_from_context`），不经 `STNode.to_row`
+        # 的 `_finite_clamp`（#164/#185 的钳制只挂在 `add_*` 腿）。旧实现
+        # `importance_hint=1e6/inf` 原样落库 ⇒ `inf × decay = inf` 永生、
+        # `ORDER BY importance DESC` 检索恒占首位、挤占 LIMIT 窗口，且
+        # `imp ≥ LONG_TERM_THRESHOLD` 直接触发 `protect_node` 永久保护。
+        # 现按 #185 口径在**入口**归一（与 `add_node` 的
+        # `_finite_clamp(x, 0.0, 1.0, default=0.5)` 同向）：有限值钳到 [0,1]，
+        # 非有限（NaN/±inf）回落 `default`；此处 default 取**评估值**
+        # `ev["importance"]`——提示值坏掉时退回本门控自己的评分，而不是凭空
+        # 造一个 0.0/0.5。阈值本体未改。
         imp = importance_hint if importance_hint is not None else ev["importance"]
+        imp = _finite_clamp(imp, 0.0, 1.0, default=ev["importance"])
         # 层级决策与最终 importance 统一（显式提示同样参与层级判定）
         if imp >= self.LONG_TERM_THRESHOLD:
             decided = "long_term"
@@ -510,7 +522,7 @@ class LongTermMemoryGate:
         engine = self.engine
         promoted = []
         try:
-            from .core import MemoryLayer
+            from .core import MemoryLayer, _finite_clamp
             nodes = engine.store.get_layer_nodes(MemoryLayer.CONTEXT)
             for node in nodes:
                 if len(promoted) >= limit:
@@ -518,7 +530,13 @@ class LongTermMemoryGate:
                 ev = self.evaluate(node.content, "promote", node.tags, node.id)
                 if ev["layer"] in ("long_term", "knowledge"):
                     import json as _json
-                    new_imp = max(node.importance, ev["importance"])
+                    # #587：本腿同为**裸 SQL**——`ev["importance"]` 经 `evaluate`
+                    # 已在 [0,1]，但 `node.importance` 是**库里读回值**，修复前
+                    # 落库的越界行（1e6/inf）会经 `max` 再次写回 ⇒ 一并过同一
+                    # 钳制（同 `write_snapshot` 入口口径，阈值未改）。
+                    new_imp = _finite_clamp(
+                        max(node.importance, ev["importance"]), 0.0, 1.0,
+                        default=ev["importance"])
                     tags_new = list(dict.fromkeys((node.tags or []) + ["promoted"]))
                     engine.store.conn.execute(
                         "UPDATE nodes SET importance=?, layer=?, tags=? WHERE id=?",
