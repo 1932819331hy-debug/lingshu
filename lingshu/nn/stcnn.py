@@ -30,13 +30,19 @@ def frames_to_voxel(frames, width=None, height=None):
 # ============ 二、3D 卷积（时间+空间统一卷积核） ============
 def conv3d(voxel, kernel, stride=(1, 1, 1)):
     """3D 卷积：核 (kt, kh, kw) 同时跨时间+空间滑窗 → 时空特征图。
-    核可自定义为时空滤波器（如运动检测核 = 时间差分×空间平滑）。"""
+    核可自定义为时空滤波器（如运动检测核 = 时间差分×空间平滑）。
+
+    边界口径（#598）：输入任一维小于核（含 stride 放大后 ot<0 的情形）时，
+    输出维截断到 0——返回空张量 (0,oh,ow) 等，**不抛异常**；与同文件
+    max_pool3d 的 T//kt 非负截断同口径（下游拿到空特征图可照常 continue）。
+    此前 ot=(T-kt)//st+1 对 T<kt 因 Python // 地板取整得负数，
+    np.zeros 抛 ValueError: negative dimensions。"""
     T, H, W = voxel.shape
     kt, kh, kw = kernel.shape
     st, sh, sw = stride
-    ot = (T - kt) // st + 1
-    oh = (H - kh) // sh + 1
-    ow = (W - kw) // sw + 1
+    ot = max(0, (T - kt) // st + 1)
+    oh = max(0, (H - kh) // sh + 1)
+    ow = max(0, (W - kw) // sw + 1)
     out = np.zeros((ot, oh, ow), dtype=np.float32)
     for t in range(ot):
         for i in range(oh):
