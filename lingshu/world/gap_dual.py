@@ -85,7 +85,13 @@ class GapDual:
                 return None
             return d if math.isfinite(d) else None
 
-        valid = [(pid, p) for pid, p in usable if _finite_dist(p) is not None]
+        # #681：`_finite_dist` 的结果（已转 float 的有限值）**同一口径**用于
+        # 过滤、排序键与读数。旧实现过滤用 `_finite_dist`，排序键与读数却取原值
+        # `p.get("dist")` ⇒ 两套口径：数值字符串按字典序选路（"10" < "9" 为真，
+        # 静默错选）；字符串与浮点混用且 `_cond_gap` 平局时 `'<' not supported
+        # between float and str` 穿透（TypeError）。现将三者统一为 best_d。
+        valid = [(pid, p, _finite_dist(p)) for pid, p in usable
+                 if _finite_dist(p) is not None]
         if not valid:
             return {"d_task": float("inf"), "path_count": len(graph_paths),
                     "usable_paths": len(usable), "blindspot": True,
@@ -105,10 +111,9 @@ class GapDual:
                 return len(set(task_conditions) - set(p.get("cond_set") or ()))
             return 0
 
-        best_id, best = min(
-            valid, key=lambda kv: (_cond_gap(kv[1]),
-                                   kv[1].get("dist", float("inf"))))
-        d_task = float(best.get("dist", float("inf")))
+        best_id, best, best_d = min(
+            valid, key=lambda kv: (_cond_gap(kv[1]), kv[2]))
+        d_task = best_d
         cond_gap = _cond_gap(best)
         # #124：可用路径缺 dist ⇒ d_task=∞，按 :16/:44 规定即为 BLINDSPOT
         # （旧实现恒返回 blindspot=False，下游按 blindspot 分支会误判为可执行）。
