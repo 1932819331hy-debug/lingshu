@@ -209,6 +209,25 @@ def test_g5_subprocess_env_excludes_credentials(monkeypatch):
         assert env.get("PATH") == os.environ["PATH"], "PATH 等必需变量必须保留"
 
 
+def test_g5c_env_is_whitelist_not_blacklist(monkeypatch):
+    """G5c：判据必须是**白名单**——非凭据形状的无关变量同样不得透传。
+
+    这一条区分「白名单」与「黑名单」：黑名单只拦已知凭据形状，任意新名字
+    （如 `IGCCSVC_DB` 这类不含 KEY/TOKEN 的凭据）照旧泄露；白名单是
+    「不声明就不给」。理由与 `#227` 同款（`brain_store._brain_env`）。
+    """
+    monkeypatch.setenv("SOME_UNRELATED_VAR_488", "v")
+    monkeypatch.setenv("IGCCSVC_DB", "dsn")        # 无凭据形状词的真凭据名
+    env = rb._minimal_subprocess_env()
+    assert "SOME_UNRELATED_VAR_488" not in env, \
+        "非白名单的无关变量被透传 ⇒ 判据是黑名单（#488）"
+    assert "IGCCSVC_DB" not in env, \
+        "无凭据形状词的凭据名被透传 ⇒ 黑名单 fail-open（#488）"
+    assert rb._ENV_ALLOW_PREFIXES == ("LC_",), rb._ENV_ALLOW_PREFIXES
+    assert not any(p.upper().startswith(("AEIS", "HIVE", "MDCG"))
+                   for p in rb._ENV_ALLOW_PREFIXES)
+
+
 def test_g5b_subprocess_env_keeps_explicit_extras(monkeypatch):
     """G5b：显式 extra（RAYON_NUM_THREADS / HEX_LR）在收窄后仍叠加。"""
     monkeypatch.setenv("AEIS_DESIGNER_KEY", "x")

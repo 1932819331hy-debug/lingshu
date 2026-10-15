@@ -8,7 +8,6 @@ Python 参考实现保留(hex_train/hex_hier),Rust 只做热区。
 """
 from __future__ import annotations
 import os
-import re
 import subprocess
 import time
 from pathlib import Path
@@ -20,10 +19,40 @@ import numpy as np
 #: 锚定于此，**不**按调用时 cwd 解析（#488）。
 _PKG_ROOT = Path(__file__).resolve().parents[2]
 
-#: 子进程环境中凭据形状名（`*_KEY` / `*_TOKEN` / `*_SECRET` / `*_PASSWORD` …）。
-_CREDENTIAL_ENV_RE = re.compile(
-    r"(?:^|_)(?:KEY|TOKEN|SECRET|PASSWORD|PASSWD|CREDENTIAL|CREDENTIALS)(?:_|$)",
-    re.IGNORECASE)
+#: 子进程 env **白名单·具名**（#488，兼修 #350）：跨平台「进程运行基座」——
+#: 路径 / 临时目录 / 区域 / 主机自省。**不含任何凭据名**（取白名单而非黑名单的
+#: 理由与 `#227` 同款：黑名单对凭据面 fail-open）。
+_ENV_ALLOW_NAMES = frozenset({
+    # 可执行查找 / 命令解释器
+    "PATH", "PATHEXT", "COMSPEC",
+    # Windows 目录基座（PE 加载器与 CRT 启动期读用）
+    "SYSTEMROOT", "SYSTEMDRIVE", "WINDIR",
+    "PROGRAMDATA", "ALLUSERSPROFILE", "PUBLIC",
+    "PROGRAMFILES", "PROGRAMFILES(X86)", "COMMONPROGRAMFILES",
+    "COMMONPROGRAMFILES(X86)", "PROGRAMW6432", "COMMONPROGRAMW6432",
+    # 临时目录
+    "TEMP", "TMP", "TMPDIR",
+    # 家目录 / 账户
+    "HOME", "HOMEDRIVE", "HOMEPATH", "USERPROFILE",
+    "APPDATA", "LOCALAPPDATA",
+    "USER", "USERNAME", "USERDOMAIN", "LOGNAME",
+    # 区域 / 终端
+    "LANG", "LANGUAGE", "TZ", "TERM",
+    # 主机自省
+    "NUMBER_OF_PROCESSORS", "PROCESSOR_ARCHITECTURE", "PROCESSOR_IDENTIFIER",
+    "PROCESSOR_LEVEL", "PROCESSOR_REVISION", "OS",
+})
+
+#: 子进程 env **白名单·前缀**：仅区域/编码面（无凭据形状名、无启动期执行面）。
+_ENV_ALLOW_PREFIXES = ("LC_",)
+
+
+def _env_is_allowed(name: str) -> bool:
+    """继承的环境变量名是否在白名单内（大小写无关）。"""
+    up = str(name).upper()
+    if up in _ENV_ALLOW_NAMES:
+        return True
+    return any(up.startswith(p) for p in _ENV_ALLOW_PREFIXES)
 
 
 class HexExeError(RuntimeError):
@@ -110,17 +139,18 @@ def resolve_hex_exe() -> Path:
 
 def _minimal_subprocess_env(extra: Optional[Dict[str, str]] = None
                             ) -> Dict[str, str]:
-    """子进程最小环境（#488，兼修 #350 的透传面）：剔除 `AEIS_*` 前缀与
-    凭据形状名（`*_KEY` / `*_TOKEN` / `*_SECRET` / `*_PASSWORD` …），
-    只保留运行 hex_nn 必需的非敏感变量。显式 `extra`（RAYON_NUM_THREADS /
-    HEX_LR）在收窄之后叠加。"""
-    env: Dict[str, str] = {}
-    for k, v in os.environ.items():
-        if k.upper().startswith("AEIS_"):
-            continue
-        if _CREDENTIAL_ENV_RE.search(k):
-            continue
-        env[k] = v
+    """子进程**最小环境**（#488，兼修 #350 的透传面）：**白名单放行**。
+
+    取白名单而非「剔 `AEIS_*` + 凭据形状名」的黑名单，理由与 `#227` 同款：
+    黑名单对凭据面天然 fail-open——新出现的凭据名只要不撞模式就照旧泄露
+    （`IGCCSVC_DB` / `YOUR_STEP_API_KEY` 在 `#227` 已证）。白名单是
+    「不声明就不给」：只透传进程运行基座（路径 / 临时目录 / 区域 / 主机自省），
+    其余继承变量一律**不透传**。
+
+    显式 `extra`（`RAYON_NUM_THREADS` / `HEX_LR`）在收窄**之后**叠加——那是
+    调用点有意传的配置，属显式面。
+    """
+    env = {k: v for k, v in os.environ.items() if _env_is_allowed(k)}
     if extra:
         env.update(extra)
     return env
