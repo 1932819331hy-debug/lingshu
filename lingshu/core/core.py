@@ -2001,7 +2001,16 @@ class LayeredStore:
         params.append(min_importance)
         where = " AND ".join(conditions) if conditions else "1=1"
         c = self.conn.cursor()
-        c.execute(f"SELECT * FROM nodes WHERE {where} ORDER BY importance DESC, last_access DESC LIMIT ?", params + [limit])
+        # #658：`limit=None` ⇒ **不设限、全量返回**（与同族 `query_nodes_by_time`
+        # 逐字一致）。旧实现无条件把 `limit` 绑进 `LIMIT ?`——SQLite 的 `LIMIT`
+        # **不接受 NULL**（`datatype mismatch`，与 `LIMIT -1`＝无限制不同）⇒
+        # 调用方按仓内既有「None＝全量」语义传参即抛 `IntegrityError`。
+        # 判据来源：公开 issue #658（同族四函数对同一个 `None` 给出不同结果）。
+        sql = f"SELECT * FROM nodes WHERE {where} ORDER BY importance DESC, last_access DESC"
+        if limit is not None:
+            sql += " LIMIT ?"
+            params = params + [limit]
+        c.execute(sql, params)
         nodes, skipped = self._tolerant_nodes(c.fetchall())
         self.last_skipped_rows = skipped
         return nodes
@@ -3308,9 +3317,15 @@ class LayeredStore:
         时钟回拨后「最近」会指向旧节点（详见 `enforce_context_cap` docstring）。
 
         #267：经 `_tolerant_nodes` 逐行容错——单条坏行不毒化整层读取。
+        #658：`limit=None` ⇒ 全量返回（与同族 `query_nodes_by_time` 同口径）。
         """
         c = self.conn.cursor()
-        c.execute("SELECT * FROM nodes WHERE layer='context' ORDER BY rowid DESC LIMIT ?", (limit,))
+        sql = "SELECT * FROM nodes WHERE layer='context' ORDER BY rowid DESC"
+        if limit is not None:
+            sql += " LIMIT ?"
+            c.execute(sql, (limit,))
+        else:
+            c.execute(sql)
         nodes, skipped = self._tolerant_nodes(c.fetchall())
         self.last_skipped_rows = skipped
         return nodes
@@ -3868,14 +3883,19 @@ class LayeredStore:
         判据来源：公开 issue #183（两个面的复现）；`json_each` 精确匹配口径
         沿用任务书建议 1（Python 3.12 sqlite3 内建 JSON1，无额外依赖）。
         阈值本体**未改**（默认 limit=50）。
+
+        #658：`limit=None` ⇒ 全量返回（与同族 `query_nodes_by_time` 同口径）。
         """
         c = self.conn.cursor()
-        c.execute("SELECT * FROM nodes WHERE EXISTS ("
-                  "SELECT 1 FROM json_each("
-                  "CASE WHEN json_valid(nodes.tags) THEN nodes.tags ELSE '[]' END) "
-                  "WHERE value = ?) "
-                  "ORDER BY importance DESC, last_access DESC LIMIT ?",
-                  (tag, limit))
+        sql = ("SELECT * FROM nodes WHERE EXISTS ("
+               "SELECT 1 FROM json_each("
+               "CASE WHEN json_valid(nodes.tags) THEN nodes.tags ELSE '[]' END) "
+               "WHERE value = ?) "
+               "ORDER BY importance DESC, last_access DESC")
+        if limit is not None:
+            c.execute(sql + " LIMIT ?", (tag, limit))
+        else:
+            c.execute(sql, (tag,))
         nodes, _skipped = self._tolerant_nodes(c.fetchall())
         return nodes
 
@@ -3913,14 +3933,21 @@ class LayeredStore:
 
     def get_nodes_in_range(self, start_ts: float, end_ts: float, layer: MemoryLayer = None,
                            limit: int = 50) -> List[STNode]:
-        """时间范围查询（P1-2 时间线）"""
+        """时间范围查询（P1-2 时间线）
+
+        #658：`limit=None` ⇒ 全量返回（与同族 `query_nodes_by_time` 同口径）。
+        """
         conds, params = ["temporal_coordinate >= ?", "temporal_coordinate <= ?"], [start_ts, end_ts]
         if layer is not None:
             conds.append("layer=?")
             params.append(layer.value)
         c = self.conn.cursor()
-        c.execute(f"SELECT * FROM nodes WHERE {' AND '.join(conds)} ORDER BY temporal_coordinate DESC LIMIT ?",
-                  params + [limit])
+        sql = (f"SELECT * FROM nodes WHERE {' AND '.join(conds)} "
+               "ORDER BY temporal_coordinate DESC")
+        if limit is not None:
+            c.execute(sql + " LIMIT ?", params + [limit])
+        else:
+            c.execute(sql, params)
         nodes, _skipped = self._tolerant_nodes(c.fetchall())
         return nodes
 
