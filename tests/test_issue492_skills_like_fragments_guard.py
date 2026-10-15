@@ -158,6 +158,28 @@ def test_k5_empty_skills_table_long_query_ok():
     assert e.recall_skill(_long_query(60000)) == []
 
 
+def test_k6_escape_amplification_leg():
+    """K6：转义字符放大腿——`\\` 会被 `_escape_like` 加倍，模式长度翻倍。
+
+    reporter 的「更正 1」指出：查询里每个 `\\` 在 `_escape_like` 后变两个字符 ⇒ 模式
+    字节数约为查询的两倍，分界点随之前移到约 24999/25000。本机 SQLite 3.49.1 上该
+    前置**未再现**（详见判定帖复核读数），但**修复后必须两臂都安全**：切分阈值是
+    `_LIKE_PATTERN_MAX_BYTES`（3000），转义后单模式 ≤ 6000 + 2，远低于上游 50000。
+    本腿钉死这一点，消「转义放大量随 SQLite 构建漂移」的盲区。
+    """
+    e = _engine_with_skills()
+    for n in (24000, 24999, 25000, 30000, 60000):
+        q = "\\" * n
+        assert len(q.encode("utf-8")) == n
+        r1 = e.store.search_skills(q)     # 旧缺陷：≥ 分界点即抛 OperationalError
+        r2 = e.recall_skill(q)
+        assert isinstance(r1, list) and isinstance(r2, list), (n, r1, r2)
+
+    # 每片转义后的模式仍远低于上游上限（3000 × 2 + 2 = 6002 ≪ 50000）
+    from lingshu.core.core import _LIKE_PATTERN_MAX_BYTES
+    assert _LIKE_PATTERN_MAX_BYTES * 2 + 2 < 50000, _LIKE_PATTERN_MAX_BYTES
+
+
 if __name__ == "__main__":
     import pytest
     raise SystemExit(pytest.main([__file__, "-q", "--no-header"]))
