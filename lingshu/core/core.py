@@ -1662,15 +1662,27 @@ class LayeredStore:
         （`IMMUTABLE_LAYERS`）的边在删除前落一条 `immutable_edge_stripped` 审计，
         使不可变层节点失去关联边**可追查**（详见该助手 docstring）。
         """
+        # #517：快速预读只服务 bool 契约的早退（不存在/不可变层），**保护判定不再
+        # 留在无事务快照上**——旧实现「autocommit 读判定（t0 快照）→ 首条 DML 才隐式
+        # BEGIN」之间，另一进程 BEGIN IMMEDIATE 的 protect_node 可提交插队（#36 并发
+        # 绕过：保护成功返回后节点仍被删、protections 留孤儿行，两进程压测 2/100 命中）。
         node = self.get_node(node_id)
         if node is None:
             return False
         if node.layer in self.IMMUTABLE_LAYERS:
             return False
-        if self._is_forget_protected(node):
-            return False  # 不可遗忘（3.2 节）：受保护件不因任何删除路径消失
         with self._lock:
             c = self.conn.cursor()
+            # 显式开写事务（与 protect_node 的 BEGIN IMMEDIATE 互相排队），**随后**才做
+            # 「不可遗忘」判定——判定与 DELETE 共用同一写快照：窗口期已提交的保护行对本
+            # 快照可见（拒删）；未提交的排在删除事务之后（保护落在已删节点＝既有语义，
+            # 非本件竞态）。重读行防 t0 预读与写快照间节点被改写层。
+            self.conn.execute("BEGIN IMMEDIATE")
+            node = self.get_node(node_id)
+            if node is None or node.layer in self.IMMUTABLE_LAYERS:
+                return False
+            if self._is_forget_protected(node):
+                return False  # 不可遗忘（3.2 节）：受保护件不因任何删除路径消失
             # #115：删除前记录 OPPOSITE 邻居——边随节点删除而消失，冲突标签须随之移除。
             c.execute("SELECT source_id, target_id FROM edges"
                       " WHERE relation_type=? AND (source_id=? OR target_id=?)",
