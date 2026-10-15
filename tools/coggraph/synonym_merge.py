@@ -4,7 +4,8 @@
 
 范围：只看中文实词与具体事物；**忽略英文缩写与专有词**（含 ASCII 的标题不参与）。
 同义判据（从严，避免把"同级概念"误当同义）：
-  L1 深度规范化后完全相同（去序号/去标注/去标点/去技能域前缀）
+  L1 深度规范化后完全相同（去序号/去标点/去技能域前缀；括号注释**保留**、仅归一其内部空白
+      ——括号里常是互斥的维度值/版本/单位，整段剥掉会让不同值撞车判重，#611）
   L2 语序变体（字符多重集相同）且差异字符不是序数词
   L3 编辑距离 1 且差异非序数、且同桶域 —— 只进「待复核」，不自动归并
 归并产物是**别名映射与分组报告**，不改写认知图真源。
@@ -30,7 +31,11 @@ SUFFIX_OK = set("法化学性术")
 
 def deep_norm(t):
     t = NUM_PREFIX.sub("", t)
-    t = ANNO.sub("", t)
+    # #611：括号注释**不再整段删除**——注释里常是互斥的维度值/版本/单位
+    # （「记忆写入（长期）」vs「记忆写入（短期）」），剥掉后 L1 撞车 ⇒ 不同值被并组。
+    # 现改为保留括号与内容、只归一括号内空白（同值异空白仍等价：「（ 长期 ）」≡「（长期）」）。
+    # 全/半角括号按原样保留（deep_norm 既有规则不含括号宽度归一，维持该边界）。
+    t = ANNO.sub(lambda m: re.sub(r"\s+", "", m.group(0)), t)
     t = SKILL_PREFIX.sub("", t)
     t = PUNCT.sub("", t)
     return t.strip()
@@ -168,7 +173,9 @@ def main(argv=None):
             dup_groups += 1                    # 完全重复：同一标题多个节点
             kind = "duplicate"
         else:
-            kind = "synonym" if len(norms) > 1 else "duplicate"
+            # #611：norm 撞车但**原文标题不同**（如「记忆写入（长期）」/「记忆写入（ 长期 ）」）
+            # 不再标 duplicate——「完全重复组（同一标题多节点）」必须字面为真；此类按 synonym 落组。
+            kind = "synonym"
         merged.append({
             "canonical": canon["raw"], "canonical_id": canon["id"],
             "members": [{"title": c["raw"], "id": c["id"]} for c in v],
