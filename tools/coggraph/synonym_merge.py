@@ -40,6 +40,17 @@ def deep_norm(t):
     t = PUNCT.sub("", t)
     return t.strip()
 
+def _imp(v):
+    """#628：importance 非数值（真源空值被 export 透传成 None、或字符串档位如「高」）
+    在消费端回落 0——与 created_to_ts 的坏值口径同：坏值不崩整轮、不参与排序优势。
+    bool 是 int 子类且 -True/-False 合法（报告矩阵实测正常），如实放行不收窄。"""
+    if isinstance(v, (int, float)):
+        if v != v or v in (float("inf"), float("-inf")):  # NaN/inf 同归坏值
+            return 0
+        return v
+    return 0
+
+
 def is_ordinal_diff(a, b):
     """等长时，**所有**差异位置是否都为序数对（一/二…、1/2…）。
 
@@ -94,7 +105,7 @@ def main(argv=None):
             continue
         cands.append({"id": n["id"], "raw": raw, "t": t,
                       "bucket": (n.get("bucket") or "").split("_")[0],
-                      "layer": n.get("layer", ""), "imp": n.get("importance", 0)})
+                      "layer": n.get("layer", ""), "imp": _imp(n.get("importance"))})
 
     parent = list(range(len(cands)))
     def find(x):
