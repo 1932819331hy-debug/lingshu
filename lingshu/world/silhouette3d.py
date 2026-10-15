@@ -21,6 +21,7 @@ from __future__ import annotations
 
 import math
 import os
+import warnings
 from dataclasses import dataclass, field
 from typing import List, Optional, Tuple
 
@@ -829,11 +830,27 @@ _EYE_DARK = (70, 55, 70)
 _EYE_LIGHT = (255, 255, 255)
 _MOUTH = (180, 90, 100)
 
+#: 合法取值集合（#663：未知值不再静默退化——显式告警并点名合法集合）。
+#: 取向 = **fail-soft**（`warnings.warn` + 退回默认），理由见 `set_expression` docstring：
+#: 仓内合法调用方 `scene_model._apply_state_to_silhouette` 会传 `state="tired"`（该模块
+#: 文档化的状态之一），而 `tired` 不在表情名映射里 ⇒ fail-closed 会让既有「宽松调用」的
+#: 宿主直接崩。边界：仅对**真未知**值告警；`tired` 这类「宿主有、表情映射无」的值同样告警
+#: （它确实没被渲染成任何表情），是否为其补一个表情属设计者裁面，本件不擅自加映射。
+_EYE_SHAPES = ("normal", "happy", "sad", "surprise", "squint")
+_MOUTH_SHAPES = ("smile", "open", "pout", "sad")
+_EXPRESSIONS = ("happy", "sad", "angry", "surprised", "shy", "neutral")
+
 
 def _eye_poly(cx, cy, rx, ry, shape: str) -> List[Tuple[float, float]]:
     """生成眼型多边形。
     normal=椭圆 / happy=笑眼(上弯弧) / sad=哭眼(下垂) / surprise=惊眼(圆大) / squint=眯眼(横线)
     """
+    if shape not in _EYE_SHAPES:                               # #663：未知眼型显式告警
+        warnings.warn(
+            "silhouette3d._eye_poly: 未知眼型 %r，退化为 'normal'；"
+            "合法取值：%s" % (shape, ", ".join(_EYE_SHAPES)),
+            stacklevel=2)
+        shape = "normal"
     if shape == "happy":       # 笑眼：上弯弧（月牙）
         return [(cx - rx, cy + ry * 0.2), (cx - rx * 0.5, cy - ry * 0.6),
                 (cx, cy - ry * 0.8), (cx + rx * 0.5, cy - ry * 0.6),
@@ -852,6 +869,12 @@ def _eye_poly(cx, cy, rx, ry, shape: str) -> List[Tuple[float, float]]:
 
 def _mouth_poly(cx, cy, rx, ry, shape: str) -> List[Tuple[float, float]]:
     """嘴型多边形。smile=微笑 / open=张嘴 / pout=嘟嘴 / sad=委屈下垂"""
+    if shape not in _MOUTH_SHAPES:                             # #663：未知嘴型显式告警
+        warnings.warn(
+            "silhouette3d._mouth_poly: 未知嘴型 %r，退化为 'smile'；"
+            "合法取值：%s" % (shape, ", ".join(_MOUTH_SHAPES)),
+            stacklevel=2)
+        shape = "smile"
     if shape == "open":        # 张嘴：椭圆
         return _ellipse((cx, cy), rx, ry * 1.3, 10)
     if shape == "pout":        # 嘟嘴：小圆
@@ -886,7 +909,22 @@ def set_expression(s: Silhouette3D, expression: str) -> Silhouette3D:
     每次调用都**从该基准重算**（而非从上一次调用后的几何迭代）。故同一对象上
     连调 N 次几何不变，且任意表情序列可复原。判据来源：本件报告 #376
     （经验标定，追不到理论章节；旧行为是以上次结果为输入的几何级数）。
+
+    **未知表情名不再静默退化（#663，取向=fail-soft）**：传入不在上表里的名字时
+    **发 `UserWarning` 并退回 `neutral`**（不抛异常）。取舍理由与边界：
+    - 选 fail-soft 而非 fail-closed：仓内**合法调用方**确实会传未知值——
+      `scene_model._apply_state_to_silhouette` 透传 `entity.state`，而该模块
+      文档化并测试过的状态含 `tired`（见 `STATE_TINT` / `apply_pose` 的 `tired` 分支），
+      `tired` 不在本函数的表情映射里 ⇒ 若 fail-closed，`WorldModel.build()` 会在
+      fatfish 轮廓实体上直接崩，打掉既有「宽松调用」的宿主。
+    - 边界：本函数只**告警 + 保持既有返回**，不擅自为 `tired` 之类补表情映射
+      （那是设计者裁面）；告警文案点名合法取值集合，便于调用方自纠。
     """
+    if expression not in _EXPRESSIONS:                         # #663：未知表情名显式告警
+        warnings.warn(
+            "silhouette3d.set_expression: 未知表情名 %r，退化为 'neutral'；"
+            "合法取值：%s" % (expression, ", ".join(_EXPRESSIONS)),
+            stacklevel=2)
     eye_shape = {"happy": "happy", "sad": "sad", "angry": "squint",
                  "surprised": "surprise", "shy": "happy", "neutral": "normal"}.get(expression, "normal")
     mouth_shape = {"happy": "open", "sad": "sad", "angry": "pout",

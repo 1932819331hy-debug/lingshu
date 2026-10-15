@@ -674,7 +674,8 @@ class SimulationLoop:
 
     # ---------- 回写环（WAL → 认知图 contextual 载荷）----------
 
-    def flush_payloads(self, out_path: Optional[str] = None, brain=None) -> Dict:
+    def flush_payloads(self, out_path: Optional[str] = None, brain=None,
+                       overwrite: bool = True) -> Dict:
         """推演结果 → 认知图 contextual 节点载荷（frontmatter + 正文）。
 
         对齐 data/mdcg/contextual/arc_agi_ls20_*.md 先例格式；
@@ -687,6 +688,13 @@ class SimulationLoop:
         （`_confine_simloop_out_path`）。边界（如实标注）：`os.replace` 保证
         「目标文件要么是旧内容、要么是完整新内容」，**不**保证掉电后元数据已落盘
         （未做目录 fsync；Windows 上亦无法对目录取句柄）。
+
+        issue #480（安全 P0）：`overwrite=False`（门面写文件时的默认语义）改用
+        **`os.open(O_CREAT | O_EXCL | O_WRONLY)` 排他创建**（目标已存在即抛
+        `FileExistsError`）——**不覆盖**既有 `.md`（尤其认知图真源的受保护节点）。
+        `O_EXCL` 使「判定存在性」与「创建」是**同一次**内核调用 ⇒ 无先查后建的
+        TOCTOU 窗口；写中途失败则清理半截新档。直调库 API 默认仍为
+        `overwrite=True`（覆盖式语义保留，见 #324 守卫）。
         """
         self._flush_count += 1
         g = self.wm.graph()
@@ -765,18 +773,35 @@ class SimulationLoop:
             # 判据来源：经验标定（本件 #324）——口径取「临时文件 + os.replace」；
             # 追不到更早出处。
             os.makedirs(os.path.dirname(os.path.abspath(out_path)), exist_ok=True)
-            tmp_path = "%s.tmp-%s" % (out_path, uuid.uuid4().hex[:8])
-            try:
-                with open(tmp_path, "w", encoding="utf-8") as f:
-                    f.write(md)
-                os.replace(tmp_path, out_path)
-            except BaseException:
+            if overwrite:
+                # #324 口径：临时文件 + os.replace（原子、覆盖式语义保留）
+                tmp_path = "%s.tmp-%s" % (out_path, uuid.uuid4().hex[:8])
                 try:
-                    if os.path.exists(tmp_path):
-                        os.remove(tmp_path)
-                except OSError:
-                    pass
-                raise
+                    with open(tmp_path, "w", encoding="utf-8") as f:
+                        f.write(md)
+                    os.replace(tmp_path, out_path)
+                except BaseException:
+                    try:
+                        if os.path.exists(tmp_path):
+                            os.remove(tmp_path)
+                    except OSError:
+                        pass
+                    raise
+            else:
+                # #480（安全 P0）：**O_EXCL 排他创建**——目标已存在即
+                # `FileExistsError`，**不覆盖**既有 `.md`（尤其认知图真源里
+                # 受保护的节点文件）。`O_EXCL` 使「判定存在性」与「创建」原子，
+                # 不存在先查后建的 TOCTOU 窗口。写中途失败则清理半截新档。
+                fd = os.open(out_path, os.O_CREAT | os.O_EXCL | os.O_WRONLY, 0o644)
+                try:
+                    with os.fdopen(fd, "w", encoding="utf-8") as f:
+                        f.write(md)
+                except BaseException:
+                    try:
+                        os.remove(out_path)
+                    except OSError:
+                        pass
+                    raise
             written = out_path
         memory_id = None
         if brain is not None:

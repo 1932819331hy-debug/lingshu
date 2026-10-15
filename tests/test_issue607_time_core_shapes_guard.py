@@ -322,17 +322,19 @@ def test_g4_repo_full_run_exit_zero_locks_baseline():
     assert data["new_violations"] == []
     assert data["summary"]["total"] == 17, data["summary"]
     assert data["stale_baseline_entries"] == []
-    # 新基线的增量恰是 physics.py 的 6 条 R3（467/471/475/482/485/931）
+    # 新基线的增量恰是 physics.py 的 6 条 R3（原 467/471/475/482/485/931；#662 在
+    # _check_samples 补时间 isfinite 校验插入 6 行 ⇒ 全部 +6，见 baseline #662 重编号段）
     physics_r3 = sorted(h["line"] for h in data["registered_violations"]
                         if h["file"] == "lingshu/world/physics.py" and h["rule"] == "R3")
-    assert physics_r3 == [467, 471, 475, 482, 485, 931], physics_r3
+    assert physics_r3 == [473, 477, 481, 488, 491, 937], physics_r3
 
 
 def test_g4_baseline_documents_607_retest():
-    """baseline 留痕：#607 重测记录与 6 条新登记都在文件里（可机械核）。"""
+    """baseline 留痕：#607 重测记录与 6 条新登记都在文件里（可机械核；
+    行号随 #662 的 +6 插入同步移位，锚的是登记存在性而非物理行号本身）。"""
     text = BASELINE.read_text(encoding="utf-8")
     assert "#607" in text
-    for line_no in (467, 471, 475, 482, 485, 931):
+    for line_no in (473, 477, 481, 488, 491, 937):
         assert "lingshu/world/physics.py:%d:R3" % line_no in text, line_no
     entries, errors = T.parse_baseline(text)
     assert errors == []

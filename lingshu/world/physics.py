@@ -235,6 +235,12 @@ def _check_samples(samples, need):
         raise PhysicsError("样本不足：需要 >= %d 个 (t, pos)，得到 %d"
                            % (need, len(samples or [])))
     ts = [float(s[0]) for s in samples]
+    # #662：时间与位置须对称校验有限性——NaN 参与 `<=` 恒 False，会静默绕过下面的
+    # 递增检查，产出全 NaN 模型（residual_rms=nan）并在 classify 里抛语义无关的
+    # TypeError（fit_damped 的 best_k 停留 None）。+inf 会被递增检查兜住，唯 NaN 漏。
+    for i, t in enumerate(ts):
+        if not math.isfinite(t):
+            raise PhysicsError("样本时间非法：第 %d 项 %r 非有限值" % (i, t))
     for i in range(1, len(ts)):
         if ts[i] <= ts[i - 1]:
             raise PhysicsError("样本时间必须严格递增（第 %d 项 %r <= %r）" % (i, ts[i], ts[i - 1]))
@@ -375,7 +381,7 @@ def fit_damped(samples, up=1, k_max=8.0, k_steps=800):
     rms = math.sqrt(best_c if best_k == k else cost(k)[0])
     return {"schema": PHYSICS_SCHEMA, "kind": "damped", "k": k, "up": up,
             "p0": tuple(p0), "p_inf": tuple(p_inf),
-            "v0": tuple((p0[i] - p_inf[i]) * (-k) * -1.0 for i in range(3)),
+            "v0": tuple((p0[i] - p_inf[i]) * (-k) for i in range(3)),  # #673：真实初速 = −k·(p0−p∞)，指向 p∞（与 predict_at 的 damped 速度、damped_truth 的 p_inf=p0+v0/k 同口径；旧码此处多乘 *-1.0 致反号）。行数不变以保 tools/time_core_lint_baseline.txt 的行号基线。
             "t_ref": t0, "residual_rms": rms / math.sqrt(3.0 * len(ts)),
             "n_samples": len(samples)}
 

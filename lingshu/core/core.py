@@ -182,6 +182,49 @@ def _dumps_tags(tags, ensure_ascii: bool = False) -> str:
 
 
 # =============================================================================
+# JSON 列序列化闸（唯一真源 · issue #494）
+# =============================================================================
+#
+# #378 只把「代理码点拒写」落在 `nodes.tags` 一列（`_dumps_tags`，递归深度一层）。
+# 而 `nodes` 表另有三列是 JSON 文本：`state_attributes` / `semantic_coordinates`
+# / `spatial_coordinates`。它们的写点当时仍是**裸** `json.dumps`（默认
+# `ensure_ascii=True`）⇒ 孤立代理（unpaired surrogate，如 `"\ud83d"`）被**静默
+# 转义**成字面量 `\ud83d` 文本入库：SQLite 不报错、`json.loads` 往返也不报错，
+# 于是毒行潜伏；直到读回后再以 `ensure_ascii=False` 序列化写回（`_write_influence`
+# / `insight_verify`）或写 UTF-8 文件/日志时才抛
+# `UnicodeEncodeError: surrogates not allowed` ⇒ 单条毒行炸掉整条写回/导出链。
+#
+# 本闸把 #378 的判据（含 U+D800–U+DFFF 任一码点即拒，fail-closed，`ValueError`）
+# 从 tags 一列扩到上述三列的统一序列化真源。**只拒绝，不洗白**（不做静默替换/
+# 剥离——那会把污染源洗白、掩盖上游解码错误）。`ensure_ascii` 缺省保持 `True`
+# （与 `to_row` 既有裸调一致，不改存储编码口径；那是 #181 的面）。
+
+def _reject_surrogates(value, where: str) -> None:
+    """递归检查 value（dict 的键与值 / list / tuple / set / str）是否含
+    UTF-16 代理码点 U+D800–U+DFFF；含则 ValueError（fail-closed）。"""
+    stack = [value]
+    while stack:
+        cur = stack.pop()
+        if isinstance(cur, str):
+            if any(0xD800 <= ord(ch) <= 0xDFFF for ch in cur):
+                raise ValueError(
+                    "#494 拒绝含 UTF-16 代理码点的 %s 值（无法 UTF-8 编码，"
+                    "会毒化检索/导出，且读回再序列化即抛 UnicodeEncodeError）: %r"
+                    % (where, cur))
+        elif isinstance(cur, dict):
+            stack.extend(cur.keys())
+            stack.extend(cur.values())
+        elif isinstance(cur, (list, tuple, set, frozenset)):
+            stack.extend(cur)
+
+
+def _dumps_json(value, ensure_ascii: bool = True, where: str = "JSON 列") -> str:
+    """`nodes` 表 JSON 列的统一序列化真源（#494）：先过代理码点闸，再 json.dumps。"""
+    _reject_surrogates(value, where)
+    return json.dumps(value, ensure_ascii=ensure_ascii)
+
+
+# =============================================================================
 # 数值入参闸（唯一真源 · lingshu #185）
 # =============================================================================
 
@@ -456,7 +499,7 @@ class STNode:
         """
         return (
             self.id, self.content, self.modality,
-            json.dumps(self.spatial_coordinates),
+            _dumps_json(self.spatial_coordinates, where="spatial_coordinates"),
             _finite_or(self.temporal_coordinate, self.created_at),
             self.condition_space.to_json(),
             _finite_clamp(self.importance, 0.0, 1.0),
@@ -464,8 +507,8 @@ class STNode:
             self.layer.value, self.access_count,
             self.last_access, self.created_at,
             _dumps_tags(self.tags),
-            json.dumps(self.semantic_coordinates),
-            json.dumps(self.state_attributes),
+            _dumps_json(self.semantic_coordinates, where="semantic_coordinates"),
+            _dumps_json(self.state_attributes, where="state_attributes"),
             self.entity_id
         )
 
@@ -956,6 +999,11 @@ def _transactional(fn):
     @functools.wraps(fn)
     def wrapper(self, *args, **kwargs):
         with self._tx():
+            # 嵌套感知（#665）：内层不得终结外层事务——_tx 在 depth>1 时用 SAVEPOINT，
+            # 且本文件里 @_transactional 方法内的 `self.conn.commit()` 一律改走
+            # `self._commit_locked()`：只有最外层（depth==1）真提交，内层提交被推迟到
+            # 最外层退出时统一执行，否则外层 rollback 撤不回内层已提交的写。
+
             return fn(self, *args, **kwargs)
     return wrapper
 
@@ -1046,6 +1094,9 @@ class LayeredStore:
         # 强引用——旧实现用强引用列表登记，线程退出后连接对象不 GC ⇒ 不关闭 ⇒ 其
         # 可能悬挂的写事务持锁不放（「库写不进去」），且登记表随线程数无界增长。
         self._conns = weakref.WeakSet()
+        #: #660：生命周期终止态标志——`close()` 置 True，`conn` property 据此 fail-closed
+        #: （旧实现无此标志，close 后仍返回死连接；见 `conn` docstring）。
+        self._closed = False
         self._memory_dsn = (self._MEMORY_DSN.format(uuid.uuid4().hex[:12])
                             if db_path == ":memory:" else None)
         # 锚连接（强引用）：`file:...?mode=memory&cache=shared` 的共享内存库需要**至少
@@ -1156,11 +1207,49 @@ class LayeredStore:
 
     @property
     def conn(self) -> sqlite3.Connection:
-        """本线程的连接；首次访问时按需建立（每线程一条，互不共享）。"""
+        """本线程的连接；首次访问时按需建立（每线程一条，互不共享）。
+
+        #660：`close()` 之后本实例为**终止态**——旧实现不清 `_local.slot`，且新鲜度判据
+        （`slot is None or slot.conn is None`）看不到 `_ThreadConn._closed` 已置位 ⇒ 返回
+        **已关闭的连接对象**，五个公开面全抛 `ProgrammingError: Cannot operate on a
+        closed database.`（新线程则走 `_connect` 建到已销毁的 `:memory:` 库上，得
+        `OperationalError: no such table: nodes`），调用方读不到「引擎已关闭」这一事实。
+        现：① 新鲜度判据纳入 `slot._closed`（同一模块里写好的状态位不再被忽略）；
+        ② `close()` 置位的 `self._closed` 在此**显式失败**并给可判文案（fail-closed）。
+        边界（如实标注 · 留设计者裁）：本件取「close 为生命周期终点、拒绝重用」的最小口径
+        ——**是否**提供显式 reopen（尤其 `:memory:` 后端重连）属产品口径，本件不定，留门。
+        """
+        if self._closed:
+            raise sqlite3.ProgrammingError(
+                "LayeredStore 已关闭（close() 已调用）：本实例不可再用于读写。close() 是"
+                "生命周期终点；如需继续使用请新建实例（#660）")
         slot = getattr(self._local, "slot", None)
-        if slot is None or slot.conn is None:
+        if slot is None or slot.conn is None or slot._closed:
             slot = self._connect(self._memory_dsn or self.db_path)
         return slot.conn
+
+    def _commit_locked(self):
+        """事务内提交（#665）：只有**最外层**事务真提交，嵌套层提交被推迟。
+
+        为什么必须这样：`@_transactional` 方法体里普遍写着
+        `c = self.conn.cursor(); c.execute(...); self.conn.commit()`。一旦该方法是被
+        另一个 `@_transactional` 方法调进来的（真实路径：`ingest_frame` → `add_edge`/
+        `add_node`/`tag_node`；`import_all` → `add_node`；`annotate_semantics` → …），
+        这句 `commit()` 提交的是**整条**事务（SQLite 无真嵌套），并**顺手销毁外层已开的
+        SAVEPOINT** —— 随后外层无论 RELEASE 还是 ROLLBACK TO 都会撞
+        `sqlite3.OperationalError: no such savepoint`，或更糟：外层失败 rollback 时
+        内层写已落地、撤不回来（#665 的原始症状）。
+
+        判据：在 `conn.in_transaction` 为真且当前处于嵌套层（有 SAVEPOINT 在栈上）时，
+        本方法必须是 **no-op**，把提交权交给最外层 `_tx` 退出时的 `conn.commit()`。
+        最外层 `_tx` 用 `BEGIN IMMEDIATE` 开局，故 `in_transaction` 为真**不能**作为
+        「该提交」的判据 —— 只有最外层 `_tx` 自己（走 `else: conn.commit()` 分支）
+        才提交。
+        """
+        if self._tx_depth > 1:
+            # 嵌套层：提交权推迟给最外层，避免销毁外层 SAVEPOINT。
+            return
+        self.conn.commit()
 
     @contextlib.contextmanager
     def _tx(self):
@@ -1172,18 +1261,59 @@ class LayeredStore:
         写锁不放（其它写者等满 busy_timeout=30000ms 后报 database is locked）。
         本上下文管理器把「execute → commit」收成单一原子边界，异常必定 rollback
         后原样抛出。
+
+        #665：本方法过去**无嵌套感知**——内层退出即 `conn.commit()`，而 SQLite
+        并没有真正的嵌套事务，那次 commit 提交的是**整条**（唯一那条）事务 ⇒ 外层
+        随后失败时 rollback 已无处可撤，内层已落的写永久留下。真实路径存在：
+        `ingest_frame`（@_transactional）内部调用 `add_edge`/`add_node`/`tag_node`
+        （同为 @_transactional）。判据：外层方法在**内层调用之后**抛异常，内层已
+        写入的行必须不存在。
+
+        修法与同文件 `_structure_event_transaction` 同构：已在事务中
+        （`conn.in_transaction` 为真）⇒ 用 SAVEPOINT 只圈住自己这一段，退出时
+        RELEASE（不提交整条），异常时 ROLLBACK TO 后 RELEASE（只撤自己这一段）；
+        不在事务中 ⇒ 维持原语义（正常 commit、异常 rollback）。嵌套层数由 SQLite
+        的 `in_transaction` 天然给出，无需自维护计数器。
         """
         conn = self.conn
+        nested = conn.in_transaction
+        savepoint = "_tx_%s" % uuid.uuid4().hex
+        # ★ 最外层必须**真的开**一个事务（#665 修复的第二个要点）：
+        # 旧实现只「装饰」不「开始」——`yield` 前不 BEGIN，于是嵌套判定
+        # `conn.in_transaction` 在外层进入时恒为 False ⇒ 外层被当成最外层、
+        # 内层也被当成最外层，两层各自 commit，外层 rollback 撤不回内层。
+        # 用 BEGIN IMMEDIATE 显式开局：一是让 in_transaction 立刻为真（嵌套
+        # 判定才有据可依），二是立即取写锁，避免「先读后写」升级锁时的
+        # SQLITE_BUSY 竞态（与 _structure_event_transaction 同口径）。
+        if nested:
+            conn.execute("SAVEPOINT %s" % savepoint)
+        else:
+            conn.execute("BEGIN IMMEDIATE")
+        # 嵌套深度：#665 的关键配套。`_commit_locked()` 靠它判断「我这一层该不该
+        # 真提交」——只有 depth==1（最外层）提交，depth>1 一律推迟，否则会销毁
+        # 外层 SAVEPOINT。深度必须与 SAVEPOINT 栈同生共死，故用 try/finally 兜底
+        # 递减：任何异常路径（含 ROLLBACK 自身失败）都不能让深度泄漏，否则该连接
+        # 后续所有写都会静默变成「永不提交」。
+        self._tx_depth = getattr(self, "_tx_depth", 0) + 1
         try:
             yield conn
         except BaseException:
             try:
-                conn.rollback()
+                if nested:
+                    conn.execute("ROLLBACK TO SAVEPOINT %s" % savepoint)
+                    conn.execute("RELEASE SAVEPOINT %s" % savepoint)
+                else:
+                    conn.rollback()
             except Exception:
                 pass
             raise
         else:
-            conn.commit()
+            if nested:
+                conn.execute("RELEASE SAVEPOINT %s" % savepoint)
+            else:
+                conn.commit()
+        finally:
+            self._tx_depth -= 1
 
     @_transactional
     def _init_tables(self):
@@ -1346,7 +1476,7 @@ class LayeredStore:
         # 建表完成 → 落 schema 版本标记（下次启动只读化守卫据此跳过建表块）
         c.execute("INSERT OR REPLACE INTO engine_meta (key, value) VALUES ('_schema_version', ?)",
                   (str(self.SCHEMA_VERSION),))
-        self.conn.commit()
+        self._commit_locked()
 
     # ---------- 节点操作 ----------
 
@@ -1374,6 +1504,10 @@ class LayeredStore:
         ＋ **D-08**「禁（同 id 不得换层）」；修法形状见
         `docs/plans/治理与写入边界_修复设计_v0.1.md` §2 S-127-1(a)。
         边界（削掉的判别力）：同 id 同层的原位覆盖仍放行（本件只堵换层/降级面）；
+        **#659 补丁**：同层覆盖**受保护节点**（`_is_forget_protected` 为真）时保留其
+        `no_forget` 标签并落审计（见方法体内 #659 段）——仍不拒绝覆盖（保住
+        `apply_shared_sync(overwrite=True)` 合法路径），故「覆盖受保护节点内容」这一
+        判别力仍未收口，只收口了「保护标记被静默抹掉」。
         数值接口 `update_node_confidence` / `update_node_importance` 的层与角色校验
         不在本件范围内（待裁清单 D-33：本批不动，另笔）。
         另注（#191 口径）：自我层行不受「共享层仅 PRIMARY 可写」约束后，
@@ -1411,7 +1545,31 @@ class LayeredStore:
         # `importance > min_confidence` 之外 ⇒ 该节点**永不进入遗忘面**，正是
         # #185 点名的「永不遗忘」症状；取默认值 0.5 使其行为与普通记忆一致。
         node.importance = _finite_clamp(node.importance, 0.0, 1.0, default=0.5)
+        # #588 / #594：`content` 类型闸（唯一写入汇聚点，与 #164 同址）。#331 的同类
+        # 闸只加在 `add_perception` 一个入口 ⇒ 绕过面仍在：`add_context(content=...)`、
+        # `ingest_frame({"caption": ...})`、`set_anchor(content=...)`、
+        # `add_structure_node(content=...)` 四入口直构 `STNode` 后就地入库，非 str 以
+        # BLOB 落进 TEXT 列。后果链（#588 实测）：一行 BLOB 毒化整条检索面
+        # （`recall` → `TypeError: sequence item 0: expected str instance, bytes found`），
+        # 且 `export_all` → `TypeError: Object of type bytes is not JSON serializable`
+        # ⇒ M13 备份做不出来。修法：闸**下沉到本唯一写入汇聚点**，一处覆盖全部入口
+        # （含 #594 点名的 `set_anchor` / `add_structure_node` 不可变层两入口），
+        # 而不是逐个入口补——逐入口补必再漏。
+        # 口径与 #331 一致：**非 str ⇒ fail-closed 拒绝**，不做 `str(content)` 静默强转
+        # （那会把 dict 存成 repr 文本，属静默篡改语义，比拒绝更坏）。
+        # 判据来源：公开 issue #588 / #594（与 #331 同族，维护者建议「闸下沉 add_node，
+        # 一处覆盖全部入口」）＋ 本文件 `add_perception` 的 #331 先例。
+        # 边界（削掉的判别力/未覆盖面）：①本闸只判 **str**，不判内容语义；②不动
+        # `import_all` 的既有导入口径（其自身转换面不在本件范围）；③`content=None`
+        # 此前走 `STNode` 默认值，本闸使其 fail-closed（与 #331 同口径，属预期收紧）。
+        if not isinstance(node.content, str):
+            raise TypeError(
+                "#588/#594 add_node 拒绝非字符串 content（收到 %s）：非 str 会以 BLOB "
+                "静默落库，毒化检索面并使 export_all 失败（与 #331 同口径，闸已下沉至"
+                "唯一写入汇聚点）" % type(node.content).__name__
+            )
         existing = self.get_node(node.id)
+        overwrite_protected = None
         if existing is not None:
             if existing.layer in self.SHARED_LAYERS and self.role != Role.PRIMARY:
                 raise PermissionError(
@@ -1423,13 +1581,47 @@ class LayeredStore:
                     f"禁止同 id 换层（#127）：id={node.id} 现为 {existing.layer.value}，"
                     f"拒绝改写为 {node.layer.value}"
                 )
+            # #659（数据损坏）：同 id 同层原位覆盖走 `INSERT OR REPLACE` **整行替换**
+            # ——#127 的闸只拦「换层」与「旧行属共享层且非 PRIMARY」，同层覆盖完全放行
+            # ⇒ 新行漏带 tags 时，旧行的 `no_forget` 标签被静默抹掉；随后遗忘路径
+            # （`decay_cycle`/`delete_node`）按设计把「不可遗忘」节点正常删除
+            # （`_is_forget_protected` 的两个真源之一被一步覆写，护栏没有被绕过，是被
+            # 合法地走完了）。修法（温和版 · 与 issue 建议「至少保真 no_forget」同向）：
+            # ① 旧行 tags 含 `no_forget` ⇒ **并入**新行 tags（保护标记不随覆盖消失）；
+            # ② 旧行受保护（`_is_forget_protected`：`no_forget` 标签 ∪ `protections`
+            #    行登记）⇒ 落一条 `action_logs` 审计，使「受保护节点被改写」不再静默。
+            # **不**改成「拒绝覆写受保护节点」——那会打掉 `apply_shared_sync(overwrite=True)`
+            # 这条合法原地更新路径（该路径走 `store.add_node`）。取舍（如实标注）：
+            # 保护语义收口在「标记保留 ＋ 可审计」，**不改写内容本身**（内容仍按调用方
+            # 传入落库）；`protections` 行不受 `INSERT OR REPLACE` 影响（另一张表），
+            # 故 `delete_node` 仍拒删该节点。
+            # 判据来源：公开 issue #659 ＋ `_is_forget_protected`（#36「唯一真源」）
+            # ＋ 既有 `immutable_edge_stripped` 的审计写法先例。
+            if self._is_forget_protected(existing):
+                # ① 保护标记保真：旧行 tags 含 `no_forget` ⇒ 并入新行 tags（**只**在旧行
+                #    确有该标签时并入——`protections` 行登记的节点另有真源，不据此新造标签，
+                #    避免把「仅经 protections 行保护」的节点语义悄悄改写成带标签）。
+                if "no_forget" in (existing.tags or []) and "no_forget" not in node.tags:
+                    node.tags = list(node.tags) + ["no_forget"]
+                # ② 受保护节点被改写 ⇒ 落审计（不再静默）。
+                overwrite_protected = existing
         with self._lock:
             c = self.conn.cursor()
             c.execute('''
                 INSERT OR REPLACE INTO nodes
                 VALUES (?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?)
             ''', node.to_row())
-            self.conn.commit()
+            if overwrite_protected is not None:
+                # 审计与写入同一连接、同一提交（`log_action` 自带 commit ⇒ 一并落库）。
+                self.log_action(
+                    "protected_node_overwritten",
+                    f"受保护节点 {node.id} 被同 id 同层覆盖（#659）：no_forget 标签已保留、"
+                    f"protections 行不受影响，保护语义（拒删/免衰减）仍生效",
+                    node_ids=[node.id],
+                    outcome={"no_forget_in_new_tags": "no_forget" in node.tags,
+                             "protections_row": node.id in set(self.get_protected_nodes()),
+                             "old_tags": list(overwrite_protected.tags or [])})
+            self._commit_locked()
         return node.id
 
     # ---- 引擎元数据（engine_meta key-value，跨进程持久化） ----
@@ -1452,7 +1644,7 @@ class LayeredStore:
             c = self.conn.cursor()
             c.execute("INSERT OR REPLACE INTO engine_meta (key, value) VALUES (?, ?)",
                       (key, str(value)))
-            self.conn.commit()
+            self._commit_locked()
 
     @contextmanager
     def _structure_event_transaction(self):
@@ -1461,6 +1653,12 @@ class LayeredStore:
             conn = self.conn
             nested = conn.in_transaction
             savepoint = f"structure_event_{uuid.uuid4().hex}"
+            # ★ #665：`nested` 必须同时把「已被 @_transactional 包裹」算进来。
+            # 单看 `conn.in_transaction` 不够——最外层 `_tx` 就是用它 BEGIN 的，
+            # 但**裸 `BEGIN IMMEDIATE` 在已开事务里会抛 `cannot start a transaction
+            # within a transaction`**；此处历史上只按 in_transaction 判，故凡是
+            # 走 `_tx` 进入的调用方都会踩到。用 `_tx_depth` 兜住这一层。
+            nested = nested or bool(getattr(self, "_tx_depth", 0))
             conn.execute(f"SAVEPOINT {savepoint}" if nested else "BEGIN IMMEDIATE")
             try:
                 yield conn.cursor()
@@ -1596,7 +1794,8 @@ class LayeredStore:
                     elif k.startswith("neural_"):
                         se["neural"][k[len("neural_"):]] = v
                 c.execute("UPDATE nodes SET spatial_coordinates=?, semantic_coordinates=? WHERE id=?",
-                          (json.dumps(sp), json.dumps(se), nid))
+                          (_dumps_json(sp, where="spatial_coordinates"),
+                           _dumps_json(se, where="semantic_coordinates"), nid))
                 migrated += 1
             if migrated:
                 self._write_structure_record(
@@ -1703,7 +1902,13 @@ class LayeredStore:
             # 「不可遗忘」判定——判定与 DELETE 共用同一写快照：窗口期已提交的保护行对本
             # 快照可见（拒删）；未提交的排在删除事务之后（保护落在已删节点＝既有语义，
             # 非本件竞态）。重读行防 t0 预读与写快照间节点被改写层。
-            self.conn.execute("BEGIN IMMEDIATE")
+            # ★ #665：本方法已挂 @_transactional，最外层事务已由 `_tx` 开好；此处再
+            # 裸 BEGIN IMMEDIATE 会抛「cannot start a transaction within a transaction」。
+            # 仅在「无人替我们开事务」时（_tx_depth==0）才需要自己开。
+            if getattr(self, "_tx_depth", 0):
+                pass  # 事务已由 _tx 开启，且写锁已拿到，无需重复 BEGIN
+            else:
+                self.conn.execute("BEGIN IMMEDIATE")
             node = self.get_node(node_id)
             if node is None or node.layer in self.IMMUTABLE_LAYERS:
                 return False
@@ -1746,7 +1951,7 @@ class LayeredStore:
                                json.dumps({"reason": "opposite_edge_gone",
                                            "removed_node": node_id}, ensure_ascii=False),
                                json.dumps({}, ensure_ascii=False)))
-            self.conn.commit()
+            self._commit_locked()
         return True
 
     @_transactional
@@ -1766,7 +1971,7 @@ class LayeredStore:
                                   last_access = ?
                 WHERE id=?
             ''', (delta, time.time(), node_id))
-            self.conn.commit()
+            self._commit_locked()
 
     @staticmethod
     def _retrieval_touches_recency() -> bool:
@@ -1841,14 +2046,18 @@ class LayeredStore:
 
     # ---------- 边操作 ----------
 
-    def _assert_edge_role(self, edge: STEdge) -> None:
+    def _assert_edge_endpoints_role(self, source_id: str, target_id: str) -> None:
         """非 PRIMARY 不得写**任一端为共享层**（anchor/structure）的边（#234）。
+
+        **边角色闸的单一真源**（#674）：`_assert_edge_role`（`add_edge`/`verify_edge`/
+        `unverify_edge` 等公开 API 写路径）与 `import_all` 的 edges 导入腿**共用**本方法
+        ——两条路径不可能再分叉（#674 的病灶正是「导入腿另有一份无闸实现」）。
 
         判据来源：`Role` 注释（core.py:631-632）「PRIMARY 可写共享层（锚点层、结构
         层）／SUB 仅本地层」＋ `LayeredStore` docstring「共享层……跨实例同步，不可
         遗忘」＋ 公开 issue #234「期望行为：非 PRIMARY 角色对任一端属于
         `IMMUTABLE_LAYERS` 的边做新增、修改、verify、删除，都应得到
-        `PermissionError`」。
+        `PermissionError`」＋ 公开 issue #674（导入腿残余面）。
         边界（削掉的判别力，如实标注）：本闸用 `SHARED_LAYERS`（锚点/结构）而非
         issue 字面的 `IMMUTABLE_LAYERS`——#191 已裁定 SELF 属**本地层**（SUB 可写，
         见 `add_node` docstring），若按 `IMMUTABLE_LAYERS` 收口会把 SUB 的
@@ -1864,7 +2073,7 @@ class LayeredStore:
             # `STNode.from_row` 同款裸露转换 ⇒ 非法 layer 的失败语义一致；
             # 不存在该 id 时 `fetchone()` 为 None，与旧 `n is None` 同分支。
             _c = self.conn.cursor()
-            for nid in (edge.source_id, edge.target_id):
+            for nid in (source_id, target_id):
                 _c.execute("SELECT layer FROM nodes WHERE id=?", (nid,))
                 _row = _c.fetchone()
                 if _row is None:
@@ -1874,6 +2083,10 @@ class LayeredStore:
                     raise PermissionError(
                         f"role={self.role.value} 无权写共享层端点（{nid} 为 "
                         f"{_lay.value}）的边，共享层边由父节点主控（#234）")
+
+    def _assert_edge_role(self, edge: STEdge) -> None:
+        """边对象入口：委托 `_assert_edge_endpoints_role`（单一真源，见该助手）。"""
+        self._assert_edge_endpoints_role(edge.source_id, edge.target_id)
 
     @_transactional
     def add_edge(self, edge: STEdge) -> str:
@@ -1900,7 +2113,7 @@ class LayeredStore:
         with self._lock:
             c = self.conn.cursor()
             c.execute('INSERT OR REPLACE INTO edges VALUES (?,?,?,?,?,?,?,?,?,?,?)', edge.to_row())
-            self.conn.commit()
+            self._commit_locked()
         return edge.id
 
     def get_edge(self, edge_id: str) -> Optional[STEdge]:
@@ -1954,7 +2167,7 @@ class LayeredStore:
                     UPDATE edges SET verified=1, last_verified=?
                     WHERE id=?
                 ''', (now, edge_id))
-            self.conn.commit()
+            self._commit_locked()
 
     @_transactional
     def unverify_edge(self, edge_id: str) -> bool:
@@ -2862,7 +3075,7 @@ class LayeredStore:
                     continue
                 c.execute("UPDATE nodes SET confidence=? WHERE id=?",
                           (self._decay_value(conf, factor, dt), nid))
-            self.conn.commit()
+            self._commit_locked()
 
     # ==================== 检索层（M1） ====================
 
@@ -3289,7 +3502,7 @@ class LayeredStore:
             c = self.conn.cursor()
             c.execute("UPDATE nodes SET tags=? WHERE id=?", (_dumps_tags(node.tags), node_id))
         if own_tx:
-            self.conn.commit()
+            self._commit_locked()
 
     # ==================== 情境层（M4） ====================
 
@@ -3366,7 +3579,7 @@ class LayeredStore:
         c.execute("INSERT INTO blindspots (id, code, description, severity, category, status, created_at, resolved_at, predictability) VALUES (?,?,?,?,?,?,?,?,?)",
                   (bid, code, description, severity, category, "open", time.time(), None,
                    predictability))
-        self.conn.commit()
+        self._commit_locked()
         return bid
 
     def list_blindspots(self, status: str = None) -> List[Dict]:
@@ -3411,7 +3624,7 @@ class LayeredStore:
         c = self.conn.cursor()
         c.execute("UPDATE blindspots SET status='resolved', resolved_at=? WHERE id=?",
                   (time.time(), blindspot_id))
-        self.conn.commit()
+        self._commit_locked()
 
     # ==================== 技能记忆（M9） ====================
 
@@ -3422,7 +3635,7 @@ class LayeredStore:
         c = self.conn.cursor()
         c.execute("INSERT INTO skills VALUES (?,?,?,?,?,?,?,?)",
                   (sid, name, description, procedure, confidence, 1, time.time(), time.time()))
-        self.conn.commit()
+        self._commit_locked()
         return sid
 
     @staticmethod
@@ -3522,7 +3735,7 @@ class LayeredStore:
         c = self.conn.cursor()
         c.execute("UPDATE skills SET confidence = MIN(1.0, MAX(0.0, confidence + ?)), updated_at=? WHERE id=?",
                   (delta, time.time(), skill_id))
-        self.conn.commit()
+        self._commit_locked()
 
     # ==================== 固化流水线（M6 · D-003 终裁门槛） ====================
 
@@ -3591,7 +3804,7 @@ class LayeredStore:
                   " VALUES (?,?,?,?,?,?,?,?,?,?)",
                   (pid, node_id, requester, reason, "", "", "pending", time.time(),
                    None, chash))
-        self.conn.commit()
+        self._commit_locked()
         return pid
 
     @_transactional
@@ -3620,7 +3833,7 @@ class LayeredStore:
             return False  # 身份互斥：提议人不得自兼复核
         c.execute("UPDATE promotion_proposals SET verified_by=?, status='verified' WHERE id=?",
                   (verified_by, proposal_id))
-        self.conn.commit()
+        self._commit_locked()
         return True
 
     @_transactional
@@ -3698,7 +3911,7 @@ class LayeredStore:
             c.execute("UPDATE promotion_proposals SET adjudicated_by=?, status=?, decided_at=?"
                       " WHERE id=?",
                       (adjudicated_by, "rejected", time.time(), proposal_id))
-            self.conn.commit()
+            self._commit_locked()
             try:
                 self.log_action(
                     "promotion_node_missing",
@@ -3713,13 +3926,13 @@ class LayeredStore:
             c.execute("UPDATE promotion_proposals SET adjudicated_by=?, status=?, decided_at=?"
                       " WHERE id=?",
                       (adjudicated_by, "rejected", time.time(), proposal_id))
-            self.conn.commit()
+            self._commit_locked()
             return None
         if approved:
             c.execute("UPDATE nodes SET layer='structure', confidence=1.0 WHERE id=?", (node_id,))
         c.execute("UPDATE promotion_proposals SET adjudicated_by=?, status=?, decided_at=? WHERE id=?",
                   (adjudicated_by, "approved" if approved else "rejected", time.time(), proposal_id))
-        self.conn.commit()
+        self._commit_locked()
         return node_id
 
     # ==================== 遗忘门控（M7） ====================
@@ -3759,7 +3972,7 @@ class LayeredStore:
             node.tags.append("no_forget")
             c.execute("UPDATE nodes SET tags=? WHERE id=?", (_dumps_tags(node.tags), node_id))
         if own_tx:
-            self.conn.commit()
+            self._commit_locked()
 
     def get_protected_nodes(self) -> List[str]:
         """取保护名单节点 id 列表（不可遗忘层的豁免集合）。"""
@@ -3851,14 +4064,14 @@ class LayeredStore:
             if "conflict" not in _tlist:
                 _tlist.append("conflict")
                 c.execute("UPDATE nodes SET tags=? WHERE id=?", (_dumps_tags(_tlist), nid))
-                self.conn.commit()
+                self._commit_locked()
         return edge
 
     @_transactional
     def prune_self_snapshots(self, keep: int) -> int:
         """自我快照有界保留（lingshu #201）：只留最近 `keep` 条**自动快照**
-        （tags 含 `self_snapshot`，按 created_at 降序），其余连同关联边删除，
-        返回删除条数。
+        （tags 含 `self_snapshot`，按**插入序** `rowid` 降序），其余连同关联边
+        删除，返回删除条数。
 
         为什么不经 `delete_node`：SELF 层在 `IMMUTABLE_LAYERS` 内（v1.16 扮演论
         「自我锚点不可遗忘」），`delete_node` 一律拒删；而 `update_self` 每次调用
@@ -3870,10 +4083,30 @@ class LayeredStore:
         tests/test_self_model_history.py）同族。
         边界（削掉的判别力）：对**自动快照**开了「不可删」的一个窄口（仅此一类、
         无 TTL）；SELF 层其它节点、`protections` 名单节点一律不动。
+
+        #489：保留序由**墙钟 `created_at`** 改为**插入序 `rowid`**——旧实现
+        `ORDER BY created_at DESC`，而 `created_at` 取 `time.time()`（不单调）。
+        只要库里有任何 SELF 快照的 `created_at` 大于当前时间（NTP 步进校正 /
+        虚拟机快照回滚 / 无 RTC 开机 / `import_all` 导入时钟偏快机器的备份），
+        `update_self` **本次刚插入**的快照 `created_at` 就是全层最小，紧随其后的
+        本次淘汰会把它**当场删除**；随后 `update_self` 用该 id `add_edge` ⇒
+        `IntegrityError: FOREIGN KEY constraint failed`（半截副作用：节点与边各自
+        已 commit，内存 `self_model` 已更新而库内快照已删）。改为按 `rowid`
+        （插入序）降序，则刚写入的快照 rowid 最大，永不落入淘汰前缀；与情境层
+        `enforce_context_cap`（#259）**同根同法**。
+        判据来源：公开 issue #489（值守复核帖 6165096839 / 6187655595 的「建议
+        修复面锚①：保留序改 `rowid DESC`，贴 #259 情境层先例」）。
+        边界（削掉的判别力，如实标注）：①`rowid` 反映**物理插入序**——本表
+        `id` 为 TEXT PRIMARY KEY（非 `WITHOUT ROWID`），`INSERT OR REPLACE`
+        命中同 id 会**换 rowid**；快照 id 含 uuid+毫秒戳、正常路径不复用同 id，
+        故不影响；`export_all`/`import_all` 往返保序（导出 `SELECT *` 按 rowid
+        扫描、导入按该序插入）⇒ 灾备恢复后 rowid 序仍等于原始写入序；②本件只改
+        **排序键**，未采纳「拒绝未来 `created_at`」——那是另设「未来多久算非法」
+        的容差口径，属设计者裁面，且会误伤时钟偏快机器所出备份的合法历史。
         """
         c = self.conn.cursor()
         c.execute("SELECT id FROM nodes WHERE layer='self' AND tags LIKE ? "
-                  "ORDER BY created_at DESC", ("%self_snapshot%",))
+                  "ORDER BY rowid DESC", ("%self_snapshot%",))
         ids = [r[0] for r in c.fetchall()]
         if len(ids) <= keep:
             return 0
@@ -3884,7 +4117,7 @@ class LayeredStore:
                 # #168：删边经唯一真源（对不可变层对端的边先落审计）
                 self._strip_incident_edges(c, nid)
                 c.execute("DELETE FROM nodes WHERE id=?", (nid,))
-            self.conn.commit()
+            self._commit_locked()
         return len(doomed)
 
     def count_layer(self, layer: MemoryLayer) -> int:
@@ -3963,7 +4196,7 @@ class LayeredStore:
         c = self.conn.cursor()
         resolved_at = time.time() if status != "open" else None
         c.execute("UPDATE blindspots SET status=?, resolved_at=? WHERE id=?", (status, resolved_at, blindspot_id))
-        self.conn.commit()
+        self._commit_locked()
 
     # ==================== v1.4 扩展（P1-1/P1-2/P1-3/P1-4） ====================
 
@@ -4000,7 +4233,7 @@ class LayeredStore:
         c = self.conn.cursor()
         c.execute("UPDATE nodes SET importance = MIN(1.0, MAX(0.0, importance + ?)) WHERE id=?",
                   (delta, node_id))
-        self.conn.commit()
+        self._commit_locked()
 
     def recalc_structural_importance(self, dry_run: bool = True,
                                      boost_cap: float = 0.15,
@@ -4197,8 +4430,8 @@ class LayeredStore:
                 sa = {}
         sa[key] = infl
         c.execute("UPDATE nodes SET state_attributes=? WHERE id=?",
-                  (json.dumps(sa, ensure_ascii=False), node_id))
-        self.conn.commit()
+                  (_dumps_json(sa, ensure_ascii=False, where="state_attributes"), node_id))
+        self._commit_locked()
 
     @staticmethod
     def _state_attr_of(sa_raw, key: str, default=None):
@@ -4393,9 +4626,10 @@ class LayeredStore:
             new_imp = 0.9
         c = self.conn.cursor()
         c.execute("UPDATE nodes SET state_attributes=?, tags=?, importance=? WHERE id=?",
-                  (json.dumps(sa, ensure_ascii=False), _dumps_tags(tags, ensure_ascii=False),
+                  (_dumps_json(sa, ensure_ascii=False, where="state_attributes"),
+                   _dumps_tags(tags, ensure_ascii=False),
                    new_imp, insight_id))
-        self.conn.commit()
+        self._commit_locked()
         return {"node_id": insight_id, "level": level, "status": status,
                 "evidence_count": len(ev), "importance": new_imp}
 
@@ -4500,7 +4734,7 @@ class LayeredStore:
         merged = f"{proc} → {step}" if proc else step
         c.execute("UPDATE skills SET procedure=?, version=version+1, updated_at=? WHERE id=?",
                   (merged, time.time(), skill_id))
-        self.conn.commit()
+        self._commit_locked()
 
     # ==================== v1.5 扩展（A-1/A-2/A-3） ====================
 
@@ -4512,7 +4746,7 @@ class LayeredStore:
         c = self.conn.cursor()
         c.execute("INSERT INTO rejected_paths VALUES (?,?,?,?,?,?,?,?)",
                   (rid, path_type, description, reason, evidence, "open", time.time(), None))
-        self.conn.commit()
+        self._commit_locked()
         return rid
 
     def list_rejected_paths(self, status: str = None) -> List[Dict]:
@@ -4542,7 +4776,7 @@ class LayeredStore:
         c = self.conn.cursor()
         c.execute("UPDATE rejected_paths SET status='consumed', consumed_at=? WHERE id=?",
                   (time.time(), rejected_id))
-        self.conn.commit()
+        self._commit_locked()
 
     @_transactional
     def add_verifier_standard(self, name: str, param: str, value: float, reason: str,
@@ -4553,7 +4787,7 @@ class LayeredStore:
         c.execute("INSERT INTO verifier_standards VALUES (?,?,?,?,?,?,?,?,?,?,?,?)",
                   (vid, name, param, value, reason, proposer, "", "", "", "pending",
                    time.time(), None))
-        self.conn.commit()
+        self._commit_locked()
         return vid
 
     def list_verifier_standards(self, status: str = None) -> List[Dict]:
@@ -4588,7 +4822,7 @@ class LayeredStore:
         status = "reviewed" if approved else "rejected"
         c.execute("UPDATE verifier_standards SET independent_reviewer=?, status=? WHERE id=?",
                   (reviewer, status, vid))
-        self.conn.commit()
+        self._commit_locked()
         return True
 
     @_transactional
@@ -4609,7 +4843,7 @@ class LayeredStore:
         status = "cs_approved" if approved else "cs_rejected"
         c.execute("UPDATE verifier_standards SET cs_reviewer=?, status=? WHERE id=?",
                   (reviewer, status, vid))
-        self.conn.commit()
+        self._commit_locked()
         return True
 
     # 无 @_transactional：#429 起本方法要么由调用方经 `_cursor` 传入事务，要么自开
@@ -4665,7 +4899,7 @@ class LayeredStore:
         c = self.conn.cursor()
         c.execute("INSERT INTO escalation_points VALUES (?,?,?,?,?,?,?,?)",
                   (eid, code, trigger, condition, action, severity, 1, time.time()))
-        self.conn.commit()
+        self._commit_locked()
         return eid
 
     @_transactional
@@ -4685,7 +4919,7 @@ class LayeredStore:
                    json.dumps(node_ids or [], ensure_ascii=False),
                    json.dumps(outcome or {}, ensure_ascii=False),
                    json.dumps(context or {}, ensure_ascii=False)))
-        self.conn.commit()
+        self._commit_locked()
 
     @_transactional
     def set_escalation_enabled(self, escalation_id: str, enabled: bool,
@@ -4738,19 +4972,48 @@ class LayeredStore:
         return stats
 
     def close_current_thread(self):
-        """服务请求收尾时释放本线程连接，不关闭其他线程的连接。"""
+        """服务请求收尾时释放本线程连接，不关闭其他线程的连接。
+
+        #660：旧实现读的是 `getattr(self._local, "conn", None)`，而 `_connect` 实际设的是
+        `self._local.slot` ⇒ 该读取**恒为 None**、整个方法恒为 no-op（槽仍在、连接仍可用）。
+        现改读/清 `self._local.slot`：关槽、从登记表摘除、清空本线程槽（下次访问经
+        `conn` property 按需重建——本方法**不是**终止态，故不置 `self._closed`）。
+
+        `:memory:` 边界（如实标注）：`__init__` 的保活锚连接在创建线程内**就是**该线程的
+        `_local.slot`（`_connect` 同时登记两处）。若直接关掉它，共享内存库随最后一条连接
+        消失 ⇒ 后续访问得到空库假连接。故当被关的槽就是锚连接时，**先补一条新的保活
+        连接**再关旧槽（共享缓存库在旧连接关闭前已有新连接挂上，库不消失）；文件库无需
+        保活，直接清引用。
+        """
         with self._lock:
-            connection = getattr(self._local, "conn", None)
-            if connection is not None:
-                connection.close()
-                self._conns.remove(connection)
-                del self._local.conn
+            slot = getattr(self._local, "slot", None)
+            if slot is None:
+                return
+            self._local.slot = None
+            if slot is self._anchor:
+                if self._memory_dsn is not None:
+                    self._anchor = self._connect(self._memory_dsn)
+                    # 新锚只作保活，不作本线程连接（下次访问按需重建）。
+                    self._local.slot = None
+                else:
+                    self._anchor = None
+            slot.close()
+            self._conns.discard(slot)
 
     def close(self):
-        """关闭本实例登记的全部连接（Agent 生命周期终点调用）。"""
+        """关闭本实例登记的全部连接（Agent 生命周期终点调用）。
+
+        #660：旧实现只遍历 `_conns` 关槽 ＋ `_anchor = None`，**不清 `self._local.slot`**
+        ——被 close 的槽 `_closed=True` 但 `slot.conn` 仍非 None，`conn` property 判为
+        「仍新鲜」并返回死连接（见 `conn` docstring）。现：① 置 `self._closed`（终止态，
+        `conn` 显式失败并给可判文案）；② 清本线程 `_local.slot`；③ 其余线程的槽已关闭，
+        其 `_local.slot` 指向的槽 `_closed=True` 由 `conn` 新鲜度判据拦下。
+        """
+        self._closed = True
         for slot in list(self._conns):
             slot.close()
         self._conns = weakref.WeakSet()
+        self._local.slot = None
         self._anchor = None
 
 
@@ -4774,6 +5037,15 @@ class SpacetimeMemoryEngine:
     #: 判据来源：经验标定（本件 #426）——仓内无规定视觉锚点数上限的理论章节，
     #: 追不到更早出处。
     MAX_VPRIM_ANCHORS = 32
+
+    def _commit_locked(self):
+        """事务内提交（委托 store，语义见 LayeredStore._commit_locked）。
+
+        #665：Engine 侧 `@_transactional` 方法同样在方法体里写
+        `self.conn.commit()`（`self.conn` 即 store 连接），必须一并改走本方法，
+        否则内层 engine 方法一样会提交整条事务、销毁外层 SAVEPOINT。
+        """
+        return self.store._commit_locked()
 
     @contextlib.contextmanager
     def _tx(self):
@@ -5733,6 +6005,9 @@ class SpacetimeMemoryEngine:
         )
         self.store.add_node(snapshot)
         # #201：自我快照有界保留（FIFO 淘汰最旧快照），防无界堆积挤占召回。
+        # #489：prune 按插入序（rowid）淘汰 ⇒ 本次刚插入的快照 rowid 最大，不会
+        # 被自己这次淘汰选中（旧实现按墙钟 created_at，时钟回拨时自删，并令下方
+        # add_edge 抛 FOREIGN KEY constraint failed）。
         self.store.prune_self_snapshots(self.SELF_SNAPSHOT_MAX)
         if link_to_node_id and self.store.get_node(link_to_node_id):
             self.add_edge(snapshot.id, link_to_node_id, EdgeType.CAUSAL, confidence=1.0)
@@ -5761,7 +6036,54 @@ class SpacetimeMemoryEngine:
     #: #479：import_all 需密钥的 engine_meta 治理键（身份/信任持久面）。
     #: 纯技术键（_schema_version/_last_decay_at）无治理载荷，不在闸面——整表拒绝
     #: 会打掉 schema 版本恢复（值守复核 6164742040 权衡段，编排侧裁定收窄到载荷键）。
-    ENGINE_META_GUARDED_KEYS = frozenset({SELF_MODEL_META_KEY})
+    #:
+    #: #671（本笔 · 最小枚举补齐）：`#479` 的枚举只列 `self_model_snapshot` 一个键，
+    #: 而**启动期被回读**的治理载荷键至少还有四个（复核实测）：
+    #:   · `verifier_config` —— `_restore_structure_configuration` 无钳制原样恢复
+    #:     （`dedup_static` 0.85→0.0 生效，绕过 `#118` 的 `[0.5,0.95]` 钳制）；
+    #:   · `attention_weights` —— 同函数恢复注意力偏好权重；
+    #:   · `context_max` —— `_load_context_max()` 重启后 200→1，情境层 FIFO 上限被改写；
+    #:   · `structure_writer_schema` —— 重启后 `_structure_writer_active` False→True。
+    #: 上述四键与 `self_model_snapshot` 同属「无密钥可改且启动回读」的治理载荷面，
+    #: 本笔一并纳入闸内。判据来源：公开 issue #671 ＋ `#479` 的同一把闸。
+    #: **取舍（如实标注，留设计者裁）**：本笔取**最小枚举补齐**，不改成 deny-by-default
+    #: 放行白名单——后者是更大的契约变更（「哪些键能跨备份存活」），属设计者裁面。
+    #: 为防「枚举天然会漏」重演，另立机械闭合腿 `ENGINE_META_STARTUP_KEYS` ＋
+    #: `ENGINE_META_NONGOVERNANCE_KEYS`（见下），由
+    #: `tests/test_issue671_engine_meta_guarded_keys_guard.py` 的 G5 扫描源码闭合：
+    #: 将来新增一个启动回读键而忘了分类 ⇒ 守卫红。
+    ENGINE_META_GUARDED_KEYS = frozenset({
+        SELF_MODEL_META_KEY,
+        "verifier_config",
+        "attention_weights",
+        "context_max",
+        "structure_writer_schema",
+    })
+
+    #: #671：源码内**全部** `engine_meta` 读点出现的键（机械闭合腿的分类全集）。
+    #: 判据来源：`git grep -n 'get_meta(' lingshu/` ＋ `engine_meta WHERE key=` 的
+    #: 全部读点逐条核对（core.py 的 `_init_tables` / `__init__` /
+    #: `_restore_structure_configuration` / `get_current_structure_nodes` /
+    #: `_load_self_snapshot` / `_load_context_max` / `decay_cycle`，以及
+    #: `structure_writer.py` 的版本读点）。
+    #: 守卫 G5 断言 `ENGINE_META_GUARDED_KEYS ∪ ENGINE_META_NONGOVERNANCE_KEYS`
+    #: **恰等于**本集合 ⇒ 新增键漏分类即红。
+    ENGINE_META_STARTUP_KEYS = frozenset({
+        SELF_MODEL_META_KEY,          # 身份/信任持久快照（#479）
+        "verifier_config",            # 验证/去重配置（#671）
+        "attention_weights",          # 注意力偏好权重（#671）
+        "context_max",                # 情境层 FIFO 上限（#671）
+        "structure_writer_schema",    # 结构写入器开关（#671）
+        "_schema_version",            # schema 版本（非治理：灾备恢复必需）
+        "_last_decay_at",             # 上次衰减墙钟（非治理：纯技术时间戳）
+    })
+
+    #: #671：**非治理**键白名单（无治理载荷，无密钥可导入）。
+    #: 判据来源：`#479` 的收窄理由原文「不整表拒绝——整表拒绝会打掉 schema 版本恢复」
+    #: ＋ 本笔复核（`_schema_version` 只被 `_init_tables` 与 schema 恢复读；
+    #: `_last_decay_at` 只被 `decay_cycle` 读，是纯技术时间戳，不改变任何行为分支）。
+    ENGINE_META_NONGOVERNANCE_KEYS = frozenset({"_schema_version", "_last_decay_at"})
+
 
     def _save_self_model(self) -> None:
         """把运行态自我模型整份写入 `engine_meta` 权威键（#33 落库出口）。
@@ -5779,7 +6101,8 @@ class SpacetimeMemoryEngine:
 
         先权威键（`engine_meta`），再回退 SELF 层最新 `self_snapshot` 节点——
         回退腿覆盖「本件修复前已运行过的库」（有 SELF 层快照但无权威键）。
-        取最新按 `created_at DESC`（`id` 兜底，防同毫秒并列）。
+        取最新按**插入序** `rowid` 降序（#489；与 `prune_self_snapshots` 同键，
+        墙钟 `created_at` 不单调——时钟回拨后「最新」会指向旧快照）。
         """
         raw = self.store.get_meta(self.SELF_MODEL_META_KEY).get(self.SELF_MODEL_META_KEY)
         if raw:
@@ -5789,7 +6112,7 @@ class SpacetimeMemoryEngine:
                 pass
         c = self.store.conn.cursor()
         c.execute("SELECT content FROM nodes WHERE layer='self' AND tags LIKE ? "
-                  "ORDER BY created_at DESC, id DESC LIMIT 1", ("%self_snapshot%",))
+                  "ORDER BY rowid DESC LIMIT 1", ("%self_snapshot%",))
         row = c.fetchone()
         if not row or not row[0]:
             return None
@@ -6134,7 +6457,7 @@ class SpacetimeMemoryEngine:
                 c = self.store.conn.cursor()
                 c.execute("UPDATE nodes SET tags=? WHERE id=?",
                           (_dumps_tags(node.tags), node_id))
-                self.store.conn.commit()
+                self._commit_locked()
             if not approved:
                 # A-1：被拒绝的固化提案 → 被拒绝路径资产
                 content = node.content[:60] if node else proposal_id
@@ -6614,13 +6937,19 @@ class SpacetimeMemoryEngine:
     #: `Image.save(path)` ⇒ 无目录约束、无根判定，可向任意路径写图像（唯一边界是
     #: Pillow 只认图像扩展名）。
     #: 修法（与同门面 `flush` 的 #324 收口同形）：显式配置面
-    #: `LINGSHU_WORLD3D_OUT_ROOT`（`os.pathsep` 多根）优先，未配置则回落**认知图
-    #: 库根** `MDCG_ROOT`（本门面既有真源），两者皆无 ⇒ **fail-closed**（不写、
-    #: 返回 error）。归一用 `realpath + normcase` ⇒ 软链/junction 别名与 `..` 逃逸
-    #: 不得绕过。
+    #: `LINGSHU_WORLD3D_OUT_ROOT`（`os.pathsep` 多根）优先；未配置 ⇒ **fail-closed**
+    #: （不写、返回 error）。归一用 `realpath + normcase` ⇒ 软链/junction 别名与
+    #: `..` 逃逸不得绕过。
     #: 判据来源：公开 issue #277「建议修复 1：限制输出根……用 `os.path.realpath` +
     #: `os.path.commonpath` 判定包含性，越界即拒绝并返回显式错误」＋ 同文件 #324
-    #: 已采纳的「显式面 → 认知图库根 → fail-closed」三级回落链（同形先例）。
+    #: 已采纳的「显式面 → fail-closed」回落链（同形先例）。
+    #:
+    #: issue #480（安全 P0）续：**默认根不再回落 `MDCG_ROOT`**——与 `flush` 同一
+    #: 缺陷形状（未设显式根时唯一可写位置恰是认知图真源，真源内的图片扩展名文件
+    #: 可被 `Image.save` 覆盖）。#480 报告与值守复核帖均点名本条为「同根第二路径」，
+    #: 故两处同收：默认不回落 + 显式根不得位于真源内 + 目标路径不得落回真源。
+    #: 边界（如实标注）：#277 自身面（「path 由调用方完全可控」）仍属 #277——本件
+    #: 只收「真源」这一格，**不**改 #277 的越界判定口径（白名单包含性判定逐字不变）。
     #: 边界（削掉的判别力）：**不**加扩展名白名单（issue 建议 2）——issue 自身实测
     #: 边界已证非图像扩展名由 `PIL.Image.save` 抛 `ValueError` 拒绝，本件不重复设卡；
     #: 亦**不**加 `overwrite=False`（issue 建议 3，属新的产品决策，非本缺陷面）。
@@ -6628,29 +6957,42 @@ class SpacetimeMemoryEngine:
 
     @classmethod
     def _world3d_out_roots(cls) -> List[str]:
-        """`render` 输出白名单根（显式配置面优先，回落认知图库根）。"""
+        """`render` 输出白名单根（**仅显式配置面**；#480 起不再回落 MDCG_ROOT）。"""
         raw = os.environ.get(cls.WORLD3D_OUT_ROOT_ENV, "")
-        roots = [p for p in str(raw).split(os.pathsep) if p.strip()] if raw else []
-        if not roots:
-            md = str(os.environ.get("MDCG_ROOT", "") or "").strip()
-            roots = [md] if md else []
-        return roots
+        return [p for p in str(raw).split(os.pathsep) if p.strip()] if raw else []
 
     @classmethod
     def _confine_world3d_out_path(cls, out_path: str) -> str:
-        """把 `render` 的 `path` 收进白名单根；越界/未配置 ⇒ `ValueError`。
+        """把 `render` 的 `path` 收进白名单根；越界/未配置/根在真源内 ⇒ `ValueError`。
 
         归一用 `realpath + normcase`（与 `_confine_simloop_out_path` 同口径）——
         软链/junction 别名不得绕过根判定。边界（如实标注）：判据是「归一后的目标
         路径落在某个根之下」，**不**拦「根之内的软链指向根外」这种（`realpath` 已
         解析目标侧，故实际已覆盖）；也不拦根目录自身被当文件写（那是写失败，不是
-        越界）。"""
+        越界）。
+
+        #480 续（与 `_confine_simloop_out_path` 同三条）：①未显式配置根 ⇒
+        fail-closed（不再回落 `MDCG_ROOT`）；②配置的根位于 `MDCG_ROOT` 之内 ⇒ 拒；
+        ③目标路径本身位于 `MDCG_ROOT` 之内 ⇒ 拒（堵「根＝真源父目录」绕过腿）。
+        """
         roots = cls._world3d_out_roots()
         if not roots:
             raise ValueError(
-                "#277 render 拒绝：未配置输出根（LINGSHU_WORLD3D_OUT_ROOT 或 "
-                "MDCG_ROOT 皆缺）⇒ fail-closed，不做任意路径写入")
+                "#277 render 拒绝：未配置输出根（LINGSHU_WORLD3D_OUT_ROOT 缺）"
+                "⇒ fail-closed，不做任意路径写入（#480：不再回落 MDCG_ROOT）")
+        md = str(os.environ.get("MDCG_ROOT", "") or "").strip()
+        md_norm = os.path.normcase(os.path.realpath(md)) if md else ""
+        for r in roots:
+            root = os.path.normcase(os.path.realpath(r))
+            if md_norm and (root == md_norm or root.startswith(md_norm + os.sep)):
+                raise ValueError(
+                    "#480 render 拒绝：输出根位于认知图真源 MDCG_ROOT 之内"
+                    "（%s 在 %s 之下）⇒ fail-closed，不写真源" % (r, md))
         target = os.path.normcase(os.path.realpath(out_path))
+        if md_norm and (target == md_norm or target.startswith(md_norm + os.sep)):
+            raise ValueError(
+                "#480 render 拒绝：目标路径位于认知图真源 MDCG_ROOT 之内"
+                "（%s 在 %s 之下）⇒ fail-closed，不写真源" % (out_path, md))
         for r in roots:
             root = os.path.normcase(os.path.realpath(r))
             if target == root or target.startswith(root + os.sep):
@@ -7092,39 +7434,62 @@ class SpacetimeMemoryEngine:
     #: 缺陷：本门面的 `params` 由调用方（模型驱动面）给，`flush` 直接把它当
     #: 文件路径交给 `SimulationLoop.flush_payloads` ⇒ `open(out_path, "w")`
     #: **任意路径可写 + 覆盖式**（无白名单、无原子性）。
-    #: 修法：显式配置面优先（`LINGSHU_SIMLOOP_OUT_ROOT`，`os.pathsep` 多根），
-    #: 未配置则回落**认知图库根** `MDCG_ROOT`（本门面 `load` 分支的同一真源），
-    #: 两者皆无 ⇒ **fail-closed**（不写、返回 error）——与 #85 三级回落链同形
-    #: （显式配置 → 实际配置库 → 无则拒绝），不引入「未配置即放开」。
+    #: 修法：显式配置面（`LINGSHU_SIMLOOP_OUT_ROOT`，`os.pathsep` 多根），
+    #: 未配置 ⇒ **fail-closed**（不写、返回 error）——不引入「未配置即放开」。
+    #: （#480 起**不再回落** `MDCG_ROOT`，见下。）
     #: 判据来源：经验标定（本件 #324，仓内无「simloop 输出根」的理论章节）——
-    #: 口径取「显式面 → 认知图库根 → fail-closed」；追不到更早出处。
+    #: 口径取「显式面 → fail-closed」；追不到更早出处。
+    #:
+    #: issue #480（安全 P0）：**默认根不再回落 `MDCG_ROOT`**。缺陷——未设
+    #: `LINGSHU_SIMLOOP_OUT_ROOT` 时旧实现回落到认知图真源 `MDCG_ROOT`，于是
+    #: #324 修复后唯一允许写入的位置恰好是**认知图真源**；SUB 角色经
+    #: `wm_simloop("flush")` 可覆盖结构层受保护 `.md` 节点并注入任意正文
+    #: （实体 category 带 `\n` 即可向节点正文注入行），且返回 `status: ok`——
+    #: 与 `flush_payloads` 自己的注释「v1 不旁路写真源」直接矛盾。
+    #: 修法：输出根**必须显式配置**；且该根**不得等于或位于** `MDCG_ROOT` 之内
+    #: （否则仍是写真源）⇒ 否则 fail-closed。另加三道闸：目标限 `.md`、写文件类
+    #: 动作限 `Role.PRIMARY`、目标文件 `O_EXCL`（拒覆盖已存在文件）。
     SIMLOOP_OUT_ROOT_ENV = "LINGSHU_SIMLOOP_OUT_ROOT"
 
     @classmethod
     def _simloop_out_roots(cls) -> List[str]:
-        """`flush` 输出白名单根（显式配置面优先，回落认知图库根）。"""
+        """`flush` 输出白名单根（**仅显式配置面**；#480 起不再回落 MDCG_ROOT）。"""
         raw = os.environ.get(cls.SIMLOOP_OUT_ROOT_ENV, "")
-        roots = [p for p in str(raw).split(os.pathsep) if p.strip()] if raw else []
-        if not roots:
-            md = str(os.environ.get("MDCG_ROOT", "") or "").strip()
-            roots = [md] if md else []
-        return roots
+        return [p for p in str(raw).split(os.pathsep) if p.strip()] if raw else []
 
     @classmethod
     def _confine_simloop_out_path(cls, out_path: str) -> str:
-        """把 `flush` 的 `out_path` 收进白名单根；越界/未配置 ⇒ `ValueError`。
+        """把 `flush` 的 `out_path` 收进白名单根；越界/未配置/根在真源内 ⇒ `ValueError`。
 
         归一用 `realpath + normcase`（与 `lingshu/_pathguard._norm` 同口径）——
         软链/junction 别名不得绕过根判定。边界（如实标注）：判据是「归一后的
         目标路径落在某个根之下」，**不**拦「根之内的软链指向根外」这种
         （`realpath` 已解析目标侧，故实际已覆盖）；也不拦根目录自身被当文件写
-        （那是写失败，不是越界）。"""
+        （那是写失败，不是越界）。
+
+        #480：①未显式配置根 ⇒ fail-closed（不再回落 `MDCG_ROOT`）；
+        ②配置的根若**等于或位于** `MDCG_ROOT` 之内 ⇒ fail-closed（否则等于
+        把输出根指回认知图真源，绕过 #324 的「不写真源」承诺）；
+        ③**目标路径本身**位于 `MDCG_ROOT` 之内 ⇒ fail-closed（堵住「显式根＝
+        真源父目录」这条绕过腿：根在真源之外，但目标仍落回真源）。"""
         roots = cls._simloop_out_roots()
         if not roots:
             raise ValueError(
-                "#324 flush 拒绝：未配置输出根（LINGSHU_SIMLOOP_OUT_ROOT 或 "
-                "MDCG_ROOT 皆缺）⇒ fail-closed，不做任意路径写入")
+                "#324 flush 拒绝：未配置输出根（LINGSHU_SIMLOOP_OUT_ROOT 缺）"
+                "⇒ fail-closed，不做任意路径写入（#480：不再回落 MDCG_ROOT）")
+        md = str(os.environ.get("MDCG_ROOT", "") or "").strip()
+        md_norm = os.path.normcase(os.path.realpath(md)) if md else ""
+        for r in roots:
+            root = os.path.normcase(os.path.realpath(r))
+            if md_norm and (root == md_norm or root.startswith(md_norm + os.sep)):
+                raise ValueError(
+                    "#480 flush 拒绝：输出根位于认知图真源 MDCG_ROOT 之内"
+                    "（%s 在 %s 之下）⇒ fail-closed，不写真源" % (r, md))
         target = os.path.normcase(os.path.realpath(out_path))
+        if md_norm and (target == md_norm or target.startswith(md_norm + os.sep)):
+            raise ValueError(
+                "#480 flush 拒绝：目标路径位于认知图真源 MDCG_ROOT 之内"
+                "（%s 在 %s 之下）⇒ fail-closed，不写真源" % (out_path, md))
         for r in roots:
             root = os.path.normcase(os.path.realpath(r))
             if target == root or target.startswith(root + os.sep):
@@ -7132,6 +7497,33 @@ class SpacetimeMemoryEngine:
         raise ValueError(
             "#324 flush 拒绝：out_path 越出白名单根（%s 不在 %r 之下）"
             % (out_path, roots))
+
+    @classmethod
+    def _confine_simloop_wal_path(cls, wal_path: str) -> str:
+        """把 `setup`/`attach` 的 WAL 路径挡在认知图真源之外（#480 续）。
+
+        为什么必须挡：`SimulationLoop._wal` 每个 tick 以 `"a"` **追加**写该路径
+        （`world/wm_simloop.py` 的 WAL 段），而 `setup`/`attach` 的 `wal_path` 由
+        调用方（模型驱动面）给、**原样**透传——SUB 角色实例把 `wal_path` 指向
+        认知图真源里的节点文件即可向其追加任意行（本件实测：受保护节点的正文被
+        JSONL 行污染；因是追加语义，frontmatter 仍在 ⇒ 缺陷更隐蔽）。模块自身
+        注释承诺「不旁路写真源」，本闸即该承诺的判据面。
+
+        边界（如实标注）：本闸**只**拦「落在 `MDCG_ROOT` 之内」；真源之外的任意
+        路径追加面（#324 第 4 项「`wal_path` 不受约束」）**未**在本件收口——那属
+        #324 的「任意路径写入」面，且收口它须先定 WAL 默认根口径（涉及部署默认值，
+        非纯技术题），故本件只做与 flush 同一条「不写真源」的判据。
+        """
+        md = str(os.environ.get("MDCG_ROOT", "") or "").strip()
+        if not md:
+            return wal_path
+        md_norm = os.path.normcase(os.path.realpath(md))
+        target = os.path.normcase(os.path.realpath(wal_path))
+        if target == md_norm or target.startswith(md_norm + os.sep):
+            raise ValueError(
+                "#480 wm_simloop 拒绝：wal_path 位于认知图真源 MDCG_ROOT 之内"
+                "（%s 在 %s 之下）⇒ fail-closed，不向真源追加写" % (wal_path, md))
+        return wal_path
 
     def wm_simloop(self, action: str, params: dict = None) -> dict:
         """世界模型推演循环（里程碑 M5.1 · WM-SIMLOOP-REV1）：
@@ -7154,7 +7546,15 @@ class SpacetimeMemoryEngine:
         if action == "attach":
             if not hasattr(self, '_wmodel'):
                 return {"status": "error", "error": "先初始化统一世界模型"}
-            self._simloop = SimulationLoop(world_model=self._wmodel, wal_path=p.get("wal_path"))
+            wal = p.get("wal_path")
+            if wal:
+                try:
+                    # #480 续：wal_path 亦不得落在认知图真源之内（WAL 是追加写，
+                    # 指向真源节点即向受保护 .md 追加任意行）
+                    wal = self._confine_simloop_wal_path(str(wal))
+                except ValueError as e:
+                    return {"status": "error", "error": str(e)}
+            self._simloop = SimulationLoop(world_model=self._wmodel, wal_path=wal)
             return {"status": "ok", "state": self._simloop.state()}
         if action == "setup":
             # #248：默认 WAL 路径不再写死相对 cwd 的 "data/"。旧实现
@@ -7167,6 +7567,11 @@ class SpacetimeMemoryEngine:
             wal = p.get("wal_path") or os.path.join(
                 os.environ.get("LINGSHU_DATA_ROOT", "data"),
                 "wm_simloop_wal.jsonl")
+            try:
+                # #480 续：显式 wal_path 不得落在认知图真源之内（追加写面）
+                wal = self._confine_simloop_wal_path(str(wal))
+            except ValueError as e:
+                return {"status": "error", "error": str(e)}
             sl_ = SimulationLoop(size=int(p.get("size", 40)),
                                  seed=int(p.get("seed", 42)), wal_path=wal)
             sl_.scene.create_scene(trees=int(p.get("trees", 0)), water=False)
@@ -7215,12 +7620,28 @@ class SpacetimeMemoryEngine:
         if action == "flush":
             out = p.get("out_path")
             if out:
-                # #324：模型驱动面给的路径先过白名单根闸（先判后写，越界即拒）
+                # #480：写文件类动作限 PRIMARY——SUB 无文件写权限（防经门面写文件）
+                if self.role != Role.PRIMARY:
+                    return {"status": "error", "error": (
+                        "#480 flush 拒绝：role=%s 无权写文件（写文件类动作限 PRIMARY）"
+                        % self.role.value)}
+                # #480：只允许 .md 扩展名（认知图节点载荷形态）
+                if os.path.splitext(str(out))[1].lower() != ".md":
+                    return {"status": "error", "error": (
+                        "#480 flush 拒绝：只允许 .md 扩展名（out_path=%s）" % out)}
+                # #324：模型驱动面给的路径先过白名单根闸（先判后写，越界即拒）；
+                # #480：根须显式配置且不得位于 MDCG_ROOT 之内
                 try:
                     out = self._confine_simloop_out_path(str(out))
                 except ValueError as e:
                     return {"status": "error", "error": str(e)}
-            r = sl.flush_payloads(out_path=out, brain=p.get("brain"))
+            try:
+                # #480：门面写文件用 O_EXCL 语义——目标已存在即拒（不覆盖真源节点）
+                r = sl.flush_payloads(out_path=out, brain=p.get("brain"),
+                                      overwrite=not bool(out))
+            except FileExistsError:
+                return {"status": "error", "error": (
+                    "#480 flush 拒绝：目标文件已存在，O_EXCL 拒覆盖（out_path=%s）" % out)}
             return {"status": "ok",
                     "flush": {k: r[k] for k in ("payload", "written", "note")}}
         if action == "wal":
@@ -8940,8 +9361,8 @@ class SpacetimeMemoryEngine:
                 se["protocol"]["relation"].append("causal" if changed else "sequential")
                 c = self.store.conn.cursor()
                 c.execute("UPDATE nodes SET semantic_coordinates=? WHERE id=?",
-                          (json.dumps(se), node.id))
-                self.store.conn.commit()
+                          (_dumps_json(se, where="semantic_coordinates"), node.id))
+                self._commit_locked()
         if entity_id:
             self._last_frame[entity_id] = node.id
         if "frame_ref" in frame_data:
@@ -9366,8 +9787,8 @@ class SpacetimeMemoryEngine:
                 merged[bucket] = val
         c = self.store.conn.cursor()
         c.execute("UPDATE nodes SET semantic_coordinates=? WHERE id=?",
-                  (json.dumps(merged), node_id))
-        self.store.conn.commit()
+                  (_dumps_json(merged, where="semantic_coordinates"), node_id))
+        self._commit_locked()
         return True
 
     def compiler_introspect(self) -> Dict:
@@ -9600,6 +10021,9 @@ class SpacetimeMemoryEngine:
         # **本地层**（SUB 可写），若按 IMMUTABLE 收口会把 SUB 的自我层备份一并
         # 拒掉、回归 #191 ⇒ 与 `add_node` 的写权限单一真源保持一致。
         # 判据来源：公开 issue #586 ＋ `SHARED_LAYERS`（core.py `add_node` 角色闸）。
+        # #674 残余面（**edges 行**，见下方 edges 分支）：本闸只扫 `data["nodes"]`，
+        # `edges` 无 `layer` 列 ⇒ 边的端点层闸另在 edges 分支内补（同一真源
+        # `_assert_edge_endpoints_role`）。
         shared_values = {lyr.value for lyr in self.store.SHARED_LAYERS}
         shared_rows = [r.get("id") for r in data.get("nodes", [])
                        if r.get("layer") in shared_values
@@ -9665,6 +10089,31 @@ class SpacetimeMemoryEngine:
                         if r.get("source_id") in node_ids and r.get("target_id") in node_ids]
                 orphan_rows = [r for r in rows if r not in keep]
                 rows = keep
+                # #674：边角色闸（与 `add_edge` 同口径、同一真源
+                # `_assert_edge_endpoints_role`）——#586 的导入角色闸只扫
+                # `data["nodes"]`（`edges` 无 `layer` 列，天然不在该判据内）⇒ 旧实现
+                # 的 edges 分支只有 #93 孤儿预筛、随后裸 `INSERT OR REPLACE`：SUB
+                # 用 edges-only 备份即可无密钥落共享层端点边（同一引擎上 `add_edge`
+                # 对同一条边抛 PermissionError），或以同 id 覆盖 PRIMARY 既有共享层
+                # 已验证边（改端点/confidence/verified，全程无审计）。
+                # 修法（取向同 #586「先判后写、零落库」）：写入前逐行过端点层闸——
+                # ①**新增**面：新行两端点任一属 `SHARED_LAYERS` ⇒ 拒；
+                # ②**覆盖**面：查同 id 旧边的端点（防「先建本地边占位、再用共享层
+                #   id 覆盖」，与 `add_edge` 的同 id 旧边复查同款）⇒ 拒。
+                # 判据来源：公开 issue #674 ＋ `_assert_edge_endpoints_role`
+                # （`#234`/`#191` 单一真源）。
+                # 边界（削掉的判别力，如实标注）：与 `nodes` 闸同取**整批拒绝**
+                # （PermissionError、零落库）而非「逐行拒收并报告」——口径二选一，
+                # 取与 `#586`/`#478` 一致者；PRIMARY 走 `_assert_edge_endpoints_role`
+                # 直接短路 ⇒ 合法恢复路径零影响（防过修）。
+                if self.role != Role.PRIMARY:
+                    for r in rows:
+                        self.store._assert_edge_endpoints_role(
+                            r.get("source_id"), r.get("target_id"))
+                        _old_edge = self.store.get_edge(r.get("id"))
+                        if _old_edge is not None:
+                            self.store._assert_edge_endpoints_role(
+                                _old_edge.source_id, _old_edge.target_id)
             for r in rows:
                 if table == "nodes":
                     # #478 变体：layer 无效（缺失/NULL/大小写变体/未知名）的行——落库后
@@ -9696,7 +10145,7 @@ class SpacetimeMemoryEngine:
                 node_ids=[i for i in immutable_rows if i],
                 outcome={"requires_review": True, "immutable_rows": len(immutable_rows),
                          "relayer_rows": len(relayer_rows)})
-        self.store.conn.commit()
+        self._commit_locked()
         # 恢复自检：导入后跑 `PRAGMA foreign_key_check` 体检。经上方 #93 预筛，正常
         # 路径下应恒为空；保留本步作为「白名单列裁剪后仍出现悬挂」的兜底观测
         # （不拦写入，随返回值交付）。
@@ -10100,7 +10549,7 @@ class SpacetimeMemoryEngine:
                        (self._gap_history[-1]["ts"], dn))
             sc.execute("DELETE FROM gap_history WHERE id NOT IN"
                        " (SELECT id FROM gap_history ORDER BY id DESC LIMIT 2000)")
-            self.store.conn.commit()
+            self._commit_locked()
         except Exception:
             pass
         return d_norm
@@ -10703,7 +11152,7 @@ class SpacetimeMemoryEngine:
                     archived += 1
                 else:
                     kept += 1
-            self.store.conn.commit()
+            self._commit_locked()
         return {"archived": archived, "kept": kept,
                 "note": "主动遗忘：未被使用的 CONTEXT 记忆归档（importance 降权，可逆）"}
 

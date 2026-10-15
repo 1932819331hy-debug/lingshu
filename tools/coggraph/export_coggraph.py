@@ -299,7 +299,17 @@ def main(argv=None):
     for n in nodes:
         n["n_edges"] = owner_cnt.get(n["id"], 0)
 
-    with_edge = sum(1 for nid in ids if any(e["s"] == nid or e["t"] == nid for e in edges))
+    # 「有边节点」与 n_edges 统一判据（issue #654）：按声明归属（owner_cnt）计。
+    # 旧码 with_edge 按「存活边两端」数（any(e.s==nid or e.t==nid)），与上方
+    # n_edges 的声明口径是两套判据且报告不注明——mapping 形态下声明者 a
+    # （n_edges=1）不在任何存活边的两端（边是 b→c），报告却说它不是「有边节点」；
+    # list 形态下被指向的 b（n_edges=0）反而计入 with_edge ⇒ 同一产物对「谁有边」
+    # 给出集合不重叠的两个答案（{a} vs {b,c}），sum(n_edges) 与 with_edge 无法对账。
+    # 统一后「有边节点 N」＝「n_edges>0 的节点数」，与 #534 钉住的 n_edges 声明
+    # 归属同口径（本修复不改 n_edges 本身）；declared_edge_nodes 是同值的显式
+    # 口径锚点字段，供产物自证三数关系：with_edge == declared_edge_nodes
+    # == count(n_edges>0)，另 sum(n_edges) == counts.edges（#605 边数三口径）。
+    with_edge = sum(1 for nid in ids if owner_cnt.get(nid, 0) > 0)
     density = 100.0 * with_edge / max(len(ids), 1)
 
     graph = {
@@ -311,7 +321,8 @@ def main(argv=None):
             ).hexdigest()[:16],
             "generated_at": datetime.now().strftime("%Y-%m-%d %H:%M:%S"),
             "counts": {"nodes": len(nodes), "edges": len(edges), "buckets": len(buckets),
-                       "with_edge": with_edge, "density_pct": round(density, 2), "skipped_md": skipped},
+                       "with_edge": with_edge, "declared_edge_nodes": with_edge,
+                       "density_pct": round(density, 2), "skipped_md": skipped},
             # 重复 id 登记（issue #358）：节点 id 已唯一化，此处留下「哪些原 id 撞过、
             # 后到者被改名成什么、原名保留给哪个文件」，供审计与查看器排查。
             "duplicate_ids": duplicate_ids,
@@ -332,7 +343,8 @@ def main(argv=None):
         "- 节点 %d（跳过无法解析 %d）" % (len(nodes), skipped),
         "- 显式边 %d（悬空已剔除 %d）" % (len(edges), dangling),
         "- 桶 %d" % len(buckets),
-        "- **有边节点 %d / %d = %.1f%%**" % (with_edge, len(ids), density),
+        # 口径注明（#654）：「有边」＝声明了存活边（n_edges>0），非「存活边的端点」
+        "- **有边节点 %d / %d = %.1f%%**（口径：声明了存活边，＝ nodes[].n_edges>0 的节点数）" % (with_edge, len(ids), density),
         "", "## 层分布", "",
     ] + ["- %s: %d" % (k, v) for k, v in layers.most_common()] + [
         "", "## 边类型", "",

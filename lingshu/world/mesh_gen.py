@@ -969,6 +969,38 @@ def bbox_dims(soup: Soup) -> Tuple[float, float, float]:
     return (hi[0] - lo[0], hi[1] - lo[1], hi[2] - lo[2])
 
 
+#: `voxel_grid` 分辨率边界（#688）。同文件兄弟算子（`_revolve_core` 的 `seg>=3`、
+#: `prim_cone` 的 `top∈[0,1)`、`prim_sphere` 的 `seg_v>=2`、`prim_torus` 的
+#: `seg_u/seg_v>=3`）都做了边界校验，唯 `voxel_grid` 漏了 —— 本处补齐。
+#: 下界 2：res=1 时 `step_y/step_z` 退化到整格，射线只在单点采样，占据无几何意义。
+#: 上界 512 的**取值依据**（本机实测 + 报告复核）：耗时随 res **超线性**增长——
+#: 本机 res=256 ⇒ ~4s、res=512 ⇒ 40~90s（视面数：box 512≈94s、球 512≈41s）；
+#: 报告复核实测 res=512 ⇒ 5.24s、res=800 ⇒ 48.8s、res=1e7 ⇒ 604s 跑满。
+#: ⇒ res>512 即为「单次调用可拖死进程」的 DoS 面，取 512 为可辩护上限。
+#: 对既有用法**零约束**：仓内唯一非默认调用是 `shape_similarity(..., res=min(res,24))`
+#: （≤24），`project_mask` 默认 48，`voxel_grid` 默认 16，均远低于上限。
+#: 「上限究竟该多少」属设计者裁面 —— 此处先给可辩护值 512，留门可调（改本常量即可）。
+VOXEL_RES_MIN = 2
+VOXEL_RES_MAX = 512
+
+
+def _check_voxel_res(res, where: str = "voxel_grid") -> int:
+    """`res` 校验（#688）：正整数（**显式拒 `bool`**——`True` 是 `int` 子类）、
+    `[VOXEL_RES_MIN, VOXEL_RES_MAX]` 内；否则 raise。返回原值（调用方无需再转）。
+
+    - 类型非法（`bool` / 浮点 / 字符串 / None 等）⇒ `TypeError`；
+    - 整数但越界（`0` / `-1` / 超上限）⇒ `ValueError`。
+    """
+    if isinstance(res, bool) or not isinstance(res, int):
+        raise TypeError(
+            "#688: %s 的 res 须为正整数（拒 bool/浮点/字符串）：%r" % (where, res))
+    if res < VOXEL_RES_MIN or res > VOXEL_RES_MAX:
+        raise ValueError(
+            "#688: %s 的 res 须 ∈ [%d, %d]：%r"
+            % (where, VOXEL_RES_MIN, VOXEL_RES_MAX, res))
+    return res
+
+
 def voxel_grid(soup: Soup, res: int = 16, bounds=None) -> Dict:
     """体素化（沿 +X 射线、奇偶填充）→ `{"res","lo","dims","occ"}`。
 
@@ -976,7 +1008,11 @@ def voxel_grid(soup: Soup, res: int = 16, bounds=None) -> Dict:
     ——一次扫描就得到**整个 3D 占据**，比逐点内外判定便宜 res 倍。
     前提：网格闭合（`is_watertight`）；不闭合时的读数**没有几何意义**（如实用）。
     射线按体素中心 + 半格 ε 抖动，避开"恰好命中边/顶点"的双计。
+
+    `res` 边界（#688）：须为正整数且 ∈ `[VOXEL_RES_MIN, VOXEL_RES_MAX]`，
+    否则 raise（`bool`/浮点/字符串 ⇒ `TypeError`；整数越界 ⇒ `ValueError`）。
     """
+    _check_voxel_res(res)
     lo, hi = bounds if bounds else soup_bounds(soup)
     dims = [max(hi[k] - lo[k], 1e-6) for k in range(3)]
     # 预排序三角形在 (y,z) 上的包围盒，做射线级快速剔除

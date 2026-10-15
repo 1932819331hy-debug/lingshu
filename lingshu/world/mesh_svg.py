@@ -462,8 +462,12 @@ def render_mesh_svg(world, screen_w: int = 800, screen_h: int = 600,
                                    "data-z": "%.6f" % obj.depth(cam)})
         mesh = mesh3d.MESH_LIBRARY.get(getattr(obj, "category", None))
         if mesh is None:
-            # 非网格物体：原路交给主干分派（形状库部件 / 单图元），零改动
-            world._draw_object(backend, obj, cam, screen_w, screen_h, horizon_px)
+            # 非网格物体：原路交给主干分派（形状库部件 / 单图元），零改动。
+            # ★ 实参个数须与 `World3D._draw_object(draw, obj, cam, screen_w, screen_h)`
+            # 的 5 参签名一致（`world3d.py` 主干 `_paint` 亦为 5 参调用）；多传的
+            # `horizon_px` 会立刻抛 `TypeError`（该实参在 `_draw_object` 内从未被使用），
+            # 使**任何**非网格物体（table/ball/tree…）走此分支即崩、混合场景导出不可用。
+            world._draw_object(backend, obj, cam, screen_w, screen_h)
         else:
             counts["mesh_objects"] += 1
             _emit_mesh(backend, world, obj, mesh, cam, screen_w, screen_h, st,

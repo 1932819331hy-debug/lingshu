@@ -335,8 +335,13 @@ if _p is not None:
           "if node is None:" in _ps or "node_id is None" in _ps, '')
 
 # ------------------------------------------- H 另两处「只读 layer」的逐节点 get_node
-print('— H 静态面（_strip_incident_edges / _assert_edge_role 只取 layer 列）—')
-for _fname in ("_strip_incident_edges", "_assert_edge_role"):
+print('— H 静态面（_strip_incident_edges / _assert_edge_endpoints_role 只取 layer 列）—')
+# #674：`_assert_edge_role` 的判据体已抽为单一真源 `_assert_edge_endpoints_role`
+# （`add_edge`/`verify_edge`/`unverify_edge` 与 `import_all` 的 edges 分支共用）。
+# H 段随该单一真源搬迁：静态面改钉 `_assert_edge_endpoints_role`；另加一条**委托腿**
+# 钉住「`_assert_edge_role` 仍存在且委托给单一真源」，使「搬走了」这件事本身被守卫看着、
+# 不会静默退回成第二份实现。
+for _fname in ("_strip_incident_edges", "_assert_edge_endpoints_role"):
     _fn2 = None
     for _n2 in ast.walk(_tree):
         if isinstance(_n2, ast.FunctionDef) and _n2.name == _fname:
@@ -360,6 +365,18 @@ for _fname in ("_strip_incident_edges", "_assert_edge_role"):
           or "SELECT id, layer FROM nodes WHERE id IN" in _seg, '')
     check(f'H {_fname} 用 MemoryLayer(...) 转换（与 from_row 同款）',
           "MemoryLayer(" in _seg, '')
+
+# H 委托腿（#674）：`_assert_edge_role` 是边对象入口，须委托给单一真源
+# `_assert_edge_endpoints_role`（不得在其内另写一份端点层判据）。
+_ear = next((n for n in ast.walk(_tree)
+             if isinstance(n, ast.FunctionDef) and n.name == "_assert_edge_role"), None)
+check('H0 已定位 _assert_edge_role（#674 边对象入口仍在）', _ear is not None, '')
+if _ear is not None:
+    _ear_seg = ast.get_source_segment(SRC, _ear) or ""
+    check('H _assert_edge_role 委托单一真源 _assert_edge_endpoints_role',
+          "_assert_edge_endpoints_role(" in _ear_seg, '')
+    check('H _assert_edge_role 内不得另写端点层判据（无第二份实现）',
+          "SHARED_LAYERS" not in _ear_seg, '')
 
 _sie = next((n for n in ast.walk(_tree)
              if isinstance(n, ast.FunctionDef) and n.name == "_strip_incident_edges"), None)
