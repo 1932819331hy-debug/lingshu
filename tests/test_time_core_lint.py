@@ -111,12 +111,12 @@ _SHADE_SHOULDER_SPEC = ("lingshu/world/shade_paint.py",
 #: 与 `_ACTIVATION_SPEC`（R3 形状级）同类，已逐条核实后登记 baseline 并注明
 #: 判据（见 `tools/time_core_lint_baseline.txt` 的 2026-10-15 #607 段）。
 _PHYSICS_TAU_SPECS = (
-    ("lingshu/world/physics.py", "vscale(a, 0.5 * tau * tau)", 1),   # 467 匀加速闭式
-    ("lingshu/world/physics.py", "vscale(a, 0.5 * tau * tau)", 2),   # 471 抛体闭式
-    ("lingshu/world/physics.py", "e = math.exp(-kk * tau)", 1),      # 475 与已登记 R1 同行
-    ("lingshu/world/physics.py", 'model["omega"] * tau', 1),         # 482 圆周角度推进
-    ("lingshu/world/physics.py", 'model["v_up"] * tau', 1),          # 485 圆周竖直漂移
-    ("lingshu/world/physics.py", "v0[i] * tau", 1),                  # 931 抛体闭式返回
+    ("lingshu/world/physics.py", "vscale(a, 0.5 * tau * tau)", 1),   # 473 匀加速闭式（#662 +6 后行号）
+    ("lingshu/world/physics.py", "vscale(a, 0.5 * tau * tau)", 2),   # 477 抛体闭式
+    ("lingshu/world/physics.py", "e = math.exp(-kk * tau)", 1),      # 481 与已登记 R1 同行
+    ("lingshu/world/physics.py", 'model["omega"] * tau', 1),         # 488 圆周角度推进
+    ("lingshu/world/physics.py", 'model["v_up"] * tau', 1),          # 491 圆周竖直漂移
+    ("lingshu/world/physics.py", "v0[i] * tau", 1),                  # 937 抛体闭式返回
 )
 
 
