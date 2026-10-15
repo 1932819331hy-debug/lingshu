@@ -59,6 +59,12 @@
   · **HTML 注释（`<!-- … -->`，可跨行）内的围栏不算块**——注释在网页上不可见，
     其中的 python 块不得被抽取执行（#235）。检测按「行首是否处于注释内」判（单趟
     扫描，围栏内代码里的 `<!--` 不认作注释），抽出的代码仍取原文行。
+  · **嵌套容器（#612）**：HTML 块起点/结束的判定剥的是行首**全部**容器前缀
+    （块引用 `> ` 与列表标记可嵌套可交错，如 `- > <div`、`  - <div`）——旧实现
+    每行只剥一层 ⇒ 嵌套容器内的 `<div title="` 起点判不出，块内缩进围栏被当真
+    围栏抽出执行，而渲染下整段被吞进属性值（页面上看不见的代码被执行）。
+    起点行自带**可打断段落**的列表标记（圆弹/`1.`）时，⑥⑦ 起点视同前行空白
+    （CommonMark 5.2：列表标记开新列表项、打断前行段落）。
   · **只选第一个 info 首词为 python|py|py3（大小写不敏感）的围栏块**；
     正文含多个 python 块时也只用第一个——报告里如实给出全部块的语言分布。
   · 无 python 块 ⇒ 显式失败（退出码 2），**不执行任何东西**。
@@ -257,20 +263,69 @@ def _dedent(line, n):
 #: 列表项标记（CommonMark）：`- ` / `* ` / `+ ` / `N. `（N≥1 数字）。
 _RE_LIST_MARKER = re.compile(r"^ {0,3}(?:[-*+]|\d{1,9}[.)])(?:\s+|$)")
 
+#: **可打断段落**的列表标记（CommonMark 5.2「列表打断段落」条件）：圆弹标记
+#: 恒可（其后内容非空即打断——本函数只服务 ⑥⑦ 起点判定，起点匹配时标记后
+#: 必有 `<tag`，内容非空自动成立）；有序标记仅起始号为 1 可（`2.` 起头不得
+#: 打断——起点行仍按段落延续处理，其后围栏按 CommonMark 是**真围栏**）。
+#: markdown-it（commonmark 预设）对表验证：`para\n- <div title="` 与
+#: `para\n1. <div title="` 均开 HTML 块吞围栏；`para\n2. <div title="` 不开、
+#: 围栏照常渲染。
+_RE_LIST_MARKER_INTERRUPT = re.compile(r"^ {0,3}(?:[-*+]|1[.)])(?:\s+|$)")
+
+#: _container_strip 循环剥除的层数上限（#612）：防死循环护栏。每层至少剥 1
+#: 字符（标记本身），循环实为「剥不动即停」，上限是双保险（正常嵌套远不到 8 层）。
+_MAX_CONTAINER_LAYERS = 8
+
 
 def _container_strip(line):
-    """剥掉行首的容器前缀（块引用 `> ` ＋ 列表项 `- ` / `* ` / `+ ` / `N. `）。
+    """剥掉行首的**全部**容器前缀（块引用 `> ` ＋ 列表项标记，可嵌套可交错）。
 
-    #555 残留绕过（维护者复核指出）：`> <div title="` 与 `- <div title="` 的
-    HTML 块起点被容器前缀挡住（抽取器的围栏判定剥了 `_bq_strip`，HTML 块
-    判定却在**原始行**上跑）⇒ 隐藏块在引用块/列表项内仍被抽取执行。
-    修法：起点判定与块内结束条件均在剥容器后的内容上跑——与围栏判定
-    同口径。GitHub 的渲染验证见 PR #555 复核（`POST /markdown` gfm 实测，
-    blockquote / li 内的 `<div title=…` 均输出 raw HTML ⇒ 浏览器隐藏）。
+    返回 (剥净后的内容, 前缀里是否含「可打断段落」的列表标记)。
+
+    #612（#520/#555/#568 同族残留，维护者复核指出）：旧实现每行只剥**一层**
+    （`_bq_strip` 一遍 ＋ 列表标记 sub 一次）⇒ HTML 块起点行处于**嵌套容器**
+    时判不出「HTML 块开始」——形态 A（`- > <div title="` / `- > > <div title="`，
+    列表标记后还跟块引用标记，剥一层后行首仍是容器标记）；形态 B（`  - <div
+    title="`，外层列表项内容缩进内的嵌套列表项——剥一层后虽露出 `<div`，但
+    前行是外层列表项的段落文字、⑥ 型起点按「不打断段落」被拒，见
+    `_extract_fenced_blocks` 的 prev_blank 处理）。两种形态下块内缩进围栏都被
+    当真围栏抽出执行，而 CommonMark 渲染（markdown-it commonmark 预设实测）
+    整段被吞进 `<div title="…">` 属性值——页面上看不见的代码被执行。
+
+    修法：反复应用「剥引用标记 → 剥列表标记」直到行首不再是容器标记（每层
+    前导空格至多 3 个，与 _BQ_MARKER/_RE_LIST_MARKER 既有口径一致——形态 B
+    的嵌套列表项即「前导容器缩进 ＋ 标记」的完整一层）。#555 的单层语义
+    （`> <div` / `- <div`）是本循环一层的特例，行为不变。
+
+    第二返回值（可打断段落的列表标记在起点行上）：CommonMark 5.2 列表可打断
+    段落 ⇒ 标记开**新列表项**、打断前行段落 ⇒ 新容器首行内容没有「开放段落」，
+    ⑥⑦ 型起点对该行视同前行空白（形态 B 的判出依赖它，见调用点）。块引用标记
+    **不**给此豁免：`> 文本` 后同行首的 `> <div` 属同一引用内的段落延续、
+    `> 文本` 后**不带**标记的行是 lazy continuation——扁平行扫描没有容器开闭
+    状态，两者都不可与「引用新开」区分；且 GitHub（cmark）下 `> 文本` 后的
+    ⑥ 起点确属段落延续、其后围栏是**可见**代码。宁缺勿错：漏判 ⑥ = 隐藏代码
+    被执行（本缺陷的破坏方向），此处保守多抽。
+
+    边界：剥的只是容器标记及其前 0–3 个前导空格，**不碰代码缩进的剥除**——
+    `_dedent` 的缩进量在围栏路径上按 `_bq_strip` 后的原始行计算（head/indent
+    均不经本函数），两口径互不影响。
     """
-    s, _ = _bq_strip(line)
-    s = _RE_LIST_MARKER.sub("", s, count=1)
-    return s
+    s = line
+    interrupt = False
+    for _ in range(_MAX_CONTAINER_LAYERS):
+        before = s
+        s, _ = _bq_strip(s)
+        m = _RE_LIST_MARKER_INTERRUPT.match(s)
+        if m:
+            s = s[m.end():]
+            interrupt = True
+        else:
+            m = _RE_LIST_MARKER.match(s)
+            if m:
+                s = s[m.end():]
+        if s == before:                    # 本层剥不动 ⇒ 行首已不是容器标记
+            break
+    return s, interrupt
 
 
 def _extract_fenced_blocks(text):
@@ -292,6 +347,9 @@ def _extract_fenced_blocks(text):
       · **缩进**：开启围栏前有 N 个空格时，块内每行去掉行首至多 N 个空格——旧实现
         照抄原文行，`  ```python` / `  print(1)` 抽出的代码带缩进、落盘即
         `IndentationError`，把合法复现判成失败。
+      · **嵌套容器（#612）**：HTML 块的起点/结束在剥**净**容器前缀后的内容上判定
+        （多层标记循环剥除）；起点行自带可打断段落的列表标记时 ⑥⑦ 视同前行空白
+        ——嵌套列表项/列表套块引用内的 `<div title="` 不再漏判，块内围栏不得抽出。
     """
     lines = text.replace("\r\n", "\n").replace("\r", "\n").split("\n")
     blocks = []
@@ -304,7 +362,8 @@ def _extract_fenced_blocks(text):
             # HTML 块内：围栏不算块、注释不算注释——只找本型的结束条件。
             # #555 残留：容器（引用块/列表项）内的 HTML 块，其结束条件也在
             # 剥容器后的内容上判定（`> ` 后的空行也是空行）。
-            content = _container_strip(lines[i])
+            # #612：嵌套容器（如 `- > `、`  - ` 多层前缀）剥**净**后判定。
+            content, _ = _container_strip(lines[i])
             kind = html_state[0]
             if kind == "blank":                       # ⑥⑦：空行收（空行不属块）
                 if not content.strip():
@@ -336,7 +395,15 @@ def _extract_fenced_blocks(text):
             # 状态机）——`<div title="` 这类起点行里出现 `<!--` 时，块归属按
             # CommonMark 起点次序：行首是什么就开什么型。
             # #555 残留：起点判定在**剥容器后**的内容上跑（与围栏判定同口径）。
-            content = _container_strip(lines[i])
+            # #612：剥的是**全部**嵌套容器前缀（`- > <div` / `  - <div` 等）。
+            content, list_marker_seen = _container_strip(lines[i])
+            if list_marker_seen:
+                # #612 形态 B：起点行自带**可打断段落**的列表标记（见
+                # _container_strip 的 _RE_LIST_MARKER_INTERRUPT）⇒ 标记开新
+                # 列表项、打断前行段落 ⇒ 新容器首行内容没有「开放段落」，
+                # ⑥⑦ 起点对该行视同前行空白。prev_blank 随后在下方两分支
+                # 都会按本行内容重算，此处置位只影响本次起点判定。
+                prev_blank = True
             st = _html_block_start(content, prev_blank)
             if st is not None:
                 html_state = st
@@ -350,7 +417,9 @@ def _extract_fenced_blocks(text):
                 i += 1
                 continue
             in_comment = _advance_comment_state(lines[i], False)
-            prev_blank = not lines[i].strip()
+            # #612：prev_blank 按**剥净容器后**的有效行计（`> ` / `- ` 独占的
+            # 行按容器内空白计——其后新容器的 ⑥⑦ 起点无开放段落可打断）。
+            prev_blank = not content.strip()
             i += 1
             continue
         # 围栏开启行本身不改变段落空白判据（块级构造之后的行都是「块后」行——
@@ -671,6 +740,12 @@ def _selftest():
         ("> ```python\n> x = 12\n> ```", "x = 12"),
         ("> 说明\n> ```python\n> x = 13\n> ```\n> 尾", "x = 13"),
         ("> > ```python\n> > x = 14\n> > ```", "x = 14"),
+        # #612 嵌套容器：嵌套列表项（形态 B）/列表套块引用（形态 A）内的 ⑥ 型
+        # HTML 起点不再漏判——隐藏块被吞，chosen 落到正文可见块
+        ("- 场景说明\n  - <div title=\"\n    ```python\n    print('HIDDEN')\n    ```\n"
+         "    \"></div>\n\n```python\nprint('VISIBLE')\n```", "print('VISIBLE')"),
+        ("- > <div title=\"\n  > ```python\n  > print('HIDDEN2')\n  > ```\n"
+         "  > \"></div>\n\n```python\nprint('VISIBLE2')\n```", "print('VISIBLE2')"),
     ]
     fails = 0
     for text, want in good:
