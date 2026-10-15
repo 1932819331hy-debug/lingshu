@@ -50,7 +50,7 @@
     `tests/test_gate_dependency_closure.py` 的面），二者扫描目录不重叠。
 
 定点变异自证（抽掉修复 ⇒ 必红）：
-  把 `pyproject.toml` 的 `world = [..., "Pillow>=12.2,<13"]` 改回
+  把 `pyproject.toml` 的 `world = [..., "Pillow>=12.3,<13"]` 改回
   `world = ["numpy>=2.3.5,<2.6"]` ⇒ B/C 两组当场红（`world: PIL ←
   lingshu/world/skeleton3d.py:128, …`）；把 `core-sparse`/`nn-train`/`gen-diffusion`
   三个 sub-extra 删掉 ⇒ B 组报 core: scipy / nn: pyarrow / gen: torch, diffusers。
@@ -242,10 +242,10 @@ def test_mutation_world_without_pillow_is_red():
     故它不可能代偿本条——抽掉修复后唯一能变红的就是本件。
     """
     text = open(PYPROJECT, encoding="utf-8").read()
-    assert 'world = ["numpy>=2.3.5,<2.6", "Pillow>=12.2,<13"]' in text, (
+    assert 'world = ["numpy>=2.3.5,<2.6", "Pillow>=12.3,<13"]' in text, (
         "pyproject 的 world extra 形态与预期不符，本夹具须重写（实读文本已变）")
     mutated = text.replace(
-        'world = ["numpy>=2.3.5,<2.6", "Pillow>=12.2,<13"]',
+        'world = ["numpy>=2.3.5,<2.6", "Pillow>=12.3,<13"]',
         'world = ["numpy>=2.3.5,<2.6"]')
     bad = _check(mutated)
     assert "world" in bad and "PIL" in bad["world"], (

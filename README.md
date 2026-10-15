@@ -56,7 +56,7 @@ pip install -e ".[full]"     # 含 numpy / Pillow（world / nn / gen 的常规�
 [结构历史与受保护写服务](docs/structure-events.md)。
 
 **已测版本矩阵**（2026-10-08 实测，供选版参考）：Python 3.12.x · numpy 2.3.5 / 2.4.2 / 2.5.3 ·
-Pillow 12.2.0 / 12.3.0——`pyproject.toml` 中 extras 的版本区间由此收敛，**区间外未测不承诺**。
+Pillow 12.3.0——`pyproject.toml` 中 extras 的版本区间由此收敛，**区间外未测不承诺**。
 
 > 曾登记为「已知红」的 `tests/test_hex_text.py` 两处断言（`test_spatial_detect_finds_single_object`
 > 6/16、`test_multimodal_check_clean_vs_corrupt` 7/12）**已随根因修复转绿**：`9bc4985`
