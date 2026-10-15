@@ -1893,14 +1893,18 @@ class LayeredStore:
 
     # ---------- 边操作 ----------
 
-    def _assert_edge_role(self, edge: STEdge) -> None:
+    def _assert_edge_endpoints_role(self, source_id: str, target_id: str) -> None:
         """非 PRIMARY 不得写**任一端为共享层**（anchor/structure）的边（#234）。
+
+        **边角色闸的单一真源**（#674）：`_assert_edge_role`（`add_edge`/`verify_edge`/
+        `unverify_edge` 等公开 API 写路径）与 `import_all` 的 edges 导入腿**共用**本方法
+        ——两条路径不可能再分叉（#674 的病灶正是「导入腿另有一份无闸实现」）。
 
         判据来源：`Role` 注释（core.py:631-632）「PRIMARY 可写共享层（锚点层、结构
         层）／SUB 仅本地层」＋ `LayeredStore` docstring「共享层……跨实例同步，不可
         遗忘」＋ 公开 issue #234「期望行为：非 PRIMARY 角色对任一端属于
         `IMMUTABLE_LAYERS` 的边做新增、修改、verify、删除，都应得到
-        `PermissionError`」。
+        `PermissionError`」＋ 公开 issue #674（导入腿残余面）。
         边界（削掉的判别力，如实标注）：本闸用 `SHARED_LAYERS`（锚点/结构）而非
         issue 字面的 `IMMUTABLE_LAYERS`——#191 已裁定 SELF 属**本地层**（SUB 可写，
         见 `add_node` docstring），若按 `IMMUTABLE_LAYERS` 收口会把 SUB 的
@@ -1916,7 +1920,7 @@ class LayeredStore:
             # `STNode.from_row` 同款裸露转换 ⇒ 非法 layer 的失败语义一致；
             # 不存在该 id 时 `fetchone()` 为 None，与旧 `n is None` 同分支。
             _c = self.conn.cursor()
-            for nid in (edge.source_id, edge.target_id):
+            for nid in (source_id, target_id):
                 _c.execute("SELECT layer FROM nodes WHERE id=?", (nid,))
                 _row = _c.fetchone()
                 if _row is None:
@@ -1926,6 +1930,10 @@ class LayeredStore:
                     raise PermissionError(
                         f"role={self.role.value} 无权写共享层端点（{nid} 为 "
                         f"{_lay.value}）的边，共享层边由父节点主控（#234）")
+
+    def _assert_edge_role(self, edge: STEdge) -> None:
+        """边对象入口：委托 `_assert_edge_endpoints_role`（单一真源，见该助手）。"""
+        self._assert_edge_endpoints_role(edge.source_id, edge.target_id)
 
     @_transactional
     def add_edge(self, edge: STEdge) -> str:
@@ -9574,6 +9582,9 @@ class SpacetimeMemoryEngine:
         # **本地层**（SUB 可写），若按 IMMUTABLE 收口会把 SUB 的自我层备份一并
         # 拒掉、回归 #191 ⇒ 与 `add_node` 的写权限单一真源保持一致。
         # 判据来源：公开 issue #586 ＋ `SHARED_LAYERS`（core.py `add_node` 角色闸）。
+        # #674 残余面（**edges 行**，见下方 edges 分支）：本闸只扫 `data["nodes"]`，
+        # `edges` 无 `layer` 列 ⇒ 边的端点层闸另在 edges 分支内补（同一真源
+        # `_assert_edge_endpoints_role`）。
         shared_values = {lyr.value for lyr in self.store.SHARED_LAYERS}
         shared_rows = [r.get("id") for r in data.get("nodes", [])
                        if r.get("layer") in shared_values
@@ -9639,6 +9650,31 @@ class SpacetimeMemoryEngine:
                         if r.get("source_id") in node_ids and r.get("target_id") in node_ids]
                 orphan_rows = [r for r in rows if r not in keep]
                 rows = keep
+                # #674：边角色闸（与 `add_edge` 同口径、同一真源
+                # `_assert_edge_endpoints_role`）——#586 的导入角色闸只扫
+                # `data["nodes"]`（`edges` 无 `layer` 列，天然不在该判据内）⇒ 旧实现
+                # 的 edges 分支只有 #93 孤儿预筛、随后裸 `INSERT OR REPLACE`：SUB
+                # 用 edges-only 备份即可无密钥落共享层端点边（同一引擎上 `add_edge`
+                # 对同一条边抛 PermissionError），或以同 id 覆盖 PRIMARY 既有共享层
+                # 已验证边（改端点/confidence/verified，全程无审计）。
+                # 修法（取向同 #586「先判后写、零落库」）：写入前逐行过端点层闸——
+                # ①**新增**面：新行两端点任一属 `SHARED_LAYERS` ⇒ 拒；
+                # ②**覆盖**面：查同 id 旧边的端点（防「先建本地边占位、再用共享层
+                #   id 覆盖」，与 `add_edge` 的同 id 旧边复查同款）⇒ 拒。
+                # 判据来源：公开 issue #674 ＋ `_assert_edge_endpoints_role`
+                # （`#234`/`#191` 单一真源）。
+                # 边界（削掉的判别力，如实标注）：与 `nodes` 闸同取**整批拒绝**
+                # （PermissionError、零落库）而非「逐行拒收并报告」——口径二选一，
+                # 取与 `#586`/`#478` 一致者；PRIMARY 走 `_assert_edge_endpoints_role`
+                # 直接短路 ⇒ 合法恢复路径零影响（防过修）。
+                if self.role != Role.PRIMARY:
+                    for r in rows:
+                        self.store._assert_edge_endpoints_role(
+                            r.get("source_id"), r.get("target_id"))
+                        _old_edge = self.store.get_edge(r.get("id"))
+                        if _old_edge is not None:
+                            self.store._assert_edge_endpoints_role(
+                                _old_edge.source_id, _old_edge.target_id)
             for r in rows:
                 if table == "nodes":
                     # #478 变体：layer 无效（缺失/NULL/大小写变体/未知名）的行——落库后
