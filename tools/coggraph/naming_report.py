@@ -80,7 +80,11 @@ def main(argv=None):
     groups = collections.defaultdict(list)
     for n in nodes:
         t = (n.get("title") or "").strip()
-        if len(t) >= args.min_title:
+        # #627：规范锚词豁免长度闸。「药典/专利/国家标准/INN/ISO/IEC/IEEE/W3C」等
+        # 标题本身即 Q4 规范标识词，字数常 < 默认 --min-title=6 ⇒ 被闸挡在 groups 之外，
+        # Q4 永远不会被评估 ⇒ 默认参数下这类节点零「强规范锚」，报告对这一盲区零披露。
+        # NORM_MARKERS 命中的标题进候选集，让 Q4 至少能被裁决（本行即该豁免，一行修）。
+        if len(t) >= args.min_title or NORM_MARKERS.search(t):
             groups[t].append(n)
 
     # Q2/Q3 的"被正文提及"只数**被提及**方向：derive_edges 的 R5 是
