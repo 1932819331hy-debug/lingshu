@@ -16,4 +16,7 @@
 # ── 登记面 · 结束 ──
 
 lingshu/nn/hex_recon.py	146
-lingshu/nn/hex_unit.py	143
+lingshu/core/tms.py	161
+
+# 2026-10-15 6020eab lingshu/core/tms.py  登记：#447 引入的新模块（161 行），已有 tests/test_tms.py，但**生产侧尚无调用者** ⇒ 按白名单登记待接入
+# 2026-10-15 df53a6b lingshu/nn/hex_unit.py  移除：已不再是零引用模块（stale 条目）
