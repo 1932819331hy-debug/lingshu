@@ -43,18 +43,30 @@ def neutral_path(p):
     return tail_seg(p) if is_abs_path(p) else p
 
 
-def ts_to_float(v, nid):
-    """把 _audit.jsonl 记录的 t 归一成 epoch 秒（issue #531）。
+#: t 的可接受范围上界（issue #616）：time.localtime 可表示域的顶点
+#: 3000-12-31T23:59:59Z（epoch 32535215999）。NaN/±inf 与任何数的比较
+#: 恒为 False，链式区间判定 `0 <= v <= _TS_MAX` 一并拒收。
+_TS_MAX = 32535215999.0
 
-    _audit.jsonl 的生产方在仓外，t 无类型契约：数字按原逻辑原样返回；
-    字符串尝试按 ISO 日期解析（无时区视为 UTC，与 derive_edges R4 的
-    gmtime 口径一致）；None/空串沿旧口径记 0；非法值 stderr 告警并
-    返回 None，调用方跳过该记录——不再整轮崩溃。
+
+def ts_to_float(v, nid):
+    """把 _audit.jsonl 记录的 t 归一成 epoch 秒（issue #531 / #616）。
+
+    _audit.jsonl 的生产方在仓外，t 无类型契约：数字须落在 time.localtime
+    可表示域 [0, _TS_MAX]（#616：#531 只挡类型不挡范围——NaN/inf/越界
+    epoch 原样放行，在下游 ``time.localtime(...)`` 处 OSError/ValueError
+    ⇒ 整轮构建崩溃）；字符串尝试按 ISO 日期解析（无时区视为 UTC，与
+    derive_edges R4 的 gmtime 口径一致）；None/空串沿旧口径记 0；非法值
+    stderr 告警并返回 None，调用方跳过该记录——不再整轮崩溃。
     """
     if v is None or v == "":
         return 0
     if isinstance(v, (int, float)):
-        return v
+        if 0 <= v <= _TS_MAX:
+            return v
+        print("[warn] session_chains: 节点 %r 的 t=%r 越界（不在 localtime 可表示域），已跳过该记录"
+              % (nid, v), file=sys.stderr)
+        return None
     if isinstance(v, str):
         s = v.strip()
         if not s:
@@ -104,6 +116,15 @@ def main(argv=None):
                 continue
             nid = d.get("id")
             sid = d.get("session")
+            # #616：session 与 t 同为仓外生产、无类型契约——数字/映射等
+            # 非字符串值通过真值判定，却在下游 "session:"+s 拼接与枢纽
+            # label 处 TypeError ⇒ 整轮构建崩溃。#300 的修复建议本就要求
+            # 加该防护。与 #531 同口径：告警并跳过该记录（缺/空 session
+            # 仍按 #300 静默跳过，不告警）。
+            if sid is not None and not isinstance(sid, str):
+                print("[warn] session_chains: 节点 %r 的 session=%r 类型非法，已跳过该记录"
+                      % (nid, sid), file=sys.stderr)
+                continue
             if nid and nid not in node_sess and sid:
                 # #300：缺会话 id 的节点**不并入**伪会话 "unknown"。
                 #   旧实现 `d.get("session") or "unknown"` 把一切无归属节点塞进同一
