@@ -525,12 +525,21 @@ class STEdge:
 
     @classmethod
     def from_row(cls, row: tuple) -> 'STEdge':
-        """从 SQLite 行元组反序列化边。"""
+        """从 SQLite 行元组反序列化边。
+
+        结构面保持严格（与 `STNode.from_row` 同口径，见 #267 K5）：未知
+        `relation_type` 抛 ValueError、非法 `condition_space` 抛
+        JSONDecodeError——坏边的逐行容错收在装载面（`_tolerant_edges`，#653）。
+        唯一例外是**数值面**：`confidence` 为 NULL（NaN 经旧路径落库，见
+        #185）时落缺省 0.5（dataclass 默认值）——数值缺失不参与「坏行」判定，
+        不再让 `infer_causal_paths` 的置信度求和抛 TypeError（#653/#185）。
+        """
         return cls(
             id=row[0], source_id=row[1], target_id=row[2],
             relation_type=EdgeType(row[3]),
             condition_space=ConditionSpace.from_json(row[4]),
-            confidence=row[5], weight=row[6],
+            # #653/#185：confidence NULL 落缺省 0.5（数值缺失不打断图算法）。
+            confidence=row[5] if row[5] is not None else 0.5, weight=row[6],
             verified=bool(row[7]),
             created_at=row[8],
             last_verified=row[9] if row[9] is not None and row[9] > 0 else None,
@@ -1056,6 +1065,8 @@ class LayeredStore:
         self._lock = threading.RLock()
         #: #267 逐行容错计数（每次装载面调用刷新；见 `_tolerant_nodes`）。
         self.last_skipped_rows: List[str] = []
+        #: #653 边侧逐行容错计数（每次装载面调用刷新；见 `_tolerant_edges`）。
+        self.last_skipped_edges: List[str] = []
         self._structure_writer_active = bool(self.get_meta("structure_writer_schema"))
         if self._structure_writer_active:
             self.conn.execute("PRAGMA foreign_keys=ON")
@@ -1850,13 +1861,25 @@ class LayeredStore:
         return edge.id
 
     def get_edge(self, edge_id: str) -> Optional[STEdge]:
-        """按 id 取边，不存在返回 None。"""
+        """按 id 取边，不存在返回 None。
+
+        #653：坏行（未知 relation_type / 非法 condition_space / 缺列）同样返回
+        None 而非抛——单条坏边不再打断调用链（`add_edge` 的角色检查、
+        `verify_edge` 等单条读调用方）。判据来源：issue #653（`from_row` 裸调
+        `EdgeType(row[3])` / `ConditionSpace.from_json(row[4])` 使单条坏边
+        中断所有边读取）。
+        """
         c = self.conn.cursor()
         c.execute("SELECT * FROM edges WHERE id=?", (edge_id,))
         row = c.fetchone()
         if row is None:
             return None
-        return STEdge.from_row(tuple(row))
+        # #653：单条读经 `_tolerant_edges`——坏行视同「读不到」。对照：节点侧
+        # `get_node` 是 #267 修复时**保留**的裸调边界（单条读不容错）；边侧
+        # 单条读收容错是本件判据（`add_edge`/`verify_edge` 等调用方连带坏边
+        # 中断，见 issue #653 读数）。
+        edges, _ = self._tolerant_edges([row])
+        return edges[0] if edges else None
 
     @_transactional
     def verify_edge(self, edge_id: str, new_confidence: float = None):
@@ -1972,6 +1995,33 @@ class LayeredStore:
                 except Exception:  # noqa: BLE001
                     skipped.append(None)
         return nodes, skipped
+
+    def _tolerant_edges(self, rows) -> Tuple[List[STEdge], List[str]]:
+        """逐行反序列化边（#653）：坏行只跳过该行，返回 (edges, skipped_ids)。
+
+        节点侧 `_tolerant_nodes`（#267）的边侧同款：`STEdge.from_row` 保持严格
+        （未知 relation_type / 非法 condition_space 照抛——低层反序列化器不静默
+        吞错，见 #267 K5 对照）；容错收在**装载面**——`get_edge` /
+        `get_outgoing_edges` / `get_incoming_edges` / `find_cycles` /
+        `decay_cycle` 共用本方法（`infer_causal_paths` 经 `get_outgoing_edges`
+        间接受益）。
+        判据来源：issue #653（`from_row` 是所有边读取的唯一反序列化点，一条坏边
+        让 get_edge/find_cycles/infer_causal_paths/decay_cycle 四路径整体中断）。
+        边界（削掉的判别力）：坏行被**跳过**（该边不出现在结果里，不参与衰减/
+        删改），不修复、不删除、不阻断读取；坏行仍留在库里。告警口径与
+        `_tolerant_nodes` 一致——跳过 id 如实计入返回值、不打 stderr（消费方
+        按 skipped_ids 自行上报）。
+        """
+        edges, skipped = [], []
+        for row in rows:
+            try:
+                edges.append(STEdge.from_row(tuple(row)))
+            except Exception:      # noqa: BLE001 —— 坏行不该毒化整批（#653）
+                try:
+                    skipped.append(row[0])
+                except Exception:  # noqa: BLE001
+                    skipped.append(None)
+        return edges, skipped
 
     def query_nodes_by_time(self, start_ts: float = None, end_ts: float = None,
                             limit: int = None) -> List[STNode]:
@@ -2210,16 +2260,29 @@ class LayeredStore:
         return results[:max_results]
 
     def get_outgoing_edges(self, node_id: str) -> List[STEdge]:
-        """取节点全部出边（source=该节点的有向边）。"""
+        """取节点全部出边（source=该节点的有向边）。
+
+        #653：逐行容错——单条坏边（未知 relation_type / 非法 condition_space）
+        只跳过该边，不毒化本节点的出边装载。`infer_causal_paths` / `traverse`
+        等图算法的取边都经本入口，一条坏边即整体中断的历史（issue #653 读数）
+        就此消除。跳过的边 id 记入 `self.last_skipped_edges`（每次调用刷新）。
+        """
         c = self.conn.cursor()
         c.execute("SELECT * FROM edges WHERE source_id=?", (node_id,))
-        return [STEdge.from_row(tuple(row)) for row in c.fetchall()]
+        edges, skipped = self._tolerant_edges(c.fetchall())
+        self.last_skipped_edges = skipped
+        return edges
 
     def get_incoming_edges(self, node_id: str) -> List[STEdge]:
-        """取节点全部入边（target=该节点的有向边）。"""
+        """取节点全部入边（target=该节点的有向边）。
+
+        #653：与 `get_outgoing_edges` 同款逐行容错（见其 docstring）。
+        """
         c = self.conn.cursor()
         c.execute("SELECT * FROM edges WHERE target_id=?", (node_id,))
-        return [STEdge.from_row(tuple(row)) for row in c.fetchall()]
+        edges, skipped = self._tolerant_edges(c.fetchall())
+        self.last_skipped_edges = skipped
+        return edges
 
     # ---------- 因果推理 ----------
 
@@ -2339,10 +2402,13 @@ class LayeredStore:
         """
         out_edges: Dict[str, List[STEdge]] = {}
         nodes: Set[str] = set()
-        for row in self.conn.execute(
+        # #653：批量读经 `_tolerant_edges`——坏边（如 condition_space 非法 JSON
+        # 的 CAUSAL/CYCLIC 行）跳过之，不毒化整个环检测（issue #653 读数：
+        # 一条坏边使 find_cycles 整体中断）。未知 relation_type 的坏边本就被
+        # 本查询的 `IN (?, ?)` 过滤在结果集外。
+        for e in self._tolerant_edges(self.conn.execute(
                 "SELECT * FROM edges WHERE relation_type IN (?, ?)",
-                (EdgeType.CAUSAL.value, EdgeType.CYCLIC.value)).fetchall():
-            e = STEdge.from_row(tuple(row))
+                (EdgeType.CAUSAL.value, EdgeType.CYCLIC.value)).fetchall())[0]:
             out_edges.setdefault(e.source_id, []).append(e)
             nodes.add(e.source_id)
             nodes.add(e.target_id)
@@ -2642,15 +2708,27 @@ class LayeredStore:
                   {exclude}
             ''', (EdgeType.OPPOSITE.value,) + tuple(_imm) * 2 + params)
             rows = c.fetchall()
+            # #653：批量读经 `_tolerant_edges`——单条坏边（未知 relation_type /
+            # 非法 condition_space）跳过之（该边不衰减、不删改、留在库里），
+            # 不再让**整轮衰减**随一条坏边中断（issue #653 读数；对照 #257 修的
+            # 「一轮衰减整体停摆」同症不同因——彼处是 SQL 变量悬崖）。逐行调用
+            # 是刻意的：衰减面还要读**原始行**的 NULL 位（见下），批量装袋会丢。
             for row in rows:
-                edge = STEdge.from_row(tuple(row))
+                got, _bad = self._tolerant_edges([row])
+                if not got:
+                    continue          # #653：坏边跳过（不衰减、不删改、留在库里）
+                edge = got[0]
                 # #185：存量坏行兜底——修复前的库可能已含 `confidence` 为 NULL 的边
                 # （NaN 经旧路径落库），`cred_step(None, factor)` 会抛 TypeError 使
                 # **整轮衰减中断**（并可致后台线程退出，见 #184）。此处把非有限/
                 # NULL 视为「置信度已耗尽」→ 0.0（低于 `min_confidence` ⇒ 走删除），
                 # 即 #185 判据「decay_cycle 在任何已入库的数据上都不会抛异常」。
+                # #653 起 `from_row` 把 NULL 落缺省 0.5（图算法读取面，见其
+                # docstring）——衰减面的 #185 原判据（NULL=已耗尽→删除）不随之
+                # 改变，NULL 位改读原始行 `row[5]`；NaN 等非有限值仍在
+                # `STEdge.confidence` 上判（from_row 原样落 NaN）。
                 conf = edge.confidence
-                if conf is None or not math.isfinite(conf):
+                if row[5] is None or not math.isfinite(conf):
                     conf = 0.0
                 # #176：连续核按流逝时间 dt 演化（dt=周期时 == 旧 cred_step）。
                 new_conf = self._decay_value(conf, factor, dt)
