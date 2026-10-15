@@ -100,6 +100,9 @@ def test_real_repo_shipped_baseline_exit_zero():
     assert res.returncode == 0, data
     assert data["new_zero_ref"] == []
     assert data["summary"]["new"] == 0
+    # #614：exit 0 现在还要求基线全有效——无 stale、无行数漂移
+    assert data["stale_baseline_entries"] == []
+    assert data["drifted_baseline_entries"] == []
     # 基线里确实登记了真实零引用模块（否则规则可能失效）
     assert data["baseline_entries"] >= 1
 
@@ -184,11 +187,17 @@ def test_baseline_parse_and_render_roundtrip():
 
 def test_update_baseline_roundtrip(tmp_path):
     root = make_repo(tmp_path / "repo", ["orphan.py"], "x = 1\n")
+    # #614：--update-baseline 只放行不增长（单调不增）——种子基线含 orphan（漂移行 99）
+    # 加一条 stale（gone.py），本次更新＝清 stale＋重算行（2 → 1，缩白名单）。
+    seed = tmp_path / "repo" / "tools" / "coverage_map_lint_baseline.txt"
+    seed.parent.mkdir(parents=True, exist_ok=True)
+    seed.write_text("lingshu/pkg/orphan.py\t99\nlingshu/pkg/gone.py\t5\n", encoding="utf-8")
     res = run_lint("--repo-root", str(root), "--update-baseline")
     assert res.returncode == 0
     baseline = root / "tools" / "coverage_map_lint_baseline.txt"
     assert baseline.exists()
-    assert "lingshu/pkg/orphan.py" in baseline.read_text(encoding="utf-8")
+    assert "lingshu/pkg/orphan.py\t1" in baseline.read_text(encoding="utf-8")
+    assert "gone.py" not in baseline.read_text(encoding="utf-8")
     assert run_lint("--repo-root", str(root)).returncode == 0
 
 
@@ -217,10 +226,11 @@ def test_registration_surface_is_preserved_by_update_baseline(tmp_path):
     baseline = root / "tools" / "coverage_map_lint_baseline.txt"
     baseline.parent.mkdir(parents=True, exist_ok=True)
     baseline.write_text(
-        "%s\n%s\n%s\n" % (C.REG_BEGIN,
+        "%s\n%s\n%s\nlingshu/pkg/orphan.py\t1\n" % (C.REG_BEGIN,
                           "# 2026-10-11 deadbee lingshu/pkg/orphan.py  待补测试（issue #23 登记）",
                           C.REG_END),
         encoding="utf-8")
+    # 种子已含 orphan 条目（1→1 不增长）⇒ #614 单调不增门放行本次更新
     res = run_lint("--repo-root", str(root), "--update-baseline")
     assert res.returncode == 0
     text = baseline.read_text(encoding="utf-8")
