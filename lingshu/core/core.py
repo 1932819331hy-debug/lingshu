@@ -5363,7 +5363,10 @@ class SpacetimeMemoryEngine:
             err = getattr(self, err_field, "")
             if getattr(self, slot, None) is not None:
                 ok.append(name)
-            elif name == "vision" and not err:
+            elif name == "vision" and not getattr(self, "_vision_attempted", False):
+                # #602：lazy 的判据是**显式**的「尚未尝试」状态，不再是
+                # 「err 为空」——无消息异常（str(e)==""）曾使「尝试过 + 失败」
+                # 与「从未尝试」读数逐位相同。其它 10 个组件无此特判。
                 lazy.append(name)          # 惰性组件：尚未尝试装配
             else:
                 failed[name] = err or "未装配（无错误信息）"
@@ -5375,21 +5378,34 @@ class SpacetimeMemoryEngine:
         启动零负担，身体功能不再拖慢进程启动/MCP 握手）"""
         self._vision_provider = None
         self._vision_error = ""
+        # #602：显式「是否尝试过装配」状态——状态面据此判 lazy，不再用
+        # 「_vision_error 为空」当「未尝试」的代理（无消息异常 ⇒ 空串 ⇒ 误报 lazy）。
+        self._vision_attempted = False
 
     def _ensure_vision(self):
         """惰性装配视觉 provider（首次视觉调用触发）。
-        返回 provider 或 None（失败时 _vision_error 记录原因）。"""
+        返回 provider 或 None（失败时 _vision_error 记录原因）。
+
+        #602：进入即置 `_vision_attempted=True`——「是否尝试过」由显式状态承载，
+        不再让观测面从「错误是否为空」反推。
+        #603：成功出口**擦除** `_vision_error`——失败→恢复是惰性装配的常规路径
+        （装好依赖后不重启即恢复），陈旧错误不得继续挂在能力声明上。
+        """
         if self._vision_provider is not None:
             return self._vision_provider
+        self._vision_attempted = True          # #602：显式「已尝试」状态
         try:
             from vision import create_vision_provider
             p = create_vision_provider()
             if p is not None and p.available():
                 self._vision_provider = p
+                self._vision_error = None      # #603：清陈旧错误（与置位同处落）
                 return p
             self._vision_error = "ultralytics 未安装（pip install ultralytics）"
         except Exception as e:
-            self._vision_error = str(e)
+            # #602：无消息异常（bare `raise ImportError`）str(e)=="" ⇒ 回落 repr/类名，
+            # 保证失败一定带**可读**标识（空串会被状态面误读成「从未尝试」）。
+            self._vision_error = str(e) or repr(e) or type(e).__name__
         return None
 
     def _setup_body(self):
