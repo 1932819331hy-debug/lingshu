@@ -194,3 +194,62 @@ def test_parse_anchor_still_linear_on_adversarial_input():
         parse_anchor(payload)
         elapsed = _time.perf_counter() - t0
         assert elapsed < 1.0, (len(payload), elapsed)
+
+# ==================== ④ #753 面：负宽高（`axb` 段）与 conf 组 ====================
+
+def test_753_positive_control_negative_extent_segment_is_actually_written():
+    """正对照（量具有效性）：负宽高的 `describe()` 产物确实写出了负号宽高段。
+
+    若这条不成立，「conf 静默降级」就可能是量具假象（产物里根本没有负宽高段）。
+    样本：`(20,20,-20,-20)` ⇒ 宽高皆负；`(5,6,-1,60)` ⇒ 仅宽负（退化框 `x2<x1`）。
+    """
+    cases = {(-40, -40): (20, 20, -20, -20), (-6, 54): (5, 6, -1, 60)}
+    for (w, h), bb in cases.items():
+        text = VPrim(category="cat", bbox=bb, confidence=0.80).describe()
+        assert f"{w}x{h} " in text, (
+            "量具未产出预期的负宽高段（正对照失效）", bb, text, (w, h))
+
+
+def test_753_negative_extent_keeps_confidence_from_describe():
+    """★ 核心（#753）：宽高为负时 `conf=` 必须**保真**，不得静默降级为默认 0.5。
+
+    缺陷形态：`axb` 段（宽高）旧式只收非负数字 ⇒ 负宽高产物**整段失配**；而
+    `conf=` 与宽高段被**同一个可选组**包住 ⇒ 连带吞掉 conf ⇒ 静默回落 0.5
+    （不报错、不告警）。这正是本件报告人诊断的机制。
+
+    本组采样**必须含负宽高**——既有 `test_roundtrip_keeps_confidence_from_describe`
+    只采样 `(-10,-20,30,40)` / `(10,20,30,40)`（宽高皆正），故主干上该缺陷存在而
+    守卫照绿（「采样集没覆盖到的那一格」，非守卫写错）。
+    """
+    for bb in ((20, 20, -20, -20), (5, 6, -1, 60), (-10, -20, -5, -3)):
+        v = VPrim(category="cat", bbox=bb, confidence=0.80)
+        got = parse_anchor(v.describe())
+        assert got is not None, ("describe 读不回", bb, v.describe())
+        assert tuple(got.bbox) == bb, ("负宽高往返丢坐标", bb, v.describe(), got.bbox)
+        assert abs(got.confidence - 0.80) <= 0.005, (
+            "#753：负宽高时 conf 被静默降级（应为 0.80，实得 %r）——%s"
+            % (got.confidence, v.describe()))
+
+
+def test_753_legacy_format_still_defaults_to_half():
+    """防过修：无 `axb` 段（旧格式）与「有宽高但无 conf」仍取默认 0.5。"""
+    for text in ("cat@(1,2,3,4)", "cat@(1,2,3,4) 40x60"):
+        got = parse_anchor(text)
+        assert got is not None, text
+        assert got.confidence == 0.5, ("默认置信度被改动", text, got.confidence)
+        assert tuple(got.bbox) == (1, 2, 3, 4), (text, got.bbox)
+
+
+def test_753_malformed_extent_segment_not_misread():
+    """防误读：畸形 `axb`/conf 段**不得**被当成合法取值（回落默认 0.5，不报错）。
+
+    注意与「混合符号」区分：`40x-40` 是**合法**产物（`x2<x1` 且 `y2>y1`），
+    不在本组；本组只放真正读不出的形态。
+    """
+    for text in ("cat@(1,2,3,4) abc conf=0.70",     # 宽高段缺失（非数字）
+                 "cat@(1,2,3,4) -40x conf=0.70",    # 宽高段不完整
+                 "cat@(1,2,3,4) 40x40 conf=abc",    # conf 值非数字
+                 "cat@(1,2,3,4) 40x40 conf="):      # conf 值为空
+        got = parse_anchor(text)
+        assert got is not None, text
+        assert got.confidence == 0.5, ("畸形段被误读为取值", text, got.confidence)
