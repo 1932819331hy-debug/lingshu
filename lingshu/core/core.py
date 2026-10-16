@@ -8140,6 +8140,55 @@ class SpacetimeMemoryEngine:
                 "（%s 在 %s 之下）⇒ fail-closed，不向真源追加写" % (wal_path, md))
         return wal_path
 
+    #: `wm_simloop("load")` 的 `mdcg_root` 白名单**读根**来源（issue #744）。
+    #: `os.pathsep` 多根；与写向 `SIMLOOP_OUT_ROOT_ENV` 对称。
+    SIMLOOP_IN_ROOT_ENV = "LINGSHU_SIMLOOP_IN_ROOT"
+
+    @classmethod
+    def _simloop_in_roots(cls) -> List[str]:
+        """`load` 白名单读根（**显式配置面** + 认知图真源）。"""
+        raw = os.environ.get(cls.SIMLOOP_IN_ROOT_ENV, "")
+        roots = [p for p in str(raw).split(os.pathsep) if p.strip()] if raw else []
+        md = str(os.environ.get("MDCG_ROOT", "") or "").strip()
+        if md:
+            roots.append(md)
+        return roots
+
+    @classmethod
+    def _confine_simloop_load_root(cls, root: str) -> str:
+        """把 `load` 的 `mdcg_root` 收进白名单读根；越界/无根可依 ⇒ `ValueError`。
+
+        #744：读向与写向**对称**——`flush` 有 `_confine_simloop_out_path`，而 `load`
+        原先把模型面给的 `mdcg_root` **原样**透传给 `load_priors`，后者枚举
+        `{root}/contextual/*.md` 并把 `entity` 行 `scene.add_entity` 注入世界模型
+        ⇒ 指向真源之外的任意树即可注入对抗先验（本件实测：根外树 seeded=2、
+        毒实体进 `scene.entities`；而同一棵树走写向 `flush` 被正确拒绝）。
+
+        白名单读根＝①显式配置面 `LINGSHU_SIMLOOP_IN_ROOT`（`os.pathsep` 多根）；
+        ②`MDCG_ROOT`（**读认知图真源本就是本动作的正当语义**，与写向的「不写真源」
+        方向相反，故此处不禁真源、只禁真源之外）。
+        归一用 `realpath + normcase`（与 `_confine_simloop_out_path` 同口径）——
+        软链/junction 别名与 `..` 逃逸不得绕过。
+
+        边界（如实标注）：本闸**只**收「经 `wm_simloop("load")` 传入的 `mdcg_root`」
+        这一入口；`MDCG_ROOT` 本身仍由 env 配置（部署面选择，本件不动，同 #480 的
+        边界声明）；`load_priors` 的其它**直接**调用点（库 API 面，调用方已持有对象）
+        不经本闸。
+        """
+        roots = cls._simloop_in_roots()
+        if not roots:
+            raise ValueError(
+                "#744 wm_simloop load 拒绝：未配置读根（LINGSHU_SIMLOOP_IN_ROOT 与 "
+                "MDCG_ROOT 均缺）⇒ fail-closed，不按任意路径枚举先验")
+        target = os.path.normcase(os.path.realpath(root))
+        for r in roots:
+            rn = os.path.normcase(os.path.realpath(r))
+            if target == rn or target.startswith(rn + os.sep):
+                return root
+        raise ValueError(
+            "#744 wm_simloop load 拒绝：mdcg_root 越出白名单读根（%s 不在 %r 之下）"
+            "⇒ fail-closed，不从任意树装载世界模型先验" % (root, roots))
+
     def wm_simloop(self, action: str, params: dict = None) -> dict:
         """世界模型推演循环（里程碑 M5.1 · WM-SIMLOOP-REV1）：
         - setup: 构建推演循环（size/seed/entities/mask/wal_path）
@@ -8228,8 +8277,17 @@ class SpacetimeMemoryEngine:
         if action == "step":
             return {"status": "ok", "state": sl.step(n=int(p.get("n", 1)))}
         if action == "load":
+            # #744：读向与写向对称——模型面给的 mdcg_root 先过白名单读根闸
+            # （先判后读，越界即拒）；空值不设闸（回落 MDCG_ROOT 由 load_priors 承担，
+            # 那是配置面而非模型面）。
+            root = str(p.get("mdcg_root", "") or "")
+            if root:
+                try:
+                    root = self._confine_simloop_load_root(root)
+                except ValueError as e:
+                    return {"status": "error", "error": str(e)}
             return {"status": "ok",
-                    "load": sl.load_priors(str(p.get("mdcg_root", "")),
+                    "load": sl.load_priors(root,
                                            limit=int(p.get("limit", 20)), brain=p.get("brain"),
                                            memory_id=p.get("memory_id"))}
         if action == "flush":
