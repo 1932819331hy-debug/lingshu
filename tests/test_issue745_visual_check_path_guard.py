@@ -15,7 +15,8 @@
      建议的 A 方案）；归一用 `realpath + normcase`（与 `_confine_simloop_out_path` 同
      口径）；越界/无根可依 ⇒ fail-closed；
   ② 显式拒 `//`（含 `\\?\\` 设备前缀）UNC 形态与 `..` 穿越段；
-  ③ 使用前 `realpath` 复核落点（收「提取 → 使用」之间的 TOCTOU 窗口）。
+  ③ 显式 `reference` 同样过根闸，但**越界即显式报错**（不静默回落基线）；
+     使用前 `realpath` 复核落点（纵深防御，不声称覆盖使用当刻）。
 
 断言组（抽掉任一修复即红）：
   A 根外绝对路径被拒（④ 腿在场 ⇒ 证明是「根外」而非「无根」）
@@ -29,6 +30,8 @@
   I 采信循环内那道闸在位：最新一条 screen_state 指向根外（真实存在）、次新一条
     指向根内合法路径 ⇒ 必须**跳过**根外那条、采信次新的根内路径（抽掉循环内的
     闸则「采信 → 使用前复核清空 → 回落基线」，与「跳过并回退」可观测地不同）
+  J 显式 `reference` 越界 ⇒ **显式报错**（不静默回落基线）
+  K 显式 `reference` 落在白名单根内 ⇒ 照常对照（防误杀）
 
 运行（仓根）：python -X utf8 -m pytest tests/test_issue745_visual_check_path_guard.py -q --no-header
 """
@@ -260,3 +263,37 @@ def test_i_采信循环跳过根外回退到根内(tmp_path, monkeypatch):
         "I 未跳过根外那条并回退到次新根内路径：expected=%r（应为 %s；"
         "回落基线=%r）" % (r.get("expected"), legit, r.get("established")))
     assert r.get("expected") != secret, "I 根外那条被采信：%r" % (r.get("expected"),)
+
+
+def test_j_显式reference越界显式报错(tmp_path, monkeypatch):
+    """J：显式 `reference`（本方法经工具面暴露 ⇒ 同属不可信输入）越界 ⇒ 报错。
+
+    判别力：抽掉 1b 那道闸 ⇒ 静默回落基线（`status="ok"`、`established=True`），
+    与「显式拒绝」可观测地不同——静默把「按这张图对照」换成「已建基线」是调用方
+    无法察觉的语义替换。
+    """
+    _clear(monkeypatch)
+    shots = os.path.join(str(tmp_path), "shots")
+    monkeypatch.setenv(ENV, shots)
+    e, _reg = _engine(tmp_path)
+    secret = _img(tmp_path, "outside", "secret.png")
+
+    r = e.visual_check(reference=secret)
+    assert r.get("status") == "error", (
+        "J 显式 reference 越界未报错：%r" % (r,))
+    assert r.get("established") is not True, (
+        "J 越界 reference 静默回落基线（语义替换）：%r" % (r,))
+
+
+def test_k_显式reference根内照常对照(tmp_path, monkeypatch):
+    """K：防误杀——显式 `reference` 落在白名单根内 ⇒ 照常走对照分支。"""
+    _clear(monkeypatch)
+    shots = os.path.join(str(tmp_path), "shots")
+    monkeypatch.setenv(ENV, shots)
+    e, _reg = _engine(tmp_path)
+    inside = _img(tmp_path, "shots", "ref.png")
+
+    r = e.visual_check(reference=inside)
+    assert r.get("status") == "ok", r
+    assert r.get("expected") == inside, (
+        "K 根内显式 reference 被误拒：%r" % (r,))

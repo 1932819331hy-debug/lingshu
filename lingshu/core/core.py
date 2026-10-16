@@ -7520,6 +7520,17 @@ class SpacetimeMemoryEngine:
 
         # 1. 预期来源：记忆中的最近屏幕状态（基于过去）
         expected = reference
+        # 1b. 显式 `reference` 与「记忆正文提取」**同属不可信输入**（本方法经 MCP
+        #     工具面暴露，`reference` 由调用方/模型给出）⇒ 同样过白名单根闸。
+        #     但处置**不同**：越界即**显式报错**，不静默回落基线——把「按这张图对照」
+        #     静默换成「无事发生、已建基线」是调用方无法察觉的语义替换（同门面
+        #     #277 `render` 的 `path`、#324 `flush` 的落点同为「显式参数越界即拒」）。
+        if reference and not self._screen_expected_allowed(reference):
+            return {"status": "error",
+                    "error": "#745 visual_check 拒绝：显式 reference 不在白名单根内"
+                             "（%s）⇒ 不采信、不建立基线。如需对照该目录，请把它加入 "
+                             "%s（或 MDCG_ROOT）"
+                             % (reference, self.SCREEN_OUT_ROOT_ENV)}
         if not expected:
             try:
                 # #271：预期必须取**最近**一条 screen_state（"过去 predicts 现在"
@@ -7565,9 +7576,9 @@ class SpacetimeMemoryEngine:
             except Exception:
                 pass
 
-        # 2. 对照前复核落点（#745：收「提取 → 使用」之间的 TOCTOU 窗口）。
-        #    边界（如实标注）：最终的 `open` 在仓外 body 组件内，本仓只能收到
-        #    「使用前一刻」；本步是把「提取」与「使用」之间的窗口关掉。
+        # 2. 对照前复核落点（#745：纵深防御——「提取」与「使用」之间仍有一次复核；
+        #    边界如实标注：最终的 `open` 在仓外 body 组件内，本仓只能收到「使用前
+        #    一刻」；本步不声称能覆盖使用当刻的 TOCTOU）。
         if expected and not self._screen_expected_allowed(expected):
             expected = None
 
