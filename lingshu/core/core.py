@@ -5556,15 +5556,22 @@ class LayeredStore:
 
         #281：条件统计旧实现按 `x["conditions"].get(k)` 的**真值**分组，把
         「键存在但值为假」（`False`/`0`/`""`）与「键不存在」（未记录该条件）混同
-        ——未测样本被当作「该条件为假」计入 `without` 组，统计口径失真。修法（最小）：
-        **只在该键存在（已记录）的样本内**按真值分 with/without，键不存在的样本
-        不进入本条件的统计。判据来源：公开 issue #281「修复建议 1」——「未显式提供
-        （confidence=0.3）的条件不进入对应统计」。
-        边界（削掉的判别力，如实标注）：本件只修「键不存在 vs 键存在但值为假」的
-        混同，**不**改 `_normalize_conditions` 给未提供条件填默认值的行为 ⇒ 经
-        `insight_record` 写入的节点 5 个条件键**恒存在**（默认值），故本件对这类
-        样本的分组结果与旧口径相同；`pressure`/`tone` 因默认值为非空字符串恒为真、
-        分组仍出不了统计的问题（issue #281 根因 2/3，需按取值分组）**不在本件**。
+        ——未测样本被当作「该条件为假」计入 `without` 组，统计口径失真。上一轮
+        （`f0a9dc7`）只按「键存在」收窄，但**真实路径零效果**：`_normalize_conditions`
+        给**未显式提供**的条件也填了默认值 ⇒ 经 `insight_record` 写入的节点
+        C1–C8 键**恒存在**，未显式提供的条件仍按其**默认值**落进 `with_`/`without`
+        （`premise_questioned`/`externalized`/`cross_domain` 默认为假 ⇒ 混入
+        `without`；`pressure`/`tone` 默认为非空字符串 ⇒ 恒真混入 `with_`），
+        统计口径失真（实测 `n_without=15 / cer_without=0.667`，预期 `5 / 0.0`）。
+        修法（最小）：判据由「键存在」改为「**显式提供**」——`_normalize_conditions`
+        早已把「显式提供=0.7／默认回落=0.3」写进 `conditions.confidence`，本件
+        只是**把它读出来**：`confidence[k] >= 0.7` 才算 present。无 `confidence`
+        标记时（旧库样本／裸 SQL 构造）**回落**旧判据「键存在」，以免旧样本变成
+        新红。判据来源：公开 issue #281「修复建议 1」——「未显式提供（confidence=0.3）
+        的条件不进入对应统计」。
+        边界（削掉的判别力，如实标注）：本件只修「显式提供 vs 默认回落」的混同，
+        **不**改 `_normalize_conditions` 给未提供条件填默认值的行为（写入面不变）；
+        `pressure`/`tone` 按取值分组（issue #281 根因 2/3）**不在本件**。
         `pending = n - nv` 把 refuted 计入 pending、以及 REFUTED 后 importance 不
         回落（同 issue 附带两处）亦**不在本件**。
         """
@@ -5582,7 +5589,11 @@ class LayeredStore:
                 status = ("verified" if any("verified" in t for t in tags)
                           else "refuted" if "refuted" in tags else "pending")
             conditions = (ins.get("conditions") or {}).get("values", {}) if isinstance(ins, dict) else {}
-            candidates.append({"id": nid, "status": status, "conditions": conditions})
+            # #281：`conditions.confidence`（`_normalize_conditions` 写入：显式提供
+            # =0.7／默认回落=0.3）一并带出——判据在数据里，旧实现没读它。
+            confidence = (ins.get("conditions") or {}).get("confidence", {}) if isinstance(ins, dict) else {}
+            candidates.append({"id": nid, "status": status, "conditions": conditions,
+                               "confidence": confidence})
         n = len(candidates)
         nv = sum(1 for x in candidates if x["status"] == "verified")
         cer = nv / n if n else 0.0
@@ -5593,9 +5604,18 @@ class LayeredStore:
             # #281：旧实现 `x["conditions"].get(k)` 按**真值**分组，把「键存在但值为
             # 假」（False/0/""）与「键不存在」（未记录该条件）混同——两者都落进
             # without 组 ⇒ 未测的条件被当作「该条件为假」的样本，统计口径失真。
-            # 改为**只在该键存在（已记录）的样本内**按真值分 with/without 两组；
-            # 键不存在的样本不进入本条件的统计。
-            present = [x for x in candidates if k in x["conditions"]]
+            # 判据改为「**显式提供**」：`confidence[k] >= 0.7`（`_normalize_conditions`
+            # 的口径：显式提供=0.7／默认回落=0.3）；无 `confidence` 标记（旧库样本／
+            # 裸 SQL 构造）时**回落**旧判据「键存在」，旧样本不至变成新红。
+            def _explicit(x, _k=k):
+                _conf = x.get("confidence")
+                if isinstance(_conf, dict) and _k in _conf:
+                    try:
+                        return float(_conf.get(_k) or 0.0) >= 0.7
+                    except (TypeError, ValueError):
+                        return False
+                return _k in (x["conditions"] or {})     # 回落：旧库样本 / 裸 SQL 构造
+            present = [x for x in candidates if _explicit(x)]
             with_ = [x for x in present if x["conditions"].get(k)]
             without = [x for x in present if not x["conditions"].get(k)]
             if len(with_) >= 5 and len(without) >= 5:
