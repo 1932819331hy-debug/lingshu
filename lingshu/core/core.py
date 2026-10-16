@@ -2442,6 +2442,23 @@ class LayeredStore:
                       " WHERE relation_type=? AND (source_id=? OR target_id=?)",
                       (EdgeType.OPPOSITE.value, node_id, node_id))
             peers = {t if s == node_id else s for s, t in c.fetchall()}
+            # ★本笔（治理写面「同列两套口径」收口 · P3）：peer 的 **layer** 用于下面
+            # 的写权限判据；一次性批量取回（沿 `#417` 的 `_SQL_IN_CHUNK` 分批单点，
+            # 与 `_strip_incident_edges` 同款），**不**在循环内逐 peer 回查——本方法
+            # 有「循环体内无 `get_node` / 不逐节点 SELECT」的 N+1 守卫
+            # （`tests/test_core_nplus1_getstats_forgetadvisor.py` I 段）。
+            # 取不到的 peer（行不存在 / layer 非法值）不登记 ⇒ 判据得 `None` ⇒ 放行：
+            # 这类行不可能是共享层行（`SHARED_LAYERS` 的两个取值都是合法枚举值），
+            # 合法性失败语义仍由既有 tags 解析腿承担。
+            _peer_layers: Dict[str, str] = {}
+            _peers_list = sorted(peers)
+            for _pi in range(0, len(_peers_list), _SQL_IN_CHUNK):
+                _pchunk = _peers_list[_pi:_pi + _SQL_IN_CHUNK]
+                _pph = ",".join("?" * len(_pchunk))
+                for _pid, _play in c.execute(
+                        f"SELECT id, layer FROM nodes WHERE id IN ({_pph})",
+                        _pchunk).fetchall():
+                    _peer_layers[_pid] = _play
             # #720：本方法逐行容错计数（写路径也刷新一次；语义＝「本次调用跳过的
             # 坏行 id」，与装载面 `_tolerant_nodes` 的刷新口径同名同义）。
             self.last_skipped_rows = []
@@ -2470,7 +2487,7 @@ class LayeredStore:
                 # 口径与 `_tolerant_nodes` 一致：坏行**跳过**（本处＝该 peer 的
                 # `conflict` 标签清理跳过、标签原样留在库，不去猜它的内容），
                 # 跳过 id 如实计入 `last_skipped_rows`；**不**阻断删除主流程。
-                c.execute("SELECT tags, layer FROM nodes WHERE id=?", (peer,))
+                c.execute("SELECT tags FROM nodes WHERE id=?", (peer,))
                 _prow = c.fetchone()
                 # ★本笔（治理写面「同列两套口径」收口 · P3）：主闸只判**被删目标行**
                 # （上方 `node.layer in IMMUTABLE_LAYERS`），本 peer 腿此前对
@@ -2486,7 +2503,7 @@ class LayeredStore:
                 # 后果面（如实标注）：跳过会在共享层 peer 上留下**悬挂的 `conflict`
                 # 标签**（OPPOSITE 边已随删除消失、标签未被移除）——这是「宁可留脏
                 # 标签，也不让非 PRIMARY 改写共享层」的取舍，清理由 PRIMARY 侧承担。
-                if _prow is not None and not self.layer_writable_by_role(_prow[1]):
+                if not self.layer_writable_by_role(_peer_layers.get(peer)):
                     _locked_tag_peers.append(peer)
                     continue
                 try:
