@@ -3,8 +3,10 @@
 
 缺陷定性（lingshu issue #698）：
   `SpacetimeMemoryEngine.export_all` / `export_trajectory` 的目标路径由**调用方**
-  给出、**不过** `_confine_*` 根闸（那两个闸的适用面是 world3d render /
-  wm_simloop flush 的受保护产物），目标已存在即**静默覆盖**——调用方拿到返回值
+  给出（**当时**不过 `_confine_*` 根闸——#746 已为二者接上
+  `_confine_export_out_path`：未配 `LINGSHU_EXPORT_OUT_ROOT` 时不限制，配根后越界
+  即 `ValueError`；那两个闸的适用面是 world3d render / wm_simloop flush 的受保护
+  产物），目标已存在即**静默覆盖**——调用方拿到返回值
   也无从知道「上一份被替换掉了」。
 
 ★本件**不改覆盖语义**：覆盖是**既有契约**（本方法自称「灾备基础」，重做备份

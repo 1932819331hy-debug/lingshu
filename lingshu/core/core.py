@@ -10656,9 +10656,10 @@ class SpacetimeMemoryEngine:
         非缺陷：本方法自称「灾备基础」，重做备份必须能覆盖上一份；
         `tests/test_issue330_export_all_atomic_guard.py` 的 D 用例即锁定「二次导出到
         同一路径 ⇒ 覆盖」（本件**不改**该语义、不加拒覆盖、不动默认）。
-        `path` 由**调用方**给出、**不过** `_confine_*` 根闸——那两个闸的适用面是
-        world3d render / wm_simloop flush 的受保护产物，不是「凡签名含路径参数」；
-        灾备/迁移场景的目标本就在任意卷上，一律套根闸会直接打掉灾备能力。
+        `path` 由**调用方**给出，但**会过** `_confine_export_out_path` 根闸（#746）：
+        未显式配置 `LINGSHU_EXPORT_OUT_ROOT` 时**不限制**（保持既有行为——灾备/
+        迁移场景的目标照旧可在任意卷上）；显式配置后越界即 fail-closed 抛
+        `ValueError`（该闸与本方法的 `#698` 面正交：只判落点，不改覆盖语义）。
         本件只把「**静默**覆盖」改为**显式上报**：覆盖与否经返回值
         `overwrote_existing`（bool）回报，不再静默。
         边界（如实标注）：`overwrote_existing` 是**判定—替换之间**的一次
@@ -11578,9 +11579,13 @@ class SpacetimeMemoryEngine:
 
         issue #698（静默覆盖）：`output_path` 给出时本方法 `open(..., "w")` **直写**
         该路径，目标已存在即**覆盖**（无根闸、无拒覆盖、无原子写——#330 只改了
-        `export_all` 的落盘原语，未及本方法）。`output_path` 由**调用方**给出、
-        **不过** `_confine_*` 根闸（那两个闸的适用面是 world3d render / wm_simloop
-        flush 的受保护产物）。本件只把「**静默**覆盖」改为**显式上报**：
+        `export_all` 的落盘原语，未及本方法）。`output_path` 由**调用方**给出，但
+        **会过** `_confine_export_out_path` 根闸（#746）：未显式配置
+        `LINGSHU_EXPORT_OUT_ROOT` 时**不限制**（保持既有行为）；显式配置后越界即
+        fail-closed 抛 `ValueError`（与 `_confine_simloop_out_path` /
+        `_confine_world3d_out_path` 同三条口径；但那两个闸的适用面是 world3d render /
+        wm_simloop flush 的受保护产物，本闸专收本方法与 `export_all`）。本件只把
+        「**静默**覆盖」改为**显式上报**：
         **仅当 `output_path` 给出**（即真发生落盘）时，返回值在落盘内容之上**多带**
         一个键 `overwrote_existing`（bool，读数取在 `open(..., "w")` **之前**）；
         批量模式（`output_path is None`，无落盘）**不加键**，返回体形状与 #57 契约
