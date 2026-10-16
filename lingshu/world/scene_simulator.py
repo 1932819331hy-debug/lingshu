@@ -991,7 +991,10 @@ class SceneSimulator:
              "n_contacts": int, "max_depth": float}
 
         `max_depth` 取**本 tick 实际发生的最大穿透深度**（拦停后为 0；初始重叠被
-        推离前为推离深度）；`depth_at_dt` 是"若不拦，dt 时刻会嵌入多深"（诊断用）。
+        推离前为推离深度）；`depth_at_dt` 是"若不拦，dt 时刻两箱的嵌入深度"（诊断用），
+        口径同 `physics.aabb_mtv`——三轴**同时**重叠时取各轴逃逸距离的**最小**值，
+        dt 时刻不重叠（含相切/三轴非同时重叠）⇒ `0.0`；它**不参与决策**
+        （`max_depth` 用的是 `depth`）。
         """
         physics = self._collision_api()
         contacts = [dict(c) for c in self._collision_last]

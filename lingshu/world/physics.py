@@ -1820,6 +1820,26 @@ def _no_hit(normal=(0.0, 0.0, 0.0)):
     return {"hit": False, "toi": None, "normal": normal, "depth": 0.0}
 
 
+def _embedded_depth_at(ca, ra, va, cb, rb, vb, dt):
+    """`dt` 时刻两箱的**嵌入深度**（口径 = 同节 `aabb_mtv`）。
+
+    `ca/cb` = t=0 的中心、`ra/rb` = 各轴半宽（3 元），`va/vb` = 速度，`dt` = 时间跨度。
+    定义：两箱在 `dt` 时刻**三轴同时重叠**时，取各轴逃逸距离
+    `(ra_i + rb_i) − |Δc_i(dt)|` 的**最小值**；任一轴非重叠（相切/分离）⇒ `0.0`
+    （本仓全节「贴着不算重叠」口径，见 `aabb_overlap`）。
+
+    ★issue #705：`sweep_aabb` 的 `depth_at_dt` 两条赋值通路**共用本函数**，杜绝
+    同一函数内出现两个「深度」口径（旧实现通路①用 `max(−gap)` 逐轴取最负、
+    通路②直接取 t=0 的 MTV ⇒ 名字与读数不符）。
+    """
+    ea = _aabb_dict([ca[i] + va[i] * dt - ra[i] for i in range(3)],
+                    [ca[i] + va[i] * dt + ra[i] for i in range(3)])
+    eb = _aabb_dict([cb[i] + vb[i] * dt - rb[i] for i in range(3)],
+                    [cb[i] + vb[i] * dt + rb[i] for i in range(3)])
+    mtv = aabb_mtv(ea, eb)
+    return float(mtv[1]) if mtv is not None else 0.0
+
+
 def sweep_aabb(a, va, b, vb, dt):
     """两 AABB 在 `[0, dt]` 内的**连续碰撞检测**（CCD）⇒ 防穿透。签名即冻结接口
     `sweep_aabb(a, va, b, vb, dt)`（a/b 为箱体 dict，va/vb 为速度向量，dt 为时间跨度）。
@@ -1829,7 +1849,11 @@ def sweep_aabb(a, va, b, vb, dt):
 
     返回 `{"hit","toi","normal","depth","axis","entry","exit","depth_at_dt"}`：
       · `toi ∈ [0, dt]`；**起始已重叠 ⇒ `toi = 0.0`**（并给当时的 `depth` = MTV 深度）；
-      · 命中（拦在穿越前）⇒ `depth = 0.0`（接触瞬间无嵌入），`depth_at_dt` = 若不拦则 dt 时刻的嵌入深度；
+      · 命中（拦在穿越前）⇒ `depth = 0.0`（接触瞬间无嵌入）；
+      · `depth_at_dt` = **若不拦、`dt` 时刻两箱的嵌入深度**，口径与同节 `aabb_mtv`
+        一致（三轴**同时**重叠时取各轴逃逸距离的**最小**值）；`dt` 时刻不重叠
+        （含三轴非同时重叠、相切/分离）⇒ `0.0`。它是「若拦不住会嵌多深」的诊断
+        读数，**不参与任何决策**（`collision_report` 的 `max_depth` 用 `depth`）；
       · `normal` = 让 a **离开** b 的单位方向（沿进入面法线）。
     """
     if not isinstance(a, dict) or not isinstance(b, dict):
@@ -1849,8 +1873,11 @@ def sweep_aabb(a, va, b, vb, dt):
     if aabb_overlap(a, b):                               # 起始已重叠 ⇒ toi = 0
         mtv = aabb_mtv(a, b)
         axis, depth = mtv if mtv is not None else ((1.0, 0.0, 0.0), 0.0)
+        # ★issue #705（通路②）：`depth_at_dt` 须是 **dt 时刻**的嵌入深度，不再取 t=0 的 MTV
+        #   （旧实现与 dt/速度无关 ⇒ 既会少报、也会在 dt 时刻已分离时报正数）。
         return {"hit": True, "toi": 0.0, "normal": vscale(axis, -1.0), "depth": depth,
-                "axis": axis, "entry": 0.0, "exit": None, "depth_at_dt": depth}
+                "axis": axis, "entry": 0.0, "exit": None,
+                "depth_at_dt": _embedded_depth_at(ca, ra, va, cb, rb, vb, dt)}
     t_entry, t_exit, axis_i, sign = 0.0, dt, None, 1.0
     for i in range(3):
         lo = cb[i] - rb[i] - ra[i]                       # 膨胀箱（Minkowski 和）
@@ -1892,14 +1919,10 @@ def sweep_aabb(a, va, b, vb, dt):
     toi = max(0.0, t_entry)
     normal = [0.0, 0.0, 0.0]
     normal[axis_i] = sign
-    # 若不拦，dt 时刻会嵌入多深（读数用；"穿模"判据的核心数字）
-    end_a = tuple(ca[i] + va[i] * dt for i in range(3))
-    end_b = tuple(cb[i] + vb[i] * dt for i in range(3))
-    depth_at_dt = 0.0
-    for i in range(3):
-        gap = abs(end_a[i] - end_b[i]) - (ra[i] + rb[i])
-        if gap < 0.0:
-            depth_at_dt = max(depth_at_dt, -gap)
+    # 若不拦，`dt` 时刻两箱的嵌入深度（读数用；口径同 `aabb_mtv`——三轴同时重叠取各轴
+    # 逃逸距离的最小值，不重叠/相切 ⇒ 0.0。★issue #705：旧实现逐轴取「gap 最负者」⇒
+    # 沿运动轴已分离（横向仍重叠）时也报正数，报的其实是横向逃逸距离，名实不符）
+    depth_at_dt = _embedded_depth_at(ca, ra, va, cb, rb, vb, dt)
     return {"hit": True, "toi": toi, "normal": tuple(normal), "depth": 0.0,
             "axis": tuple(normal), "entry": t_entry, "exit": t_exit,
             "depth_at_dt": depth_at_dt}

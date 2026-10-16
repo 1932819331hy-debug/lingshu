@@ -135,7 +135,11 @@ def test_A4_bullet_thin_plate_no_tunneling():
     assert r["toi"] == pytest.approx(t["expect"]["toi"], abs=1e-9)
     assert r["toi"] == pytest.approx(0.0099, abs=1e-12)
     assert r["depth"] == 0.0                              # 拦在接触瞬间（无嵌入）
-    assert r["depth_at_dt"] > 1.0                         # 不拦的话 dt 时刻嵌入 1.05
+    # ★issue #705：`depth_at_dt` = **dt 时刻的嵌入深度**（口径同 `aabb_mtv`：三轴同时重叠
+    #   取各轴逃逸距离的最小值）。本用例 dt=1.0 时子弹早已越过薄板（x 向表面相距 989.9）
+    #   ⇒ 真嵌入深度 **0.0**（旧读数 1.05 是**横向**逃逸距离 ra+rb=1.05，建立在错误口径上）。
+    #   「穿模」的判据是上面两行的 `hit=True` 且 `toi≈0.0099`，不是该读数。
+    assert r["depth_at_dt"] == 0.0
     # 朴素"只看终点"必然漏（这就是穿模的机制）
     end = _shift(t["a"], tuple(t["va"][i] * t["dt"] for i in range(3)))
     assert P.aabb_overlap(end, t["b"]) is False

@@ -119,7 +119,7 @@
     {
      "file": "scene_simulator.py",
      "src": "aeis.scene_simulator",
-     "sha256": "dd909b308f4b526c",
+     "sha256": "f07ddfd30d47264e",
      "rewrites": 4,
      "sanitized": 0,
      "patches": 0,
