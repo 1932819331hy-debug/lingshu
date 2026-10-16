@@ -11892,13 +11892,32 @@ class SpacetimeMemoryEngine:
         §2（`#139` 子缺陷 ①②③⑤）＋ 待裁清单 **B-1**（保护判定沿用既有角色闸、
         不另加密钥）/ **S-2=(a)**（保护命中 ⇒ 整体拒绝，全有或全无）/
         **S-3**（范围校验）。
-        削掉的判别力（边界，如实标注）：**未**引入真正的事务原子性——仓内
-        `delete_node` / `add_perception` 各自 `commit()`，而 `conn.commit()`
-        会释放（销毁）SAVEPOINT（本机实测 `ROLLBACK TO` 报 `no such savepoint`），
-        故无法在不改写入原语的前提下做到「任一步失败即整体回滚」；本件以
-        「A 前置校验 ＋ B 先挂后删」把**可预见的失败**全部提到写入之前。仍
-        **未**覆盖：`_attach` 中途的库级异常（会留下部分新节点，但旧子树无损）；
-        旧子树 `traverse` 的 `max_nodes=500` 截断（#139-G，本件不收口）。
+
+        #139 追评（字段类型类失败仍半截落库）：A 段校验只查「是 dict 且有 `id`」，
+        而 `_attach` 还会对 `importance` / `confidence` / `spatial_coordinates.
+        image2d` 分量做 `float()`、对 `node["id"]` 做字符串拼接、对 `content` 做
+        `json.dumps`。新子树里任一**非首个**节点带非数值字段（如
+        `"importance": "high"`、坐标分量为 `null`、`"confidence": "0.5x"`）时，
+        `_attach` 在**挂入中途**抛 `ValueError` / `TypeError`，而此前已挂的节点
+        各自落库 ⇒ parent 下留下半棵无主新子树、旧子树同时还在；调用方按
+        「抛错 = 没改动」重试，每次再多挂半棵（报告人最小复现：两次调用后
+        parent 的 hierarchical 后代数 1 → 5）。
+        修法（取向选择 · **事务边界**，不选「把 `float()` 全提到校验阶段」）：
+        把 ②③ 段（`_attach` 递归挂入 ＋ 旧子树删除）整体收进单一
+        `self.store._tx()` 事务边界。理由：① 枚举式校验须逐个追平 `_attach`
+        里的每一处 `float()` / 字符串拼接 / `json.dumps`，日后往 `_attach` 加字段
+        即静默重现本缺口；事务边界是**机械完备**的——凡写入中途抛错一律整体回滚。
+        ② 旧 docstring 曾断言「无法在不改写入原语的前提下做到整体回滚」，该断言
+        在 **#665** 之后已失效：`_commit_locked()` 具备嵌套感知（depth>1 时不提交、
+        不销毁外层 SAVEPOINT），故最外层 `self.store._tx()` 是**真事务**（本机实测：
+        边界内 `add_perception` 两次后抛错 ⇒ 库内 0 节点）。③ 嵌套调用安全：
+        `_tx()` 在 `conn.in_transaction` 为真时降级为 SAVEPOINT（实测已在
+        `store._tx()` 内调用本方法不报 `cannot start a transaction within a
+        transaction`，`tests/test_issue665_nested_tx_savepoint.py` 同面）。
+        边界（削掉的判别力，如实标注）：① 事务回滚只覆盖**库内**副作用——进程内
+        计数（`self._interaction_count`）与「本轮已计数」等内存态不随之回退
+        （既有语义，非本件引入；本件只消「半截落库」）。② 旧子树 `traverse` 的
+        `max_nodes=500` 截断（#139-G）仍不收口。
         """
         import json as _json
         # ---- A 前置校验（先判后动）：任一条不满足即整体拒绝，零改动 ----
@@ -11966,9 +11985,15 @@ class SpacetimeMemoryEngine:
                 _attach(sub, nid)
             return nid
 
-        new_root_id = _attach(new_subtree, parent_id)
-        # ③ 移除旧子树节点（关联边随删除级联清理）——挂入成功后执行；计数如实
-        deleted = sum(1 for nid in removed if self.store.delete_node(nid))
+        # ②③ 单一事务边界（#139 追评）：递归挂入新子树 ＋ 移除旧子树收进**同一**
+        # 事务。任一步抛错（含 `_attach` 中途的字段类型 `ValueError`/`TypeError`
+        # 与库级异常）⇒ 整体回滚、零残留、旧子树完好 ⇒ 「抛错 = 没改动」成立，
+        # 调用方重试不再多挂半棵。`_tx()` 具备嵌套感知：已在调用方事务中时只开
+        # SAVEPOINT（不越权提交），见 `_commit_locked` / `_tx` 的 #665 说明。
+        with self.store._tx():
+            new_root_id = _attach(new_subtree, parent_id)
+            # ③ 移除旧子树节点（关联边随删除级联清理）——挂入成功后执行；计数如实
+            deleted = sum(1 for nid in removed if self.store.delete_node(nid))
         return {"new_root_id": new_root_id, "new_nodes": counter["n"],
                 "removed_nodes": deleted}
 
