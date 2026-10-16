@@ -1278,8 +1278,11 @@ class LayeredStore:
         「该提交」的判据 —— 只有最外层 `_tx` 自己（走 `else: conn.commit()` 分支）
         才提交。
         """
-        if self._tx_depth > 1:
-            # 嵌套层：提交权推迟给最外层，避免销毁外层 SAVEPOINT。
+        if self._tx_depth > 1 or not getattr(self, "_tx_owns_txn", True):
+            # 嵌套层（depth>1），或最外层 `_tx` 自己也只是别人的 SAVEPOINT
+            # （调用方在 `_tx` 之外已开事务）——两种情形提交权都不在本层：
+            # 前者提交会销毁外层 SAVEPOINT；后者提交是**越权提交调用方事务**
+            # （调用方随之失去回滚权，实测 `no such savepoint`）。
             return
         self.conn.commit()
 
@@ -1327,6 +1330,11 @@ class LayeredStore:
         # 递减：任何异常路径（含 ROLLBACK 自身失败）都不能让深度泄漏，否则该连接
         # 后续所有写都会静默变成「永不提交」。
         self._tx_depth = getattr(self, "_tx_depth", 0) + 1
+        if self._tx_depth == 1:
+            # 只有最外层 `_tx` 帧有资格提交，且**仅当它自己开了真事务**
+            # （nested=False 走 BEGIN IMMEDIATE）。若 nested=True，本帧只是
+            # 调用方既有事务里的一个 SAVEPOINT ⇒ 提交权归调用方。
+            self._tx_owns_txn = not nested
         try:
             yield conn
         except BaseException:
@@ -1346,6 +1354,9 @@ class LayeredStore:
                 conn.commit()
         finally:
             self._tx_depth -= 1
+            if self._tx_depth == 0:
+                # 栈清空 ⇒ 归还默认值（下一笔事务重新判定）
+                self._tx_owns_txn = True
 
     @_transactional
     def _init_tables(self):
