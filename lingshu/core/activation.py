@@ -581,17 +581,69 @@ class ActivationEngine:
                              "source": r[2], "hop": r[3], "ts": r[4]} for r in rows]}
 
     def import_workset(self, snapshot: Dict, workset: Optional[str] = None) -> Dict:
-        """恢复快照(激活状态重建——进程重启后工作态不失)。"""
+        """恢复快照(激活状态重建——进程重启后工作态不失)。
+
+        #771 ①（原子性）：旧实现**先 `DELETE` 目标 workset、再迭代 members**，全程无
+        事务保护、无 `except`/`rollback` ⇒ members 畸形（`None` / 非列表 / member 缺
+        `node_id` / `node_id=None` / activation 为 dict…）时异常逃逸，而**目标
+        workset 已被清空且无回滚**。借用连接形态（`store=` / `conn=`，即常驻部署
+        形态）下尤其重：`DELETE` 挂在调用方连接上，任一次后续提交即把它**固化**。
+        修法（最小 · 只补原子性，**不改错误语义**）：
+          ① 先把 `members` 物化成 `list` —— 非可迭代形态（`None` 等）在**任何写之前**
+             即抛（异常类型与旧实现逐字相同，仍是 `TypeError`）；
+          ② `DELETE` 与全部 `INSERT` 收进**同一事务**（已在外层事务中则用 SAVEPOINT，
+             不越权提交调用方事务），异常一律回滚后原样抛出 ⇒ 畸形输入下目标 workset
+             **逐行不变**（零变更）。
+        边界（如实标注）：①畸形 members 仍**抛异常**，不改判「静默返回错误结构」
+        （调用方契约原本就是抛）；②「目标 workset 不存在」不报错（旧语义：`DELETE`
+        影响 0 行、照常写入），本件不动；③本件只加「可迭代性」这一层前置校验，
+        member 内部的 schema 仍由既有异常面承担（`KeyError` / `ProgrammingError` /
+        `IntegrityError`），错误类型不重定义。判据来源：公开 issue #771 ①
+        （「校验通过后再在同一事务里 DELETE + INSERT；异常路径回滚」）。
+        """
         ws = workset or snapshot["workset"]
+        # ① 写前物化（非可迭代 ⇒ 在任何 DELETE 之前抛出，目标零变更）。
+        members = list(snapshot["members"])
         con = self._con()
-        con.execute("DELETE FROM activation_nodes WHERE workset=?", (ws,))
-        ts = time.time()
-        for m in snapshot["members"]:
-            con.execute("INSERT OR REPLACE INTO activation_nodes VALUES (?,?,?,?,?,?,?)",
-                        ("act_%s_%d" % (uuid.uuid4().hex[:8], int(ts * 1000)),
-                         ws, m["node_id"], m["activation"], "restored", m.get("hop", 0), ts))
-        con.commit(); con.close()
-        return {"status": "ok", "workset": ws, "restored": len(snapshot["members"])}
+        savepoint = None
+        try:
+            # ② 单事务：DELETE 与全部 INSERT 同生共死。
+            if con.in_transaction:
+                savepoint = "import_workset_%s" % uuid.uuid4().hex[:8]
+                con.execute("SAVEPOINT %s" % savepoint)
+            else:
+                con.execute("BEGIN IMMEDIATE")
+            ts = time.time()
+            con.execute("DELETE FROM activation_nodes WHERE workset=?", (ws,))
+            for m in members:
+                con.execute("INSERT OR REPLACE INTO activation_nodes VALUES (?,?,?,?,?,?,?)",
+                            ("act_%s_%d" % (uuid.uuid4().hex[:8], int(ts * 1000)),
+                             ws, m["node_id"], m["activation"], "restored", m.get("hop", 0), ts))
+        except BaseException:
+            # 回滚自己这一段（嵌套时只回滚到 SAVEPOINT，不动调用方既有事务），原样抛。
+            if savepoint is None:
+                con.rollback()
+            else:
+                try:
+                    con.execute("ROLLBACK TO SAVEPOINT %s" % savepoint)
+                    con.execute("RELEASE SAVEPOINT %s" % savepoint)
+                except sqlite3.Error as _sp_err:
+                    # 回滚段自身失败（SAVEPOINT 已被 SQLite 隐式释放等）**不静默**：
+                    # 出声记录后仍抛**原异常**——本方法不重定义错误类型（见 docstring
+                    # 边界③），此处只保证「回滚未成」可被调用方/日志面看见。
+                    warnings.warn(
+                        "ActivationEngine.import_workset: 回滚到 SAVEPOINT %s 失败"
+                        "（%s）；本次异常照原样抛出，调用方事务状态请自行复核"
+                        % (savepoint, _sp_err))
+            raise
+        else:
+            if savepoint is None:
+                con.commit()
+            else:
+                con.execute("RELEASE SAVEPOINT %s" % savepoint)
+        finally:
+            con.close()
+        return {"status": "ok", "workset": ws, "restored": len(members)}
 
 
 if __name__ == "__main__":

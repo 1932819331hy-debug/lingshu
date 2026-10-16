@@ -225,6 +225,28 @@ def _dumps_json(value, ensure_ascii: bool = True, where: str = "JSON 列") -> st
     return json.dumps(value, ensure_ascii=ensure_ascii)
 
 
+def _json_tags(value) -> list:
+    """把 `nodes.tags` 的**库内/备份取值**归一为 list（#778 F1/F2 判据的读取助手）。
+
+    为什么需要：`tags` 列是 TEXT（JSON 文本）——库内读回是 `'["a","b"]'`、JSON `null`
+    读回是 `None`（#718 实测）、备份被篡改时也可能是真 list。保护标记保真判据要
+    「旧行 tags 是否含 `no_forget`」，故须先把三种形态统一成 list。
+    容错口径：非 list / 非法 JSON / None ⇒ `[]`（与 #718「`tags=None` 视为无该标记」
+    同向——**不**抛、不猜）；合法 JSON 但非 list（如字符串）亦归 `[]`。
+    边界（如实标注）：本助手**只读**，不写库；改写只在确需并入保护标记时经
+    `_dumps_tags`（tags 列唯一序列化真源）进行。
+    """
+    if isinstance(value, list):
+        return value
+    if not isinstance(value, str):
+        return []
+    try:
+        parsed = json.loads(value)
+    except (TypeError, ValueError):
+        return []
+    return parsed if isinstance(parsed, list) else []
+
+
 # =============================================================================
 # 数值入参闸（唯一真源 · lingshu #185）
 # =============================================================================
@@ -10819,64 +10841,116 @@ class SpacetimeMemoryEngine:
         **尚未建成**；②`payload` 既可传 `prepare_shared_sync()` 的返回 dict，也可
         直接传其 `sync_payload` 列表。判据来源：`LayeredStore` 类头 docstring
         （共享层跨实例一致/本地层实例独立）＋ 公开 issue #165。
+
+        #771 ④（**整批原子**）：旧实现逐条 `store.add_node`（各自一条事务）⇒ 载荷
+        里混入**非 str content** 的条目时，前面合法条目**已落库**，坏条目在
+        `add_node` 的 #588/#594 闸处抛 `TypeError` 逃逸（本方法只捕
+        `PermissionError`）⇒ 「部分落库 + 未捕获异常」。另：`payload=None` 静默返回
+        空结果（调用方分不清「载荷为空」与「形态错」），`payload` 为字符串/整数时
+        分别以 `AttributeError` / `TypeError` 逃逸。
+        修法（最小 · 三条同向）：
+          ① **载荷形态前置判**：`None` / `str` / 非可迭代 ⇒ `TypeError`（可诊断
+             文案，不再静默返回空结果）；
+          ② **content 类型前置判**（与 `add_node` 的 #588/#594 **同源**判据）：
+             载荷任一 dict 条目带 `content` 键且非 str ⇒ 整批 `TypeError`、**零落库**
+             （在写任何一条之前判完，不靠回滚兜底）；
+          ③ **整批收进一条事务**（`self.store._tx()`；已在调用方事务中则自动降为
+             SAVEPOINT）⇒ 循环中途任何异常都回滚整批，不再出现「合法条目已落库」。
+        边界（如实标注 · 与既有契约的分界）：①**结构面**解析失败（缺字段 / 坏
+        JSON / 非法 layer）仍走 #165 既有契约 —— 逐条记入 `failed` / `rejected`、
+        **不**中断整批（本件不改该口径）；本件收口的是**内容类型面**（非 str
+        content）与**载荷形态面**，这两面取 fail-closed 整批拒绝。②`overwrite=True`
+        的覆盖语义、冲突上报形状、`identical` 判据（#463/#615）逐字不变。判据来源：
+        公开 issue #771 ④（「捕获范围改为逐条失败收集…并在整批提交前做类型预校验，
+        避免半截落库」）＋ `add_node` 的 #588/#594 content 类型闸（单一真源）。
         """
         items = payload.get("sync_payload") if isinstance(payload, dict) else payload
-        items = items or []
+        if items is None:
+            raise TypeError(
+                "#771 ④ apply_shared_sync 载荷为空：`payload=None` 或 dict 缺 "
+                "`sync_payload` 键——旧实现静默返回空结果，调用方无法区分"
+                "「载荷为空」与「载荷形态错」（现 fail-closed）")
+        if isinstance(items, (str, bytes, bytearray)):
+            raise TypeError(
+                "#771 ④ apply_shared_sync 载荷形态非法：期望 list（或 "
+                "`{'sync_payload': [...]}`），收到 %s——旧实现以 AttributeError 逃逸"
+                % type(items).__name__)
+        try:
+            items = list(items)
+        except TypeError:
+            raise TypeError(
+                "#771 ④ apply_shared_sync 载荷形态非法：期望 list（或 "
+                "`{'sync_payload': [...]}`），收到不可迭代的 %s" % type(items).__name__)
+        # ② content 类型前置判（写之前判完 ⇒ 整批零落库，不靠回滚兜底）。
+        _bad_content = [(it.get("id"), type(it.get("content")).__name__)
+                        for it in items
+                        if isinstance(it, dict) and "content" in it
+                        and not isinstance(it.get("content"), str)]
+        if _bad_content:
+            raise TypeError(
+                "#771 ④ apply_shared_sync 整批拒绝：载荷含非 str content 条目 %d 条"
+                "（例：id=%r 类型=%s）——本方法整批原子写入，任一条目非法即零落库"
+                "（与 add_node 的 #588/#594 同源判据）"
+                % (len(_bad_content), _bad_content[0][0], _bad_content[0][1]))
         shared = self.store.SHARED_LAYERS
         applied, identical, conflicts, rejected, failed = [], [], [], [], []
-        for item in items:
-            nid = (item or {}).get("id")
-            try:
-                layer = MemoryLayer(item["layer"])
-                cs = ConditionSpace.from_json(json.dumps(item["condition_space"]))
-                node = STNode(
-                    id=nid, content=item["content"], modality=item["modality"],
-                    spatial_coordinates=item.get("spatial_coordinates") or {},
-                    temporal_coordinate=item["temporal_coordinate"],
-                    condition_space=cs,
-                    importance=item.get("importance", 0.5),
-                    confidence=item.get("confidence", 0.5),
-                    layer=layer,
-                    tags=list(item.get("tags") or []),
-                    semantic_coordinates=item.get("semantic_coordinates") or {},
-                    state_attributes=item.get("state_attributes") or {},
-                    entity_id=item.get("entity_id"))
-            except (KeyError, TypeError, ValueError) as exc:
-                failed.append({"id": nid, "reason": "%s: %s"
-                               % (type(exc).__name__, exc)})
-                continue
-            if layer not in shared:
-                rejected.append({"id": nid, "layer": layer.value,
-                                 "reason": "本地层不入共享层（章程：实例独立）"})
-                continue
-            # ★#463（本笔）：判同**按声明字段面**逐字段比对 —— 不再只比 `layer`+`content`。
-            # 旧口径只比两列 ⇒ 源端改了 `tags`/`confidence`/`importance`/
-            # `state_attributes` 等**内容以外**的字段后重放，接收端判为"完全一致"、
-            # 进 `identical` 且**不落库** ⇒ 元数据变化被吞掉却回报成功，两实例
-            # **静默分叉**（issue #463 的最小复现即此）。
-            # 取数：一条 `SELECT`，列 = `SHARED_SYNC_FIELDS`（与 `prepare_shared_sync`
-            # 同一常量 ⇒ 与写入字段同口径；不是 `SELECT *`，也不随条目数变 N+1）。
-            _erow = self._shared_sync_existing_row(nid)
-            if _erow is not None:
-                _xl = MemoryLayer(_erow["layer"])
-                _diffs = self._shared_sync_field_diffs(_erow, item)
-                if not _diffs:
-                    identical.append(nid)
+        # ③ 整批一条事务（#771 ④）：中途任何异常 ⇒ 整批回滚（不再半截落库）。
+        # 复用 `LayeredStore._tx` 的嵌套感知（已在事务中则只开 SAVEPOINT，不越权
+        # 提交调用方事务）；`add_node` 在事务内自动降为 SAVEPOINT，提交权留在本层。
+        with self.store._tx():
+            for item in items:
+                nid = (item or {}).get("id")
+                try:
+                    layer = MemoryLayer(item["layer"])
+                    cs = ConditionSpace.from_json(json.dumps(item["condition_space"]))
+                    node = STNode(
+                        id=nid, content=item["content"], modality=item["modality"],
+                        spatial_coordinates=item.get("spatial_coordinates") or {},
+                        temporal_coordinate=item["temporal_coordinate"],
+                        condition_space=cs,
+                        importance=item.get("importance", 0.5),
+                        confidence=item.get("confidence", 0.5),
+                        layer=layer,
+                        tags=list(item.get("tags") or []),
+                        semantic_coordinates=item.get("semantic_coordinates") or {},
+                        state_attributes=item.get("state_attributes") or {},
+                        entity_id=item.get("entity_id"))
+                except (KeyError, TypeError, ValueError) as exc:
+                    failed.append({"id": nid, "reason": "%s: %s"
+                                   % (type(exc).__name__, exc)})
                     continue
-                conflicts.append({"id": nid, "incoming_layer": layer.value,
-                                  "existing_layer": _xl.value,
-                                  "fields": [d["field"] for d in _diffs],
-                                  "diff": _diffs})
-                if not overwrite:
+                if layer not in shared:
+                    rejected.append({"id": nid, "layer": layer.value,
+                                     "reason": "本地层不入共享层（章程：实例独立）"})
                     continue
-            try:
-                self.store.add_node(node)
-            except PermissionError as exc:
-                # 共享层仅 PRIMARY 可写（章程）⇒ SUB 接收端写共享层被拒，
-                # 如实记入 failed，不让整批中断。
-                failed.append({"id": nid, "reason": "PermissionError: %s" % exc})
-                continue
-            applied.append(nid)
+                # ★#463（本笔）：判同**按声明字段面**逐字段比对 —— 不再只比 `layer`+`content`。
+                # 旧口径只比两列 ⇒ 源端改了 `tags`/`confidence`/`importance`/
+                # `state_attributes` 等**内容以外**的字段后重放，接收端判为"完全一致"、
+                # 进 `identical` 且**不落库** ⇒ 元数据变化被吞掉却回报成功，两实例
+                # **静默分叉**（issue #463 的最小复现即此）。
+                # 取数：一条 `SELECT`，列 = `SHARED_SYNC_FIELDS`（与 `prepare_shared_sync`
+                # 同一常量 ⇒ 与写入字段同口径；不是 `SELECT *`，也不随条目数变 N+1）。
+                _erow = self._shared_sync_existing_row(nid)
+                if _erow is not None:
+                    _xl = MemoryLayer(_erow["layer"])
+                    _diffs = self._shared_sync_field_diffs(_erow, item)
+                    if not _diffs:
+                        identical.append(nid)
+                        continue
+                    conflicts.append({"id": nid, "incoming_layer": layer.value,
+                                      "existing_layer": _xl.value,
+                                      "fields": [d["field"] for d in _diffs],
+                                      "diff": _diffs})
+                    if not overwrite:
+                        continue
+                try:
+                    self.store.add_node(node)
+                except PermissionError as exc:
+                    # 共享层仅 PRIMARY 可写（章程）⇒ SUB 接收端写共享层被拒，
+                    # 如实记入 failed，不让整批中断。
+                    failed.append({"id": nid, "reason": "PermissionError: %s" % exc})
+                    continue
+                applied.append(nid)
         return {"applied": applied, "identical": identical,
                 "conflicts": conflicts, "rejected": rejected, "failed": failed,
                 "overwritten": overwrite}
@@ -11251,6 +11325,31 @@ class SpacetimeMemoryEngine:
         与修前逐字一致。守卫：
         `tests/test_issue125_escalation_import_overwrite_guard.py`（含 `--mutate`
         变异自证：改回 `INSERT OR REPLACE` ⇒ 恰好点红断言 A）。
+
+        #771 ②③（**同 id 换层闸 ＋ content 类型闸**，两闸均「先判后写、零落库」）：
+        ② 旧实现的换层判据（`immutable_rows` / `relayer_rows`）都要求「任一侧属
+        IMMUTABLE」⇒ **本地层之间**的换层（`context` → `knowledge`）不进任何闸，
+        备份可无密钥把既有情境层节点改成知识层并替换正文（无审计）；而同一换层经
+        `store.add_node` 必被 #127 拦（判据与层集合无关）⇒ 两条入口不对称。现补
+        `local_relayer_rows` 闸：既有 id 且两侧均不属 IMMUTABLE 而声明层不同 ⇒
+        `PermissionError`（涉 IMMUTABLE 的换层仍由上方 D-007 双列闸处理，持密钥
+        放行契约逐位不变）。③ 旧实现按备份行原样绑 SQL ⇒ 非 str `content` 全部落库
+        （`dict`/`list` 经 #721 归一为 JSON 文本、`int`/`bool` 由 TEXT 列亲缘性静默
+        转文本、`None` 落 NULL），而同一输入经 `add_node` **全部 `TypeError`**
+        （#588/#594 唯一写入汇聚点）。现补 `bad_content` 闸：`nodes` 行带 `content`
+        键而值非 str ⇒ `TypeError`（fail-closed，零落库，不做 `str()` 强转）。
+        边界：缺 `content` 键的行仍按 #652② 落 NULL 并计入 `missing_columns`（不抢该面）。
+
+        #778 F1/F2（**保护标记保真**）：旧实现走通用逐表 `INSERT OR REPLACE`，缺
+        `add_node` 的 #659 判据 ⇒ 备份行漏带 `no_forget` 时旧行的保护标签被**静默
+        抹掉**（无报错、无需密钥、无审计、`integrity_ok` 仍 True），而 `no_forget` ∈
+        tags 是 `_is_forget_protected`（#36 唯一真源）的两个真源之一 ⇒ 节点随即变可删。
+        现按 `add_node` 同款判据收口：① 旧行 tags 含 `no_forget` 而新行不含 ⇒ **并入**
+        新行 tags（只在旧行确有该标签时并入，`protections` 行登记的节点不据此新造标签）；
+        ② 旧行受保护 ⇒ 落 `protected_node_overwritten` 审计（同款 action_type）。
+        **不**拒绝覆盖（保住灾备恢复语义；与 #659 取舍逐字一致）。F2 的「行在、标签被抹」
+        由 ① 一并收口。新增返回键 `protected_tags_kept` / `protected_rows_overwritten`
+        供观测（与 #652②/#721 的「新增上报键」同例）。
         """
         with open(input_path, "r", encoding="utf-8") as f:
             data = json.load(f)
@@ -11262,8 +11361,13 @@ class SpacetimeMemoryEngine:
         c = self.store.conn.cursor()
         existing = self._existing_tables()
         prior_layer = {}
+        prior_tags = {}
         if "nodes" in existing:
             prior_layer = {rid: lyr for rid, lyr in c.execute("SELECT id, layer FROM nodes")}
+            # #778 F1/F2：库内旧行 `tags` 列（JSON 文本）一次性读出——保护标记保真
+            # 判据要用它，且**不随行数变 N+1**（与 `prior_layer` 同一次批量读）。
+            prior_tags = {rid: tgs for rid, tgs in c.execute("SELECT id, tags FROM nodes")}
+        valid_layers = {m.value for m in MemoryLayer}
         immutable_rows = [r.get("id") for r in data.get("nodes", [])
                           if r.get("layer") in imm_values or prior_layer.get(r.get("id")) in imm_values]
         # #478（编排侧裁定 2026-10-15，二次校正）：换层行的**攻击面**已由上方双列闸闭合
@@ -11304,6 +11408,63 @@ class SpacetimeMemoryEngine:
                 f"role={self.role.value} 无权导入共享层（anchor/structure）行"
                 f"（{len(shared_rows)} 条）：共享层由父节点主控，即便持设计者密钥"
                 "亦不放行（#586，fail-closed，零落库）")
+        # #771 ②：同 id **换层**闸（复用 `add_node` 的 #127 判据，不另造第二套）。
+        # 旧实现的 `immutable_rows` / `relayer_rows` 判据都要求「任一侧属
+        # IMMUTABLE」⇒ **本地层之间**的换层（`context` → `knowledge`）不进任何闸：
+        # 备份可无密钥把既有情境层节点改成知识层并替换正文（#771 实测，且无审计）。
+        # 同一换层经 `add_node` 必被 #127 拦（`existing.layer != node.layer` ⇒
+        # `PermissionError`，**与层集合无关**，本地层之间照样拦）⇒ 两条入口同语义
+        # 却不对称，本闸把导入面接回同一真源。
+        # 口径：既有 id 且**声明层合法**、与库内旧行层不同、且**两侧均不属
+        # IMMUTABLE** ⇒ `PermissionError`（先判后写、fail-closed、零落库）。
+        # 涉 IMMUTABLE 的换层**不在此闸**——由上方 D-007 双列闸处理（无密钥拒；
+        # 持密钥放行并 labeled＋audited＋requires_review），该契约逐位不变
+        # （`tests/test_issue478_479_import_governance_guard.py::test_g1_keyed_relayer_allowed_but_labeled`）。
+        # 声明层非法（缺失/NULL/未知名）的行仍走下方 `rejected_invalid_layer` 逐行
+        # 拒行上报（#478 变体口径不变），不被本闸抢走。
+        # 边界（如实标注）：①本闸只堵**换层**；「同 id 同层替换正文」仍放行——与
+        # `add_node` 的 #127 边界逐字一致（同层覆盖只受 #659 保护标记保真约束）；
+        # ②拒整批而非逐行拒（与 #586/#478/#674 同取整批拒口径）；③不额外落审计
+        # （被拒即零状态变更，与 `add_node` 的 #127 同款；issue 建议的「并记审计」
+        # 未采纳，理由见回帖）。
+        local_relayer_rows = [(r.get("id"), prior_layer.get(r.get("id")), r.get("layer"))
+                              for r in data.get("nodes", [])
+                              if r.get("id") in prior_layer
+                              and r.get("layer") in valid_layers
+                              and r.get("layer") != prior_layer[r.get("id")]
+                              and prior_layer.get(r.get("id")) not in imm_values
+                              and r.get("layer") not in imm_values]
+        if local_relayer_rows:
+            _rid, _old, _new = local_relayer_rows[0]
+            raise PermissionError(
+                f"禁止同 id 换层（#127）：id={_rid} 现为 {_old}，备份声明为 {_new}"
+                f"（本地层换层行 {len(local_relayer_rows)} 条）（fail-closed，零落库）")
+        # #771 ③：`nodes.content` 的**类型闸**（与 `add_node` 的 #588/#594 **同源**判据）。
+        # 旧实现按备份行原样绑 SQL ⇒ 非 str 全部落库：`dict`/`list` 经 #721 归一成
+        # JSON 文本、`int`/`bool` 由 SQLite TEXT 列**亲缘性静默转文本**（`'12345'` /
+        # `'1'`）、`None` 落 SQL NULL —— 而同一输入经 `store.add_node` **全部
+        # `TypeError`**（#588/#594 的闸在唯一写入汇聚点）。两条入口同语义不对称，
+        # 且 `int`/`bool` 的静默转文本正是 #588 docstring 明令「比拒绝更坏」的形态。
+        # 修法：写前**整批**判（先判后写）——备份 `nodes` 行中凡**带 `content` 键**
+        # 而值非 str ⇒ `TypeError`（可诊断文案点名行 id 与实收类型）、fail-closed、
+        # 零落库。**不**做 `str()` 静默强转（同 #331/#588 口径）。
+        # 边界（如实标注）：①只判「存在 content 键且非 str」——**缺** content 键的行
+        # 仍按 #652② 既有契约落 NULL 并计入 `missing_columns`（本闸不抢该面）；
+        # ②本闸在 `nodes` 表上**优先于** #721 的 TEXT 列容器值归一：容器 content
+        # 此前走归一落 JSON 文本，现按 #588/#594 同源闸整批拒（属**收紧**，与
+        # #771 ③「复用 add_node 的类型闸、非 str 一律拒绝」一致）；③其余表（含
+        # `promotion_proposals.content_hash` 等非 content 语义列）不受影响——判据
+        # 只落在 `nodes` 表的 `content` 列上。
+        bad_content = [{"id": r.get("id"), "content_type": type(r.get("content")).__name__}
+                       for r in data.get("nodes", [])
+                       if "content" in r and not isinstance(r.get("content"), str)]
+        if bad_content:
+            raise TypeError(
+                "#771 ③ import_all 拒绝非 str content（收到 %s，共 %d 行，例 id=%r）："
+                "非 str 会以 BLOB/亲缘性转文本/NULL 静默落库，绕过 add_node 的 "
+                "#588/#594 类型闸（与 #331 同口径，fail-closed，零落库）"
+                % (bad_content[0]["content_type"], len(bad_content),
+                   bad_content[0]["id"]))
         counts = {}
         skipped = []
         discarded = {}
@@ -11317,6 +11478,14 @@ class SpacetimeMemoryEngine:
         # 不覆写」被跳过的行数，按表计数（与 `skipped_rows` / `missing_columns`
         # 同形：只在非空时出现该表键）。**不许静默丢弃**是本仓既有口径。
         skipped_existing_rows = {}
+        # #778 F1/F2：保护标记保真的两个收集面——①受保护节点被导入覆写的留痕
+        # （循环后统一落 `protected_node_overwritten` 审计，与 `add_node` 同款）；
+        # ②保护标记被并回的节点 id（供返回值与守卫观测）。`_protected_ids` 取一次
+        # （`protections` 行登记集，与 `add_node` 的 `_is_forget_protected` 同真源，
+        # 不随行数变 N+1）。
+        _overwrite_protected = []
+        _kept_no_forget = []
+        _protected_ids = set(self.store.get_protected_nodes())
         for table in self.M13_TABLES:
             if table not in existing:
                 skipped.append(table)
@@ -11446,6 +11615,35 @@ class SpacetimeMemoryEngine:
                         rejected_layer.append({"id": r.get("id"),
                                                "layer": repr(r.get("layer"))[:40]})
                         continue
+                    # #778 F1/F2：**保护标记保真**（复用 `add_node` 的 #659 判据，
+                    # 不另造第二套）。旧实现走通用逐表 `INSERT OR REPLACE` ⇒ 备份行
+                    # 漏带 `no_forget` 时，旧行的保护标签被**静默抹掉**（无报错、无需
+                    # 密钥、无审计、`integrity_ok` 仍 True），而 `no_forget` ∈ tags 是
+                    # `_is_forget_protected`（#36 唯一真源）的两个真源之一 ⇒ 节点随即
+                    # 变可删（`delete_node` 返回 True）。F2 是同一缺口的弱化形态：
+                    # `protections` 行仍在（仍拒删），但标签源被抹 ⇒ 双源背离。
+                    # 口径与 `add_node` 逐字同构：
+                    #   ① 旧行 tags 含 `no_forget` 而新行不含 ⇒ **并入**新行 tags
+                    #      （只在旧行**确有**该标签时并入——`protections` 行登记的节点
+                    #      另有真源，不据此新造标签，避免把「仅经 protections 行保护」
+                    #      的节点语义悄悄改写成带标签）；
+                    #   ② 旧行受保护（`_is_forget_protected`）⇒ 落
+                    #      `protected_node_overwritten` 审计，使「受保护节点被导入覆写」
+                    #      不再静默（审计在本次导入事务内一并提交）。
+                    # **不**拒绝覆盖（保住灾备恢复语义）：内容仍按备份落库，只保
+                    # 标记与可审计——与 #659 的取舍逐字一致。
+                    _old_tags = _json_tags(prior_tags.get(r.get("id")))
+                    _new_tags = _json_tags(r.get("tags"))
+                    if "no_forget" in _old_tags and "no_forget" not in _new_tags:
+                        _new_tags = list(_new_tags) + ["no_forget"]
+                        r["tags"] = _dumps_tags(_new_tags)
+                        _kept_no_forget.append(r.get("id"))
+                    if self.store._is_forget_protected(
+                            None, _protected_ids, node_id=r.get("id"), tags=_old_tags):
+                        _overwrite_protected.append({
+                            "id": r.get("id"), "old_tags": list(_old_tags),
+                            "new_tags": list(_new_tags),
+                            "protections_row": r.get("id") in _protected_ids})
                     # #574：importance 值域钳制（与 add_node 同款）
                     # 旧实现绕过 add_node 直接 INSERT，越界值原样落库
                     if "importance" in r:
@@ -11512,6 +11710,22 @@ class SpacetimeMemoryEngine:
                 c.execute(f"{_verb} INTO {table} ({col_sql}) VALUES ({placeholders})",
                           tuple(r.get(col) for col in cols))
             counts[table] = len(rows) - skipped_rows.get(table, 0)
+        # #778 F1/F2 硬配套：受保护节点被导入覆写 ⇒ 审计只追加（与 `add_node` 的
+        # #659 同款 action_type / 字段面）。**不**拒绝覆盖（灾备恢复语义不动）。
+        # 按 id 去重（备份自身可含重复 id 行 ⇒ 同一次导入只落一条审计）。
+        _seen_ow = []
+        for _ow in _overwrite_protected:
+            if _ow["id"] in _seen_ow:
+                continue
+            _seen_ow.append(_ow["id"])
+            self.store.log_action(
+                "protected_node_overwritten",
+                f"受保护节点 {_ow['id']} 被同 id 导入覆写（#778）：no_forget 标签已保真、"
+                f"protections 行不受影响，保护语义（拒删/免衰减）仍生效",
+                node_ids=[_ow["id"]],
+                outcome={"no_forget_in_new_tags": "no_forget" in _ow["new_tags"],
+                         "protections_row": _ow["protections_row"],
+                         "old_tags": _ow["old_tags"]})
         # ③ 硬配套：审计只追加（`action_logs` 无更新/删除路径）。
         if guarded_meta or id_log_rows:
             self.store.log_action(
@@ -11563,7 +11777,13 @@ class SpacetimeMemoryEngine:
                 # #125 增量复现（同 id 覆写面）：`escalation_points` 上「库内已有同
                 # id ⇒ 不覆写」被跳过的**既有行数**（按表计数，非空才出现该表键）。
                 # 新增键，与 #652② `missing_columns` / #721 `skipped_rows` 同例。
-                "skipped_existing_rows": skipped_existing_rows}
+                "skipped_existing_rows": skipped_existing_rows,
+                # #778 F1/F2：保护标记保真的可观测量（新增键，同例）——
+                # `protected_tags_kept` 列出「旧行 tags 含 no_forget 而备份行不含 ⇒
+                # 已并入」的节点 id；`protected_rows_overwritten` 列出「受保护节点被
+                # 本次导入覆写（已落 protected_node_overwritten 审计）」的节点 id。
+                "protected_tags_kept": list(dict.fromkeys(_kept_no_forget)),
+                "protected_rows_overwritten": _seen_ow}
 
     def verify_integrity(self) -> Dict:
         """M13：完整性校验（边引用节点存在性 + 表计数）
