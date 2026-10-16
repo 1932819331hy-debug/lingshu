@@ -234,16 +234,24 @@ def test_m6_empty_and_contextless_backup_do_not_zero_cap(tmp_path, designer_key)
 # --------------------------------------------------------------- M7 返回体形状/取值
 
 def test_m7_return_shape_and_counts_unchanged(tmp_path, designer_key):
-    """M7：`import_all` 的返回计数**形状与取值**逐字不变（防过修）。"""
+    """M7：`import_all` 的返回计数**形状与取值**逐字不变（防过修）。
+
+    重锚（#721 跨批冲突）：本断言原为「顶层键集合**恰等**」。#721（同批）给
+    `import_all` 返回体**新增**两个上报键 `normalized_values` / `skipped_rows`
+    （与 #652② 加 `missing_columns` 同例，都是**追加**）。而 M7 的意图是「#493
+    那一行修法没有改返回体形状」——正确锚是「原有键一个不少、取值不变」，不是
+    「键集合恰等于某一刻的快照」（后者会被任何合法的追加键打破）。
+    故改为**超集**（`>=`）：下方全部取值断言逐字保留，另断旧键一个不缺。
+    """
     bk, _ = _backup_with_context(tmp_path, n=600, cap=1000, name="m7.json")
     dst = _engine(tmp_path / "m7.db")
     ret = dst.import_all(bk, designer_key=designer_key)
 
-    assert set(ret.keys()) == {
+    assert set(ret.keys()) >= {
         "imported", "skipped_tables", "dangling_rows", "orphan_edges",
         "orphan_edges_sample", "integrity_ok", "discarded_keys", "missing_columns",
         "immutable_rows", "requires_review", "rejected_invalid_layer",
-    }, "M7 返回体形状变了：%r" % (sorted(ret.keys()),)
+    }, "M7 返回体缺了旧键（改名/删除）：%r" % (sorted(ret.keys()),)
     assert set(ret["imported"].keys()) == {
         "nodes", "edges", "blindspots", "skills", "promotion_proposals",
         "protections", "rejected_paths", "verifier_standards", "escalation_points",
