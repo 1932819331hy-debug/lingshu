@@ -5143,14 +5143,59 @@ class LayeredStore:
                 for r in c.fetchall()]
 
     @_transactional
-    def add_escalation_point(self, code: str, trigger: str, condition: str,
-                             action: str, severity: str = "medium") -> str:
-        """登记升级点（危机触发器：触发条件→处置动作），返回 id。"""
+    def _insert_escalation_point(self, code: str, trigger: str, condition: str,
+                                 action: str, severity: str) -> str:
+        """升级点表的**裸写**（无授权闸），返回 id。
+
+        ★只供 `SpacetimeMemoryEngine._seed_escalation_points` 的**构造期播种**
+        使用（#749 的边界②，见 `add_escalation_point` docstring）：播种的 6 条是
+        源码里的常量（`seeds` 字面量），属程序初始化，不是运行期治理写入。把它与
+        「运行期由调用方注入任意危机触发判据」分开，才不会让
+        `SpacetimeMemoryEngine(...)` 的构造在未配置密钥的进程里抛
+        `PermissionError`（那会让全仓构造期调用面集体变红）。
+        **非播种路径不得调用本方法**——它绕过 `verify_designer`。
+        """
         eid = f"esc_{uuid.uuid4().hex[:8]}"
         c = self.conn.cursor()
         c.execute("INSERT INTO escalation_points VALUES (?,?,?,?,?,?,?,?)",
                   (eid, code, trigger, condition, action, severity, 1, time.time()))
         self._commit_locked()
+        return eid
+
+    @_transactional
+    def add_escalation_point(self, code: str, trigger: str, condition: str,
+                             action: str, severity: str = "medium",
+                             designer_key: str = None) -> str:
+        """登记升级点（危机触发器：触发条件→处置动作），返回 id。
+
+        issue #749：本方法此前**无授权、无审计**——而同族 `set_escalation_enabled`
+        早在 #130 就补齐了 `verify_designer` fail-closed 闸 + `action_logs` 留痕。
+        两者同写 `escalation_points` 表、同属治理面，**口径矛盾** ⇒ 无密钥即可
+        注入 `condition` 判据（叠加 #747 的解析缺陷可反转触发语义）。现补**同位
+        同形**：`designer_key` 形参 + `verify_designer` 闸（句面与
+        `adjudicate_promotion` / `set_escalation_enabled` 一致）+ `log_action` 审计。
+
+        边界（削掉的判别力，如实标注）：
+        ① 闸只认进程环境变量 `AEIS_DESIGNER_KEY`（`verify_designer` 既有口径，
+           **不**新增密钥通道、**不**放宽）。
+        ② 构造期播种（`_seed_escalation_points`，源码常量 6 条）**不经本方法**，
+           走 `_insert_escalation_point` 裸写 ⇒ 未配置密钥的进程仍可正常构造引擎。
+           这是「初始化」与「运行期治理写」的分离，不是闸的漏洞：播种内容不可由
+           调用方控制。
+        ③ **未**扩张到同表其它写点：`import_all`（备份恢复）经 `M13_TABLES` 含
+           `escalation_points` 的 `INSERT OR REPLACE` 直写 `conn`，**绕过本闸**——
+           该面属既有登记项 #125（「恢复路径绕过写入边界」）的范围，本件不动；
+           `set_escalation_enabled` 已有闸（#130）；读面（`list_escalation_points`）
+           不加闸。
+        """
+        if not verify_designer(designer_key):
+            raise PermissionError(
+                "D-007 设计者认证失败：密钥无效或未配置 AEIS_DESIGNER_KEY（fail-closed）")
+        eid = self._insert_escalation_point(code, trigger, condition, action, severity)
+        self.log_action(
+            "escalation_add",
+            f"add escalation {eid} code={code} severity={severity}",
+            outcome={"escalation_id": eid, "code": code, "severity": severity})
         return eid
 
     @_transactional
@@ -11099,7 +11144,14 @@ class SpacetimeMemoryEngine:
     # ---- A-3 升级点清单化 ----
 
     def _seed_escalation_points(self):
-        """A-3 默认升级点（对齐 3.15/3.16/12.1；仅空表时播种）"""
+        """A-3 默认升级点（对齐 3.15/3.16/12.1；仅空表时播种）
+
+        #749：播种走 `store._insert_escalation_point` **裸写**，不经带
+        `verify_designer` 闸的 `store.add_escalation_point`——6 条是源码常量、
+        属构造期初始化（`__init__` 调用本方法），不能要求部署方为「程序自带的
+        默认值」配置密钥。守卫 `tests/test_issue749_escalation_write_gate.py`
+        的 E 组锁住这条分离（改回带闸方法 ⇒ 未配置密钥的构造即抛 ⇒ 红）。
+        """
         if self.store.list_escalation_points(enabled_only=False):
             return
         seeds = [
@@ -11111,14 +11163,17 @@ class SpacetimeMemoryEngine:
             ("ESC-006", "设计者预备变更", "设计者位置/权责分离相关", "维生系统终裁（1.4.3）", "high"),
         ]
         for code, trigger, condition, action, severity in seeds:
-            self.store.add_escalation_point(code, trigger, condition, action, severity)
+            self.store._insert_escalation_point(code, trigger, condition, action,
+                                                severity)
 
     def list_escalation_points(self, enabled_only: bool = True) -> List[Dict]:
         return self.store.list_escalation_points(enabled_only)
 
     def add_escalation_point(self, code: str, trigger: str, condition: str,
-                             action: str, severity: str = "medium") -> str:
-        return self.store.add_escalation_point(code, trigger, condition, action, severity)
+                             action: str, severity: str = "medium",
+                             designer_key: str = None) -> str:
+        return self.store.add_escalation_point(code, trigger, condition, action,
+                                               severity, designer_key=designer_key)
 
     def set_escalation_enabled(self, escalation_id: str, enabled: bool,
                                designer_key: str = None):

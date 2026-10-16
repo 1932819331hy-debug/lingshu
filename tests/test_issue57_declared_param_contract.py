@@ -40,6 +40,12 @@
   · 删 `detect_period` 的 `if period < min_period: return None` ⇒ T6 红。
 
 运行（仓根）：python -X utf8 -m pytest tests/test_issue57_declared_param_contract.py -q
+
+★#749 夹具适配（**只动夹具、断言一字未改**）：`add_escalation_point` 补了
+`verify_designer` fail-closed 闸（#749，与同族 `set_escalation_enabled` 同位
+同形），故本件三处夹具改为「配置 `AEIS_DESIGNER_KEY` + 传 `designer_key`」。
+本件的断言面是 `check_escalation` 的 `value` 参与判定与解析器形态，**不是**
+「写入是否需要密钥」——夹具适配不触碰任何断言，也不放宽任何判据。
 """
 from __future__ import annotations
 
@@ -61,14 +67,34 @@ from lingshu.nn.stcnn import detect_period  # noqa: E402
 CORE_PY = os.path.join(REPO, "lingshu", "core", "core.py")
 
 
+DUMMY_KEY = "GOV-IMPL-DUMMY-KEY"   # #749：写入面闸的夹具密钥（与 #130 守卫同款）
+
+
+def _use_designer_key(case):
+    """#749 夹具：配置 `AEIS_DESIGNER_KEY` 并在用例结束后还原。"""
+    saved = os.environ.pop("AEIS_DESIGNER_KEY", None)
+
+    def _restore():
+        os.environ.pop("AEIS_DESIGNER_KEY", None)
+        if saved is not None:
+            os.environ["AEIS_DESIGNER_KEY"] = saved
+
+    case.addCleanup(_restore)
+    os.environ["AEIS_DESIGNER_KEY"] = DUMMY_KEY
+    return DUMMY_KEY
+
+
 class EscalationValueBoundTests(unittest.TestCase):
     """A：`check_escalation` 的 `value` 真参与判定。"""
 
     def setUp(self):
         self.engine = SpacetimeMemoryEngine(":memory:", identity="guard-57a")
         self.addCleanup(self.engine.close)
-        self.engine.add_escalation_point("E-01", "偏差信号", "value > 0.9", "up", "high")
-        self.engine.add_escalation_point("E-02", "偏差信号", "value > 0.1", "up", "high")
+        key = _use_designer_key(self)     # #749：写入面需密钥（夹具适配）
+        self.engine.add_escalation_point("E-01", "偏差信号", "value > 0.9", "up", "high",
+                                         designer_key=key)
+        self.engine.add_escalation_point("E-02", "偏差信号", "value > 0.1", "up", "high",
+                                         designer_key=key)
 
     def _codes(self, v):
         return {p["code"] for p in self.engine.check_escalation("偏差信号", v)}
@@ -83,7 +109,8 @@ class EscalationValueBoundTests(unittest.TestCase):
     def test_t1b_boundary_inclusive_ops(self):
         e = SpacetimeMemoryEngine(":memory:", identity="guard-57a2")
         self.addCleanup(e.close)
-        e.add_escalation_point("G", "信号", "value >= 0.5", "up", "high")
+        e.add_escalation_point("G", "信号", "value >= 0.5", "up", "high",
+                               designer_key=_use_designer_key(self))
         self.assertEqual({p["code"] for p in e.check_escalation("信号", 0.5)}, {"G"})
         self.assertEqual({p["code"] for p in e.check_escalation("信号", 0.49)}, set())
 
@@ -91,7 +118,8 @@ class EscalationValueBoundTests(unittest.TestCase):
     def test_t2_fallback_when_no_value_identifier(self):
         e = SpacetimeMemoryEngine(":memory:", identity="guard-57a3")
         self.addCleanup(e.close)
-        e.add_escalation_point("E-03", "交叉", "deviation>0.3", "up", "high")
+        e.add_escalation_point("E-03", "交叉", "deviation>0.3", "up", "high",
+                               designer_key=_use_designer_key(self))
         # 左操作数是 deviation 而非 value ⇒ 不作数值界，含 token 仍命中
         self.assertIn("E-03", {p["code"] for p in e.check_escalation("deviation")})
         # 即便给了 value 也不因「无值不可判」而丢命中
