@@ -85,6 +85,16 @@ class _FakeScreen:
         raise AssertionError(action)
 
 
+def _unc_form(path):
+    """构造「前导 `//` 且在本平台**真实存在**」的形态（B 腿要有判别力）。
+
+    Windows：`//?/C:/…` 设备前缀形态（`os.path.exists` 为 True）；
+    POSIX：无设备前缀，但 Linux 把前导 `//` 当 `/` ⇒ `//tmp/…` 真实存在（实测）。
+    """
+    real = str(path).replace("\\", "/")
+    return "//?/" + real if os.name == "nt" else "//" + real.lstrip("/")
+
+
 def _engine(td):
     e = SpacetimeMemoryEngine(":memory:")
     reg = _FakeScreen(os.path.join(str(td), "shots"))
@@ -132,19 +142,23 @@ def test_a_根外绝对路径被拒(tmp_path, monkeypatch):
 
 
 def test_b_UNC形态被拒(tmp_path, monkeypatch):
-    """B：UNC 形态一律拒——含 `//?/` 设备前缀（**真实存在**，旧实现必采信）。"""
+    """B：UNC / 前导 `//` 形态一律拒（该形态**真实存在**，旧实现必采信）。"""
     _clear(monkeypatch)
     e, reg = _engine(tmp_path)
     r0 = e.visual_check()
     assert r0.get("established") is True, r0
 
-    # ① `//?/C:/…` 设备前缀形态：本机 `os.path.exists` 为 True ⇒ 有判别力。
-    dev = "//?/" + reg.paths[0].replace("\\", "/")
-    assert os.path.exists(dev), "B 前置：设备前缀形态在本机不 exists ⇒ 该腿无判别力"
+    # ① 前导 `//` 形态：必须**真实存在**，否则旧实现（只做 `os.path.exists`）也会拒它
+    #    ⇒ 该腿失去判别力。形态按平台取（见 `_unc_form`）：`//?/` 设备前缀是 Windows
+    #    专有形态，Linux 上它不 exists（已实测）——照抄 Windows 形态会让这条腿在 Linux
+    #    CI 上以「前置不成立」告红，那是**量具的平台假设**，不是被测实现的缺陷。
+    dev = _unc_form(reg.paths[0])
+    assert os.path.exists(dev), (
+        "B 前置：`//` 起头形态在本平台不 exists ⇒ 该腿无判别力（形态=%r）" % (dev,))
     _seed_state(e, dev)
     r = e.visual_check()
     assert r.get("expected") != dev, (
-        "B UNC 设备前缀形态被采信：expected=%s" % (r.get("expected"),))
+        "B 前导 `//` 形态被采信：expected=%s" % (r.get("expected"),))
 
     # ② 普通 UNC 形态（`//corp/share/a.png`）：即使不存在也不得被采信。
     _seed_state(e, "//corp/share/a.png")
