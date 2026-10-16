@@ -91,8 +91,13 @@ def test_approved_snapshot_revisions_recovery_and_atomic_failure(tmp_path):
 
 @pytest.fixture
 def service(tmp_path):
+    # openssl 是**环境前置**（生成临时 TLS 证书），不是被测逻辑的一部分：
+    # 缺它时本件另有 2 条用例仍可真跑，故**显式 SKIP 并附原因**。
+    # 原写法为裸 `assert`：缺 openssl 的环境里该腿报 ERROR（长得很像产品故障），
+    # 把「环境没有这个工具」误报成「仓库坏了」——凡环境前置未满足，就当 SKIP 不当事后追责。
     executable = shutil.which("openssl")
-    assert executable, "OpenSSL CLI is required to generate ephemeral TLS test certificates"
+    if not executable:
+        pytest.skip("环境缺 OpenSSL CLI：无法生成临时 TLS 测试证书（其余 2 条用例不受影响）")
     storage = tmp_path / "service"
     storage.mkdir(mode=0o700)
     # Only a temporary fixture directory is changed; no persistent user ACLs.
