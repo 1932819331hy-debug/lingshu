@@ -5258,8 +5258,11 @@ class LayeredStore:
            这是「初始化」与「运行期治理写」的分离，不是闸的漏洞：播种内容不可由
            调用方控制。
         ③ **未**扩张到同表其它写点：`import_all`（备份恢复）经 `M13_TABLES` 含
-           `escalation_points` 的 `INSERT OR REPLACE` 直写 `conn`，**绕过本闸**——
-           该面属既有登记项 #125（「恢复路径绕过写入边界」）的范围，本件不动；
+           `escalation_points` 直写 `conn`，**绕过本闸**——该面属既有登记项 #125
+           （「恢复路径绕过写入边界」）的范围，本件不动。**后续进展**（R16-125-esc，
+           2026-10-16）：`import_all` 在该表上的**同 id 覆写面**已收窄（既有 id 行
+           不写、跳过数经 `skipped_existing_rows` 上报），但「**无密钥新增行**」
+           那一半仍在（属设计取舍/决策面，见 `import_all` docstring 末段）；
            `set_escalation_enabled` 已有闸（#130）；读面（`list_escalation_points`）
            不加闸。
         """
@@ -10849,6 +10852,39 @@ class SpacetimeMemoryEngine:
         的 `orphan_edges`（按边×端点累加）**同名不同义**，读者勿混用。
         另注：`dangling_rows` 覆盖**全部**声明外键的表，本方法 `orphan_edges` 与
         `verify_integrity()` 的 `orphan_edges` 都只统计 `edges` 表。
+
+        #125 增量复现 · `escalation_points` 同 id 覆写面（本件）：
+        **来源**：公开 issue #125 的第三方增量复现（Yinfeng818，
+        2026-10-16T06:52:15Z），本端已发 `<!-- VERIFY-125-INC -->` 核验帖确认成立。
+        **根因**：`M13_TABLES` 含 `escalation_points`（该表 DDL 首列
+        `id TEXT PRIMARY KEY`），而本方法的三集合密钥判据（`immutable_rows` /
+        `guarded_meta` / `id_log_rows`）**无一含该表** ⇒ 它落**通用腿**
+        `INSERT OR REPLACE`：无密钥、无闸、无审计。最重形态是**同 id 覆写**——
+        备份以**既有种子 id** 写入 ⇒ 整行替换 ⇒ 不止能关升级点，还能**反转触发
+        语义、替换处置动作**（原 `action` 无副本），且走完 `action_logs` 增量 0。
+        同表 API 写面 `add_escalation_point` 已在 #749（`a7d1596`）接
+        `verify_designer` fail-closed + `log_action("escalation_add", …)` ⇒
+        同一张表两个治理写入面口径矛盾。
+        **本件修法（只收窄覆写面）**：该表写腿改为「既有 id 行不写、新 id 行才
+        写」——库内已有同 id ⇒ **跳过**并计入返回值 `skipped_existing_rows`
+        （按表计数，**显式上报、不静默丢弃**；与 `skipped_rows` / `missing_columns`
+        同形：非空才出现该表键）；SQL 侧同步由 `INSERT OR REPLACE` 换为
+        `INSERT OR IGNORE`（兜底备份自身含重复 id，取首条）⇒ 本表上不再存在任何
+        整行替换路径。`imported["escalation_points"]` 的口径仍是**实际写入行数**
+        （被跳过的既有行不计入，与 #721 的 `skipped_rows` 同步扣除同例）。
+        **为什么只收窄覆写面、不同时「要求密钥」**：`export_all` 产物**必然**携带
+        种子行（该表在 `M13_TABLES`、构造期即建表并播种 6 条），而「无密钥导入
+        export 产物照旧通过」由 `tests/test_issue125_import_boundary_guard.py::
+        test_e_knowledge_roundtrip_unaffected` 钉住（断言 `imported.nodes == 1`
+        且 `requires_review is False`）⇒ 若把该表并入密钥判据，每次知识层往返都要
+        密钥、该组当场转红，且打破既有承诺。
+        **未收窄的那一半（遗留，如实标注）**：无密钥仍可**新增**任意
+        `escalation_points` 行（新 id），注入的 `trigger`/`condition` 会参与
+        `check_escalation` 终裁匹配。这一半是**设计取舍**（要动上述既有契约），
+        属决策面，本件**不动**——`imported["escalation_points"]` 对新 id 行的口径
+        与修前逐字一致。守卫：
+        `tests/test_issue125_escalation_import_overwrite_guard.py`（含 `--mutate`
+        变异自证：改回 `INSERT OR REPLACE` ⇒ 恰好点红断言 A）。
         """
         with open(input_path, "r", encoding="utf-8") as f:
             data = json.load(f)
@@ -10911,6 +10947,10 @@ class SpacetimeMemoryEngine:
         # #721：值形状面上报（容器值经 JSON 文本归一 / 无法容纳而跳过的行）。
         normalized_values = {}
         skipped_rows = {}
+        # #125 增量复现（同 id 覆写面）：`escalation_points` 上「库内已有同 id ⇒
+        # 不覆写」被跳过的行数，按表计数（与 `skipped_rows` / `missing_columns`
+        # 同形：只在非空时出现该表键）。**不许静默丢弃**是本仓既有口径。
+        skipped_existing_rows = {}
         for table in self.M13_TABLES:
             if table not in existing:
                 skipped.append(table)
@@ -10919,6 +10959,28 @@ class SpacetimeMemoryEngine:
             if not rows:
                 counts[table] = 0
                 continue
+            # #125 增量复现（第三方 Yinfeng818 2026-10-16T06:52:15Z；本端
+            # `VERIFY-125-INC` 核验成立）：`escalation_points` 此前与其它表同走
+            # 通用腿 `INSERT OR REPLACE`，而该表**不在**三集合密钥判据内
+            # （`immutable_rows` / `guarded_meta` / `id_log_rows`）⇒ 无密钥、无闸、
+            # 无审计。最重形态是**同 id 覆写**：备份以**既有种子 id** 写入 ⇒ 整行
+            # 替换 ⇒ 不止能关升级点，还能**反转触发语义、替换处置动作**（原
+            # `action` 无副本），且走完零审计（`action_logs` 增量 0）。
+            # 修法（**只收窄覆写面**）：本表写腿改为「既有 id 行不写、新 id 行才写」
+            # ——库内已有同 id ⇒ **跳过并计数上报**（`skipped_existing_rows`）；
+            # 新 id 行照旧落库（无密钥新增面是设计取舍，本件不动，见 docstring）。
+            # 预筛置于列白名单计算之前 ⇒ `discarded_keys` / `missing_columns` /
+            # `normalized_values` 只统计**实际写入**的行（不把被跳过的既有行算进去）。
+            if table == "escalation_points":
+                existing_ids = {r[0] for r in c.execute("SELECT id FROM escalation_points")}
+                kept = [r for r in rows if r.get("id") not in existing_ids]
+                n_existing = len(rows) - len(kept)
+                if n_existing:
+                    skipped_existing_rows[table] = n_existing
+                rows = kept
+                if not rows:
+                    counts[table] = 0
+                    continue
             # ② 列名白名单（PRAGMA table_info）：非白名单键丢弃并计数。
             # #652②：键集合按**全部行**的并集计算，顺序＝跨行首次出现序（确定性
             # ——`_table_columns` 回的是 set，直接迭代会引入非确定列序，故显式
@@ -11074,7 +11136,14 @@ class SpacetimeMemoryEngine:
                 if _skip_row:
                     skipped_rows[table] = skipped_rows.get(table, 0) + 1
                     continue
-                c.execute(f"INSERT OR REPLACE INTO {table} ({col_sql}) VALUES ({placeholders})",
+                # #125 增量复现：`escalation_points` 用 `INSERT OR IGNORE`——上方预筛
+                # 已把「库内既有 id」的行摘掉并计数，此处 OR IGNORE 只作**备份自身
+                # 含重复 id** 时的兜底（取首条），使本表上**不再存在任何整行替换
+                # 路径**（OR REPLACE 的 delete+insert 语义在本表被彻底关掉）。
+                # 其它表逐字不变（仍走通用腿 `INSERT OR REPLACE`）。
+                _verb = ("INSERT OR IGNORE" if table == "escalation_points"
+                         else "INSERT OR REPLACE")
+                c.execute(f"{_verb} INTO {table} ({col_sql}) VALUES ({placeholders})",
                           tuple(r.get(col) for col in cols))
             counts[table] = len(rows) - skipped_rows.get(table, 0)
         # ③ 硬配套：审计只追加（`action_logs` 无更新/删除路径）。
@@ -11124,7 +11193,11 @@ class SpacetimeMemoryEngine:
                                            "sample": rejected_layer[:20]},
                 # #721：值形状面上报（新增键，与 #652② 加 `missing_columns` 同例）。
                 "normalized_values": normalized_values,
-                "skipped_rows": skipped_rows}
+                "skipped_rows": skipped_rows,
+                # #125 增量复现（同 id 覆写面）：`escalation_points` 上「库内已有同
+                # id ⇒ 不覆写」被跳过的**既有行数**（按表计数，非空才出现该表键）。
+                # 新增键，与 #652② `missing_columns` / #721 `skipped_rows` 同例。
+                "skipped_existing_rows": skipped_existing_rows}
 
     def verify_integrity(self) -> Dict:
         """M13：完整性校验（边引用节点存在性 + 表计数）
