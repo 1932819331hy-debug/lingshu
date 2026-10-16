@@ -7213,6 +7213,29 @@ class SpacetimeMemoryEngine:
                                        % (e,)}
 
         if action == "build":
+            def carry_anchor_verification(new_world):
+                """#490：build 不得整体丢弃既有锚点核验状态（就地迁移，与其它动词同口径）。
+
+                缺陷形态：build 分支 `world = World3D()` 后 `self._world3d = world`
+                **整体换对象** ⇒ 旧对象上的 `_anchor_graph._verifier`（各锚点的
+                channel_evidence / channel_conflicts / verified_rounds）随对象被回收；
+                而锚点 id 由内容确定性导出（#262）⇒ 重建出的锚点 id 逐字相同、记录却
+                是干净的：被两个强通道驳斥过的锚点可一路升到 ACCEPT_stable，门面照样
+                返回 status="ok"（#262 的修复只在**同一个** World3D 上做 `_anchor_graph`
+                迁移，覆盖不到这条换对象路径）。
+
+                修法（最小面）：把旧图交给**已重建好物体**的新世界，并立即按新世界
+                重建一次图——核验器经 #262 既有迁移路径（`build_anchor_graph` 内
+                prev→new）搬到新图上，锚点集合仍是新世界的（不拿旧图的锚点集做
+                存在性校验，旧锚点的记录不泄漏给新锚点）。
+                旧世界从未核验过（无 `_verifier`）时本函数是**空操作**：与修前逐位一致。
+                """
+                prev = getattr(getattr(self, "_world3d", None), "_anchor_graph", None)
+                if getattr(prev, "_verifier", None) is not None:
+                    new_world._anchor_graph = prev      # 承载既有验证记录（#262 迁移的源）
+                    new_world.build_anchor_graph()      # 按新世界重建图，验证器随之搬过来
+                return new_world
+
             try:
                 from ..world.vprim import VPrim, parse_anchor  # noqa: F401
             except ImportError:
@@ -7296,7 +7319,7 @@ class SpacetimeMemoryEngine:
                                   "eid": meta["eid"], "tick": meta["tick"],
                                   "triangulated": bool(r["triangulated"]),
                                   "center_3d": r["center_3d"]})
-                self._world3d = world
+                self._world3d = carry_anchor_verification(world)
                 # `objects` 与单视角路径同口径（世界中的物体数，见下 #211②）；
                 # `observations` = 本趟喂给融合器的观测数；`cameras` 回显**实际读回
                 # 的位姿**（六参数全量），供调用方核对记忆里的位姿没被截断。
@@ -7325,7 +7348,7 @@ class SpacetimeMemoryEngine:
                     if vp is not None:
                         world.add_vprim(vp, sw, sh)
                         added += 1
-            self._world3d = world
+            self._world3d = carry_anchor_verification(world)
             return {"status": "ok",
                     "objects": len(world.objects),
                     "observations": added,
