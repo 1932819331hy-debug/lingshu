@@ -101,8 +101,8 @@ ROLES: Tuple[str, ...] = ("metal", "painted_metal", "rubber", "glass", "emissive
 #: 认不出来时的回退角色（= spec.py 里 `part.material.role` 的默认值，不猜语义）。
 DEFAULT_ROLE = "painted_metal"
 
-#: 材质名 → role 关键词表。**顺序即优先级**（`painted_metal` 必须先于 `metal`，
-#: 否则 `M_painted_metal` 会被 metal 抢走）。匹配口径：小写子串。
+#: 材质名 → role 关键词表。**顺序即优先级**（`painted_metal` 必须先于 `metal`，否则
+#: `M_painted_metal` 会被 metal 抢走）。匹配口径：**小写词元**（口径与理由见 `_kw_hit`）。
 ROLE_KEYWORDS: Tuple[Tuple[str, Tuple[str, ...]], ...] = (
     ("painted_metal", ("painted", "paint", "coating", "lacquer", "涂装", "漆")),
     ("emissive", ("glow", "emissive", "emit", "lamp", "neon", "led", "发光", "灯")),
@@ -181,16 +181,16 @@ def _srgb255_from_linear(v: float) -> int:
 
 # ─────────────────────────────────────────────────────────── 角色
 def role_for_material(name: Optional[str]) -> str:
-    """材质名 → role（小写子串，按 `ROLE_KEYWORDS` 的顺序取第一个命中）。
+    """材质名 → role（小写**词元**匹配，按 `ROLE_KEYWORDS` 的顺序取第一个命中）。
 
     认不出来 ⇒ `DEFAULT_ROLE`（**不猜**：语义不明的材质名不该被硬塞成一个金属或玻璃）。
     """
     if not name:
         return DEFAULT_ROLE
-    s = str(name).lower()
+    s = _norm_name(name)
     for role, keys in ROLE_KEYWORDS:
         for k in keys:
-            if k in s:
+            if _kw_hit(k, s):
                 return role
     return DEFAULT_ROLE
 
@@ -214,6 +214,77 @@ def look_curve(i: float) -> float:
         span = 1.0 - SHOULDER
         return SHOULDER + span * (1.0 - math.exp(-(v - SHOULDER) / span))
     return v
+
+
+# ─────────────────────────────────────────────────────────── 材质名词元匹配
+# 位置说明（不是随手放）：上方的 `role_for_material` 引用本段两个函数，而 Python 的模块级
+# 名字解析发生在**调用期** ⇒ 定义顺序不受限。放在这里是为了**不移动本文件已上方的行号**：
+# `tools/time_core_lint_baseline.txt` 按**行号**登记本文件的 `:215:R1`（软肩色调映射），
+# 在该行之上插入行会让旧条目失效、同一命中以新行号报「新增」⇒ 既有守卫
+# `tests/test_time_core_lint.py::test_real_repo_default_baseline_exit_zero`（断言
+# `stale_baseline_entries == []`）变红。先例与处置见该 baseline 头部「按行号定位」段与 #662。
+def _norm_name(name: str) -> str:
+    """名字 → 小写 + 在**词元边界**插入空格（其余原样）。
+
+    为什么要插空格（不是风格偏好，是本件判据的必需）：词元匹配要求 ASCII 关键词左右
+    不得再是 ASCII 字母，而材质名里最常见的粘连形态恰恰是「驼峰」与「缩写+词」——
+    `WoodOak` / `GlassLens` / `M_paintedMetal` / `MGlow` / `SMGlow` 里关键词都是
+    **独立词元**（只是没有分隔符）。若不做切分，`wood`/`glass`/`painted`/`glow` 会全部漏掉
+    （实测：只加 `\\b` 不加切分时 `WoodOak` 从 `wood` 退化成 `DEFAULT_ROLE`，
+    `MGlow` 从 `emissive` 退化成 `DEFAULT_ROLE`）——**漏词比误命中更难发现**。
+
+    两条切分规则（都在 ASCII 字母上判，其余字符（数字/`_`/`-`/空格/CJK）不触发）：
+      a) 大写字母紧跟在「小写字母或数字」之后 ⇒ 切（`Wood|Oak`、`painted|Metal`）；
+      b) 大写字母紧跟在大写字母之后**且它的下一个字符是小写字母** ⇒ 切
+         （`M|Glow`、`ABC|Alu`、`SM|Glow` —— 缩写串与后续 TitleCase 词的边界）。
+    规则 b 是必要的：只做规则 a 会把「缩写前缀 + 关键词」整类真名漏掉。
+    为什么它不会把 #713 的误命中放回来：本件的误命中全是**全小写**名字里关键词被
+    更长小写串包住（`filled`/`modelled`/`clamp`/`value`/`evaluated`/`environment`…），
+    没有任何大写字母可切，规则 a/b 都不触发。
+    """
+    src = str(name)
+    out: List[str] = []
+    n = len(src)
+    for i, ch in enumerate(src):
+        if ch.isupper():
+            prev = src[i - 1] if i > 0 else ""
+            nxt = src[i + 1] if i + 1 < n else ""
+            if (prev.islower() or prev.isdigit()) or (prev.isupper() and nxt.islower()):
+                out.append(" ")
+        out.append(ch.lower())
+    return "".join(out)
+
+
+def _kw_hit(k: str, s: str) -> bool:
+    """关键词 `k` 是否命中**已归一化**的名字 `s`（见 `_norm_name`：小写 + 驼峰留空格）。
+
+    **ASCII 关键词必须自成词元**（左右不得再是 ASCII 字母）—— 这就是本函数存在的唯一理由：
+    按裸子串匹配时，`led`/`alu`/`abs`/`oak`/`lamp`/`iron` 这类 3–4 字母词会把
+    `M_filled_bracket`(fil·**led**)、`M_modelled`(mode·**led**)、`M_clamp`(c·**lamp**)、
+    `M_value`(v·**alu**e)、`mesh_evaluated`(ev·**alu**ated)、`M_environment_map`(env·**iron**ment)、
+    `M_cloak_panel`(cl·**oak**)、`M_absorber_pad`(**abs**·orber) 这类普通材质名抢成
+    `emissive` / `metal`。`emissive` 的 `unlit=True` 让 `shade_studio` 第一行直接返回
+    `EMISSIVE_GAIN`（无光照、无边缘光）⇒ 成图上是「发光贴片」，是最刺眼的错误渲染。
+    `ROLE_KEYWORDS` 的注释只声明了**顺序**敏感（`painted_metal` 先于 `metal`），
+    没意识到**子串**同样会误抢。
+
+    CJK 关键词（`漆`/`灯`/`石`…）**保持子串**：中文没有词边界，且这些字本身即语义单元
+    （`灯` 命中 `M_灯罩` 是期望行为）。
+
+    边界只认 **ASCII 字母**：数字与 `_` 与空格都算分隔符 ⇒ `M_alu2`/`alu_wheel`/
+    `M_aluminium_hull`/`WoodOak` 照旧命中。
+    """
+    if not k.isascii():
+        return k in s
+    i = s.find(k)
+    while i >= 0:
+        j = i + len(k)
+        left_ok = i == 0 or not (s[i - 1].isascii() and s[i - 1].isalpha())
+        right_ok = j >= len(s) or not (s[j].isascii() and s[j].isalpha())
+        if left_ok and right_ok:
+            return True
+        i = s.find(k, i + 1)
+    return False
 
 
 def _dot(a: Sequence[float], b: Sequence[float]) -> float:
@@ -269,6 +340,10 @@ def shade_intensity_mode(normal: Sequence[float], view: Sequence[float],
     · `"toon"` / `"toon_studio"`：同上，再对**已 look 的强度**做色阶量化；
     · `"lambert"`：**冻结**的旧口径（不含 look 曲线），仅供逐像素回退/对照；
     · `"naive"`：与图元通道同款的 `0.55 + 0.55·cosang`，**冻结**。
+
+    非有限强度（NaN 法线 ⇒ 一路 NaN）：`"toon"`/`"toon_studio"` 按 `shade_rgb` 的
+    「坏值当 0」口径先落到 0.0 再量化（= 最低档），**不抛**；`"studio"`/`"lambert"`/
+    `"naive"` 的读数与既有口径逐位不变（NaN 由下游 `shade_rgb` 吸收）。
     """
     if mode == "naive":
         c = cosang if cosang > 0.0 else 0.0
@@ -291,6 +366,16 @@ def shade_intensity_mode(normal: Sequence[float], view: Sequence[float],
         b = int(bands or TOON_BANDS)
         if b < 2:
             b = 2
+        # 非有限强度必须挡在 `math.floor` 之前：NaN 会让 `math.floor` 抛
+        # `ValueError: cannot convert float NaN to integer` ⇒ toon 档位**整帧崩溃**
+        # 而非降级（退化三角面/零面积面产出 NaN 法线 ⇒ shade_studio → look_curve 一路 NaN）。
+        # 口径对齐 `shade_rgb` 的「NaN 当 0 —— 坏值不许污染整帧」：先落到 0.0 再走正常量化
+        # （= 最低档），不让一个坏面带走整帧。这里写 `math.isfinite` 而不是同文件
+        # `shade_rgb` 的 `not (i == i)`：本调用点 `i` 只可能「有限」或「NaN」
+        # （`look_curve` 对有限输入有界、对 ±inf 给 0.0/1.0、对 NaN 给 NaN），
+        # 两种写法读数等价，取 `isfinite` 是因为它同时挡住 ±inf（本仓 world 层通行写法）。
+        if not math.isfinite(i):
+            i = 0.0
         i = (math.floor(i * b) + 0.5) / b
         if i > 1.0:
             i = 1.0
