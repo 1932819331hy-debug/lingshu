@@ -95,6 +95,17 @@ def _unc_form(path):
     return "//?/" + real if os.name == "nt" else "//" + real.lstrip("/")
 
 
+def _dot_alias(path):
+    """`//./` 形态：前导 `//` **且 `realpath` 归一到普通路径**（可落在白名单根内）。
+
+    这是「显式拒前导 `//`」那道闸**唯一**有判别力的形态：`//?/` 形态的
+    `realpath` 停在设备前缀上（Windows 实测），根判定本就会拒它 ⇒ 抽掉 UNC
+    那道闸也照样绿。而 `//./` 的 `realpath` 是普通路径 ⇒ **根内文件经它可被
+    采信**，除非显式拒 `//`（Windows/POSIX 实测同形）。
+    """
+    return "//./" + str(path).replace("\\", "/").lstrip("/")
+
+
 def _engine(td):
     e = SpacetimeMemoryEngine(":memory:")
     reg = _FakeScreen(os.path.join(str(td), "shots"))
@@ -165,6 +176,17 @@ def test_b_UNC形态被拒(tmp_path, monkeypatch):
     r2 = e.visual_check()
     assert r2.get("expected") != "//corp/share/a.png", (
         "B 普通 UNC 形态被采信：expected=%s" % (r2.get("expected"),))
+
+    # ③ `//./` 形态：**根内**文件（`realpath` 归一后落在白名单根里）⇒ 只有「显式拒
+    #    前导 `//`」那道闸能拦住它。抽掉那道闸 ⇒ 本断言红（①②两条拦不住：它们的
+    #    `realpath` 停在设备前缀/网络主机上，根判定本就拒）。
+    inside = _img(tmp_path, "shots", "alias.png")
+    dot = _dot_alias(inside)
+    assert os.path.exists(dot), "B 前置：`//./` 形态不 exists ⇒ 该腿无判别力"
+    _seed_state(e, dot)
+    r3 = e.visual_check()
+    assert r3.get("expected") != dot, (
+        "B `//./` 形态（realpath 落根内）被采信：expected=%s" % (r3.get("expected"),))
 
 
 def test_c_点划穿越段被拒(tmp_path, monkeypatch):
