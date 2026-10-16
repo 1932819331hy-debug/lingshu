@@ -169,6 +169,28 @@ def test_d2_non_object_tail_after_records(tmp_path):
         "非对象末行应被跳过而非回落 0：_seq=%r，期望 2" % (loop._seq,))
 
 
+def test_d3_object_tail_without_usable_seq(tmp_path):
+    """D3：末行是**合法 JSON 对象**但 `seq` 不可用（缺键 / 非整数）⇒ 跳过它、
+    回退到上一条可用记录（不是回落 0）。
+
+    这一格锁的是判据里的 `isinstance(seq, int)`：抽掉该类型校验后，末行的
+    `seq` 会是 `None`（缺键）或 `"7"`（字符串），`seq + 1` 抛 TypeError 被外层
+    收窄的 `except` 吞掉 ⇒ 回落 **0**（同文件 seq 重复）。三种非整数形态逐一体测。
+    """
+    for label, tail in (("缺 seq 键", {"ts": 2.0, "tick": 2, "kind": "episode"}),
+                        ("seq 是字符串", {"seq": "7", "ts": 2.0, "tick": 2}),
+                        ("seq 是布尔", {"seq": True, "ts": 2.0, "tick": 2}),
+                        ("seq 是浮点", {"seq": 3.0, "ts": 2.0, "tick": 2})):
+        wal = str(tmp_path / ("noseq_%s.jsonl" % abs(hash(label))))
+        _write_records(wal, [0, 1])
+        with open(wal, "a", encoding="utf-8") as f:
+            f.write(json.dumps(tail) + "\n")
+        loop = _make_loop(wal)
+        assert loop._seq == 2, (
+            "%s 的末行应被跳过、回退到上一条可用记录（_seq=2）：实得 %r"
+            % (label, loop._seq))
+
+
 # ---------- E / F / G：正对照 ----------
 
 def test_e_control_normal_resume(tmp_path):
