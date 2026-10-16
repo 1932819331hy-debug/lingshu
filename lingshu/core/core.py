@@ -7435,6 +7435,74 @@ class SpacetimeMemoryEngine:
         payload["status"] = "ok" if result.ok else "error"
         return payload
 
+    #: `visual_check` 采信记忆正文里 `expected` 路径的白名单根来源（issue #745）。
+    SCREEN_OUT_ROOT_ENV = "LINGSHU_SCREEN_OUT_ROOT"
+
+    def _screen_capture_dirs(self) -> set:
+        """本进程本次运行**自己捕获过**的截图所在目录（#745 ④ 腿的来源）。"""
+        return getattr(self, "_screen_capture_dir_set", None) or set()
+
+    def _note_screen_capture(self, path) -> None:
+        """记录本进程自己捕获的截图路径（#745 ④ 腿：只采信自己写入过的路径）。"""
+        if not path:
+            return
+        d = getattr(self, "_screen_capture_dir_set", None)
+        if d is None:
+            d = set()
+            self._screen_capture_dir_set = d
+        d.add(os.path.normcase(os.path.realpath(os.path.dirname(str(path)))))
+
+    def _screen_expected_roots(self) -> List[str]:
+        """`visual_check` 采信 `expected` 的白名单根（#745）。
+
+        四个来源取并集：
+        ① 显式配置面 `LINGSHU_SCREEN_OUT_ROOT`（`os.pathsep` 多根）；
+        ② `MDCG_ROOT`（#745 回帖承诺的同款口径）；
+        ③ body registry 的 `workspace/screenshots`（设备自身截图落点，
+           workspace 来自 `AEIS_WORKSPACE`，见 `_setup_body`；空则不参与）；
+        ④ **本进程本次运行自己捕获过**的截图所在目录——issue 复核帖建议的 A 方案，
+           从根上消除「模型经记忆正文喂任意路径」。
+
+        全空 ⇒ 无根可依 ⇒ 调用方 fail-closed（不采信记忆正文里的路径）。
+        边界（如实标注）：④ 腿**不跨进程持久**——引擎重启后若既无显式根也无
+        `MDCG_ROOT`，历史 `expected` 会被拒 ⇒ 回落建立基线（安全方向的行为变更）。
+        """
+        roots: List[str] = []
+        raw = str(os.environ.get(self.SCREEN_OUT_ROOT_ENV, "") or "")
+        if raw:
+            roots += [p for p in raw.split(os.pathsep) if p.strip()]
+        md = str(os.environ.get("MDCG_ROOT", "") or "").strip()
+        if md:
+            roots.append(md)
+        ws = str(getattr(self._body_registry, "workspace", "") or "")
+        if ws:
+            roots.append(os.path.join(ws, "screenshots"))
+        roots += sorted(self._screen_capture_dirs())
+        return roots
+
+    def _screen_expected_allowed(self, path: str) -> bool:
+        """`expected` 是否可采信（#745）：拒 UNC 与穿越段，且须落在白名单根内。
+
+        归一用 `realpath + normcase`（与 `_confine_simloop_out_path` 同口径）——
+        软链/junction 别名不得绕过根判定。**无根可依 ⇒ 拒**（fail-closed）。
+        """
+        if not path:
+            return False
+        raw = str(path)
+        if raw.startswith("//") or raw.startswith("\\\\"):
+            return False                      # UNC（含 `\\?\` 设备前缀形态）
+        if any(seg == ".." for seg in raw.replace("\\", "/").split("/")):
+            return False                      # 穿越段
+        roots = self._screen_expected_roots()
+        if not roots:
+            return False
+        target = os.path.normcase(os.path.realpath(raw))
+        for r in roots:
+            root = os.path.normcase(os.path.realpath(r))
+            if target == root or target.startswith(root + os.sep):
+                return True
+        return False
+
     def visual_check(self, reference: str = None, threshold: float = 0.1,
                      remember: bool = True) -> dict:
         """视觉面 v1 思考路线：预期 vs 实际（基于过去的预测对照）。
@@ -7487,11 +7555,21 @@ class SpacetimeMemoryEngine:
                     r"\[[^\]]*?((?:[A-Za-z]:[\\/]|/)[^\]]+\.(?:png|bmp|jpg))\]")
                 for n in nodes:
                     m = _path_re.search(n.content or "")
-                    if m and os.path.exists(m.group(1)):
+                    # #745：提取出的路径**不再只做存在性判定**——须过白名单根闸
+                    # （记忆正文由模型可写 ⇒ 路径不可信；旧实现只判 exists 即采信，
+                    # 可读任意本地图像并做存在性探测）
+                    if (m and os.path.exists(m.group(1))
+                            and self._screen_expected_allowed(m.group(1))):
                         expected = m.group(1)
                         break
             except Exception:
                 pass
+
+        # 2. 对照前复核落点（#745：收「提取 → 使用」之间的 TOCTOU 窗口）。
+        #    边界（如实标注）：最终的 `open` 在仓外 body 组件内，本仓只能收到
+        #    「使用前一刻」；本步是把「提取」与「使用」之间的窗口关掉。
+        if expected and not self._screen_expected_allowed(expected):
+            expected = None
 
         # 2. 无预期：建立基线（当前状态成为第一个"过去"）
         if not expected:
@@ -7499,6 +7577,7 @@ class SpacetimeMemoryEngine:
             if not shot.ok or not shot.data.get("path"):
                 return {"status": "error", "error": shot.error or "截图失败"}
             baseline = shot.data["path"]
+            self._note_screen_capture(baseline)      # #745 ④ 腿：自己捕获过才可采信
             if remember:
                 self._remember_screen_state(baseline, "baseline 建立")
             return {"status": "ok", "established": True, "baseline": baseline,
@@ -7514,6 +7593,7 @@ class SpacetimeMemoryEngine:
         # 4. 回写记忆（当前状态成为新的"过去"）
         cur = self._body_registry.invoke("screen", "capture", {})
         cur_path = cur.data.get("path") if cur.ok else None
+        self._note_screen_capture(cur_path)          # #745 ④ 腿：自己捕获过才可采信
         changed = result.get("data", {}).get("changed", False)
         if remember and cur_path:
             self._remember_screen_state(
