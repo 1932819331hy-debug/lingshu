@@ -171,13 +171,18 @@ def test_g4_whole_repo_zero_over_baseline():
     assert res.returncode == 0, data
     assert data["new_over_baseline"] == [], data
     assert data["actual_total"] == data["baseline_total"], data
-    #: ★2026-10-15（本笔 PR #615）146 → 144：**真实修复导致的下降**，不是放宽判据——
+    #: ★2026-10-15（PR #615）146 → 144：**真实修复导致的下降**，不是放宽判据——
     #: `lingshu/core/core.py` 78→77（FTS 索引挂载腿补 `warnings.warn`）、
     #: `lingshu/core/retrieval.py` 1→0（`_doc()` 宽 except 改窄为 `(TypeError, ValueError)`）。
+    #: ★2026-10-16（`286b428` · issue #292 追加变体）144 → 140：同款**真实修复**——
+    #: `lingshu/core/longterm_gate.py` 11→7（`prefeed` 主写入改 fail-closed 回报、
+    #: 建边/`protect_node` 两处降级腿与 `write_snapshot` 的「已存在」腿各补 `_log.warning`）。
     #: 反向保护未动：上面 `actual_total == baseline_total` 与 `new_over_baseline == []` 仍是硬判据
     #: （把计数调回高值或新增静默宽 except 都会立刻判红）。
-    assert data["actual_total"] >= 144, ("基线合计低于本笔登记值 144"
-                                         "（#609 重测 144 ＋ #653 新增 2 − 本笔真实修复 2），"
+    #: 该地板值**跟随每一次真实下降同步**：改基线文件而不动本行 ⇒ 本断言当场判红
+    #: （`286b428` 就漏了这一步 ⇒ 三条 job 同时红，已补）。
+    assert data["actual_total"] >= 140, ("基线合计低于当前登记值 140"
+                                         "（#609 重测后 144 − #292 真实修复 4），"
                                          "判据可能被偷偷放宽")
     assert data["unparsable"] == [], data
     # #609 重测的落点：core.py 计数已同步进基线（46→76；#653 再 76→78，
