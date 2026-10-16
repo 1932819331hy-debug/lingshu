@@ -161,6 +161,15 @@ def _doc(content: str, tags_json: str) -> str:
         #: `tags_json` 非字符串则 `TypeError`）。原为宽 `except Exception` 且静默
         #: ⇒ 既让 `silent_except_lint` 超基线，也会把「库读坏」这类真错一并吞掉。
         tags = []
+    #: #707：反序列化**成功但形状不符**（`null` / `5` / `true` / 对象）此前落在 try 之外，
+    #: `for t in tags` 抛 `TypeError: 'int' object is not iterable` 并穿透 `sync()` /
+    #: `attach()`（两者都不接 TypeError）⇒ 一条坏行毒化整库检索（`candidates()` 每次先
+    #: `sync()`）。口径与姊妹函数 `provenance._tags` 对齐：JSON 字符串标量按**单个标签**
+    #: 处理（勿按字符拆），其余非 list/tuple 形状一律回落到 `[]`。
+    if isinstance(tags, str):
+        tags = [tags]
+    if not isinstance(tags, (list, tuple)):
+        tags = []
     # 结构容器标签（chapter:7 / session:3）是元数据，不进全文索引：否则「chapter」的拉丁二元组
     # 与单个数字会成为与内容无关的可匹配词项，打标签本身就会改变排序。
     text = (content or "") + " " + " ".join(str(t) for t in tags
