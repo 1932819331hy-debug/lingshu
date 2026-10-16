@@ -68,8 +68,9 @@
     （块引用 `> ` 与列表标记可嵌套可交错，如 `- > <div`、`  - <div`）——旧实现
     每行只剥一层 ⇒ 嵌套容器内的 `<div title="` 起点判不出，块内缩进围栏被当真
     围栏抽出执行，而渲染下整段被吞进属性值（页面上看不见的代码被执行）。
-    起点行自带**可打断段落**的列表标记（圆弹/`1.`）时，⑥⑦ 起点视同前行空白
-    （CommonMark 5.2：列表标记开新列表项、打断前行段落）。
+    起点行自带**可打断段落**的列表标记（圆弹/`1.`）时，**⑦ 型**起点视同前行空白
+    （CommonMark 5.2：列表标记开新列表项、打断前行段落）；**⑥ 型恒可打断段落**
+    （CommonMark 4.6 / #595）⇒ 不依赖此豁免。
   · **只选第一个 info 首词为 python|py|py3（大小写不敏感）的围栏块**；
     正文含多个 python 块时也只用第一个——报告里如实给出全部块的语言分布。
   · 无 python 块 ⇒ 显式失败（退出码 2），**不执行任何东西**。
@@ -153,7 +154,8 @@ _PY_LANGS = {"python", "python3", "py", "py3"}
 #: 原始行上判定，#604）、⑤（<![CDATA[ … ]]>）、⑥（已知块标签，空行收；
 #: 起点只需 `<tag` + 空白/>/EOL，
 #: **属性可跨行未闭**——#520 的攻击形态正落在这）、⑦（行首完整孤立标签，
-#: 空行收）。⑥⑦不得打断段落（CommonMark）⇒ 仅在前行空白时生效。
+#: 空行收）。**⑦ 型不得打断段落**（CommonMark 4.6）⇒ 仅在前行空白时生效；
+#: **⑥ 型可以打断段落**（#595 纠正：CommonMark 只规定 ⑦ 型不能打断）⇒ 恒生效。
 _HTML1_TAGS = ("script", "pre", "style", "textarea")
 _RE_HTML1_START = re.compile(
     r"^ {0,3}<(%s)(?:\s|>|/>|$)" % "|".join(_HTML1_TAGS), re.IGNORECASE)
@@ -188,7 +190,8 @@ def _html_block_start(line, prev_blank):
     返回 HTML 块状态：("tag", 标签名)（①：四标签**任一**闭标签收，#604；
     存名仅供报告）、("marker", 终串)（②④⑤：`?>` / `>` / `]]>` 收）、
     ("blank",)（⑥⑦：空行收）；非块行返回 None。
-    ⑥⑦ 不打断段落（CommonMark）⇒ 前行非空白文本时不启动。
+    ⑦ 不打断段落（CommonMark 4.6）⇒ 前行非空白文本时不启动；
+    ⑥ 型**可以**打断段落（#595：`文本行` 紧跟 `<div title="` 照样开块）⇒ 不受此前置。
     """
     m1 = _RE_HTML1_START.match(line)
     if m1:
@@ -199,11 +202,14 @@ def _html_block_start(line, prev_blank):
         return ("marker", ">")
     if re.match(r"^ {0,3}<!\[CDATA\[", line):
         return ("marker", "]]>")
-    if prev_blank:
-        if _RE_HTML6_START.match(line):
-            return ("blank",)
-        if _RE_HTML7_START.match(line):
-            return ("blank",)
+    # #595：⑥ 型可打断段落（CommonMark 4.6：1–6 型都可；只有 ⑦ 型不可）——
+    # 旧实现在 `if prev_blank:` 门下判 ⑥ ⇒ 正文「一行文字」紧跟 `<div title="`
+    # 时不认块，块内围栏被当真围栏抽出执行，而 GitHub（cmark-gfm）把整段吞进
+    # 属性值 ⇒ 页面上看不见的代码被执行（人审的代码 ≠ runner 跑的代码）。
+    if _RE_HTML6_START.match(line):
+        return ("blank",)
+    if prev_blank and _RE_HTML7_START.match(line):   # 只有 ⑦ 型不能打断段落
+        return ("blank",)
     return None
 
 #: 被测子进程环境的**白名单·具名**（#682）——跨平台「进程运行基座」：可执行查找 /
@@ -383,8 +389,9 @@ def _container_strip(line):
     时判不出「HTML 块开始」——形态 A（`- > <div title="` / `- > > <div title="`，
     列表标记后还跟块引用标记，剥一层后行首仍是容器标记）；形态 B（`  - <div
     title="`，外层列表项内容缩进内的嵌套列表项——剥一层后虽露出 `<div`，但
-    前行是外层列表项的段落文字、⑥ 型起点按「不打断段落」被拒，见
-    `_extract_fenced_blocks` 的 prev_blank 处理）。两种形态下块内缩进围栏都被
+    前行是外层列表项的段落文字、⑥ 型起点按「不打断段落」被拒（**#595 前**的
+    旧口径；⑥ 型自 #595 起恒可打断段落 ⇒ 形态 B 的 ⑥ 起点已不依赖此豁免，
+    ⑦ 型起点仍依赖，见 `_extract_fenced_blocks` 的 prev_blank 处理）。两种形态下块内缩进围栏都被
     当真围栏抽出执行，而 CommonMark 渲染（markdown-it commonmark 预设实测）
     整段被吞进 `<div title="…">` 属性值——页面上看不见的代码被执行。
 
@@ -395,7 +402,8 @@ def _container_strip(line):
 
     第二返回值（可打断段落的列表标记在起点行上）：CommonMark 5.2 列表可打断
     段落 ⇒ 标记开**新列表项**、打断前行段落 ⇒ 新容器首行内容没有「开放段落」，
-    ⑥⑦ 型起点对该行视同前行空白（形态 B 的判出依赖它，见调用点）。块引用标记
+    **⑦ 型**起点对该行视同前行空白（⑥ 型恒可打断段落——#595；形态 B 的 ⑥ 起点
+    在 #595 后已不依赖它，⑦ 型起点仍依赖，见调用点）。块引用标记
     **不**给此豁免：`> 文本` 后同行首的 `> <div` 属同一引用内的段落延续、
     `> 文本` 后**不带**标记的行是 lazy continuation——扁平行扫描没有容器开闭
     状态，两者都不可与「引用新开」区分；且 GitHub（cmark）下 `> 文本` 后的
@@ -503,10 +511,11 @@ def _extract_fenced_blocks(text):
             # #612：剥的是**全部**嵌套容器前缀（`- > <div` / `  - <div` 等）。
             content, list_marker_seen = _container_strip(lines[i])
             if list_marker_seen:
-                # #612 形态 B：起点行自带**可打断段落**的列表标记（见
+                # #612 形态 B：起点行自带**可打断段落**的列表标记（⑦ 型起点用；
+                # ⑥ 型自 #595 起恒可打断段落，不再依赖此豁免）（见
                 # _container_strip 的 _RE_LIST_MARKER_INTERRUPT）⇒ 标记开新
                 # 列表项、打断前行段落 ⇒ 新容器首行内容没有「开放段落」，
-                # ⑥⑦ 起点对该行视同前行空白。prev_blank 随后在下方两分支
+                # **⑦ 型**起点对该行视同前行空白。prev_blank 随后在下方两分支
                 # 都会按本行内容重算，此处置位只影响本次起点判定。
                 prev_blank = True
             st = _html_block_start(content, prev_blank)
@@ -522,7 +531,8 @@ def _extract_fenced_blocks(text):
                 continue
             in_comment = _advance_comment_state(lines[i], False)
             # #612：prev_blank 按**剥净容器后**的有效行计（`> ` / `- ` 独占的
-            # 行按容器内空白计——其后新容器的 ⑥⑦ 起点无开放段落可打断）。
+            # 行按容器内空白计——其后新容器的 ⑦ 起点无开放段落可打断；⑥ 型
+            # 不受此前置）。
             prev_blank = not content.strip()
             i += 1
             continue

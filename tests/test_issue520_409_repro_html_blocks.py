@@ -9,8 +9,9 @@ GitHub 渲染吞进属性值（维护者看不见），抽取器却把它当**�
 修法：补 CommonMark 4.6 HTML 块七型状态机（①script/pre/style/textarea 按同
 标签 `</tag>` 收、②`<?…?>`、③注释沿用 #235 状态机、④`<!声明…>`、
 ⑤`<![CDATA[…]]>`、⑥已知块标签空行收——**起点只需 `<tag` + 空白/>/EOL，属性
-可跨行未闭**（#520 攻击形态）、⑦行首完整孤立标签空行收）；⑥⑦ 不打断段落
-（前行空白才启动）。HTML 块内的围栏不是代码围栏。
+可跨行未闭**（#520 攻击形态）、⑦行首完整孤立标签空行收）；**⑥ 型可打断段落**
+（#595 纠正：CommonMark 4.6 只规定 ⑦ 型不能打断）、⑦ 型仅在前行空白时启动。
+HTML 块内的围栏不是代码围栏。
 
 #409：`_PY_LANGS` 补 `python3`——GFM 合法 info string，旧集合漏收 ⇒ 合法
 复现被判「正文无 python 围栏块」不执行（改前实测：choose 返回 None）。
@@ -23,10 +24,16 @@ GitHub 渲染吞进属性值（维护者看不见），抽取器却把它当**�
   G3 ①型：`<pre>` 吞围栏直到 `</pre>`；`<script>` 同；未闭标签吞到正文末；
   G4 ②④⑤型：`<?xml … ?>`、`<!DOCTYPE html>`、CDATA 各自收口（单行/跨行）；
   G5 #409：```python3 块被选中；
-  G6 ⑥ 不打断段落：`文本行` 紧跟 `<span title="`（span 在⑥表）⇒ 不开块，
-     后续围栏照抽（GitHub 同渲染）；前行空白时同体 ⇒ 开块隐藏（攻击可达面）。
+  G6 ⑥ 表判定面：`文本行` 紧跟 `<span title="`（span **不在**⑥表）⇒ 不开块，
+     后续围栏照抽（GitHub 同渲染）；前行空白时 `<p title="`（在表中）⇒ 开块隐藏。
   G7 定点变异（源码形态锚）：`_html_block_start` 被短路（恒 None）⇒ G1/G3 必
      红——判据不空转。
+  G10（#595）⑥ 型可打断段落：`文本行` 紧跟 `<div title="`（或 `<p` / `<details`）
+     ⇒ 仍开块、块内围栏被吞（改前 chosen=print('HIDDEN_…')，cmark-gfm 渲染真值
+     页面唯一可见块是 VISIBLE）；⑦ 型正对照（文本后不打断 ⇒ 围栏照抽；空行后
+     仍吞）钉住「只把 ⑥ 型放出 prev_blank 门」。
+  G11（形态锚·定点变异自证·#595）：⑥ 型分支不得再被 `if prev_blank:` 门住，
+     ⑦ 型仍须受该门——回退任一即 G10 必红。
 
 运行（仓根）：python -X utf8 -m pytest tests/test_issue520_409_repro_html_blocks.py -q
 """
@@ -111,12 +118,13 @@ def test_g5_python3_recognized():
 
 
 def test_g6_type6_paragraph_interrupt_rule():
-    """G6：⑥⑦ 不打断段落——前行是文本时 `<p title="` 不开块（GitHub 同渲染）。
+    """G6：⑥ 型表与 ⑦ 型段落打断口径的**既有断言面**（改前口径，见 G10 纠正）。
 
     两口径都与 cmark 对表：⑥ 型标签表是**块级容器**表（CommonMark 4.6），
     `span` 不在其中——`<span title="` 在 GitHub 上同样按段落渲染、其内围栏
     是代码（抽取＝正确）；`<p title="` 在表中，前行空白时开块、其内围栏被
-    吞（攻击可达面）。
+    吞（攻击可达面）。**#595 补正**：表中标签（6 型）前行**非**空白时同样
+    开块（可打断段落）——该格由 G10 覆盖，本函数的三条断言不涉该格、不变。
     """
     inline_span = "某段落文本\n<span title=\"\n```python\nprint('RENDERED_INLINE')\n```\n\"\n\n后文\n"
     assert _langs(inline_span) == ["python"], R._extract_fenced_blocks(inline_span)
@@ -178,6 +186,61 @@ def test_g9_list_item_html_block_bypass():
     assert chosen and chosen[3].strip() == 'print(VISIBLE_LI)', (
         "#555 残留：列表项内 HTML 块的围栏不得被选中（改前 chosen=%r）"
         % (chosen[3][:40] if chosen else None))
+
+
+
+# ------------------------------------- G10/G11 · #595（⑥ 型可打断段落）
+def test_g10_type6_interrupts_paragraph():
+    """G10（#595）：⑥ 型**可以**打断段落——文本行紧跟 6 型标签仍开块。
+
+    CommonMark 4.6：1–6 型 HTML 块都可打断段落，**只有 ⑦ 型不能**。改前实现把
+    ⑥⑦ 一起放在 `if prev_blank:` 门下 ⇒ 正文「一行文字」紧跟 `<div title="` 时
+    判它**不是**块，属性值里的围栏被当第一个 python 块执行（改前实测
+    chosen=print('HIDDEN_…')），而 GitHub（cmark-gfm）把整段吞进属性值、页面
+    唯一可见代码块是 VISIBLE ⇒ 人审的代码 ≠ runner 跑的代码。
+
+    三型标签（div / p / details，均在 ⑥ 表）同判；⑦ 型两向正对照证明「只放 ⑥ 型
+    出 prev_blank 门」而非整体拆门。
+    """
+    for tag in ("div", "p", "details"):
+        body = ("复现步骤如下：\n"
+                "<%s title=\"\n" % tag
+                + "```python\nprint('HIDDEN_%s')\n```\n" % tag.upper()
+                + "\"></%s>\n\n" % tag
+                + "```python\nprint('VISIBLE')\n```\n")
+        blocks = R._extract_fenced_blocks(body)
+        chosen = R._choose_python_block(blocks)
+        assert chosen and chosen[3].strip() == "print('VISIBLE')", (
+            "#595：文本后紧跟 ⑥ 型 <%s> 起点必须开块（改前 chosen=%r）"
+            % (tag, chosen[3][:40] if chosen else None))
+        assert len(blocks) == 1, [b[:3] for b in blocks]
+    # ⑥ 型前有空行时行为不变（既有正确面不得回退）
+    after_blank = ("\n<div title=\"\n```python\nprint('HIDDEN_B')\n```\n\"></div>\n")
+    assert _langs(after_blank) == [], R._extract_fenced_blocks(after_blank)
+    # ⑦ 型正对照①：文本后紧跟 7 型标签**不**开块（⑦ 不打断段落）⇒ 围栏照抽
+    seven_text = ("文本\n<custom-tag attr=\"x\">\n"
+                  "```python\nprint('SEVEN')\n```\n")
+    assert _langs(seven_text) == ["python"], R._extract_fenced_blocks(seven_text)
+    # ⑦ 型正对照②：空行后 7 型标签**仍**开块吞围栏 ⇒ ⑦ 的 prev_blank 门没被拆
+    seven_blank = ("\n<custom-tag attr=\"x\">\n"
+                   "```python\nprint('SEVEN_B')\n```\n")
+    assert _langs(seven_blank) == [], R._extract_fenced_blocks(seven_blank)
+
+
+def test_g11_type6_not_gated_by_prev_blank_source_anchor():
+    """G11（形态锚·定点变异自证·#595）：⑥ 型分支不得再被 prev_blank 门住。
+
+    判据是**源码形态**（与 G7 同式）：回退到 `if prev_blank:` 包住 ⑥ ⇒ G10 必红；
+    把 ⑦ 的门一并拆掉（过修）⇒ 本件断言也红。
+    """
+    src = SRC.read_text(encoding="utf-8")
+    assert "if prev_blank:\n        if _RE_HTML6_START.match(line):" not in src, (
+        "#595：⑥ 型起点分支不得再置于 `if prev_blank:` 门下（回退即 G10 必红）")
+    assert "if _RE_HTML6_START.match(line):" in src, (
+        "#595：⑥ 型起点判定必须存在")
+    assert "if prev_blank and _RE_HTML7_START.match(line)" in src, (
+        "#595：⑦ 型仍须受 prev_blank 门（CommonMark 4.6：⑦ 不打断段落）"
+        "——拆掉即过修")
 
 
 if __name__ == "__main__":
