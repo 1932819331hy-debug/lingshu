@@ -27,6 +27,8 @@ TLS 子进程测试使用 OpenSSL CLI 在临时目录生成证书与私钥，文
 
 前置说明：`test_brain_store` 需环境变量 `MDCG_BRAIN_PYTHONPATH`（脑包目录）才全跑，
 缺前置时显式 SKIP 并以 0 退出——CI 中该件恒为 SKIP，不阻塞。
+该件的 #364 / #366 四个**纯桩式**守卫（不需要脑端）已拆到
+`test_brain_store_stub_guards.py`（pytest 原生，**不在** `SCRIPT_TESTS` 内 ⇒ 走 pytest 腿）。
 
 ## 耗时档位（上游 intake v0.2 §四实测；本地 py3.12/numpy2.5.1 同量级）
 
@@ -60,6 +62,13 @@ PR 另有 `pr-lint.yml` 标题门与 `repro-bot.yml` 复跑机器人。本地全
   脚本模式退出码语义不变；本地读数 `13 passed, 0 failed`（改造前后逐位一致）。
 - `test_brain_store` / `test_wm_verify_unobserved` 原有 `main()` 但 pytest 收不到
   用例；各加一个薄包装 `test_*()`（`assert main() == 0`），断言零改动。
+- 混合式件里的**非包装** `test_*` 会落在两条腿之外（issue #485）：文件列在
+  `SCRIPT_TESTS` ⇒ pytest 腿整文件 `--ignore`，而 `main()` 又调不到它们。
+  `test_brain_store.py` 的 #364 / #366 四个桩式守卫即此形态，已拆到
+  `test_brain_store_stub_guards.py`（pytest 式、不入清单）。
+  复发守卫：`test_gate_script_leg_reachability_guard.py` 对 `SCRIPT_TESTS` 每件做
+  静态可达性判定——顶层 `test_*` 必须被脚本入口（`main()` / `run_checks()`）触达，
+  或只引用脚本腿同样执行的模块级件；否则判红。
 - `test_hex_text` 两项已知红曾提议 xfail 标注——PR #87 部分采纳时**明确未取**
   （xfail 从未落仓，根因由 `9bc4985`/`54cb5cb` 真修取代，见上节）；
   全仓测试件至今**零 xfail 标注**（守卫 `tests/test_issue446_readme_reality.py`
