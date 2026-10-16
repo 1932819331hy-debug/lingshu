@@ -492,8 +492,11 @@ class LongTermMemoryGate:
         except Exception:
             novelty = 0.5
         if novelty < self.NOVEL_TRIGGER:
+            # #292：`degraded` 键**恒在场**（本路径无降级面 ⇒ `[]`），使 docstring
+            # 承诺的键集在三条返回路径上一致——调用方读 `r["degraded"]` 不会
+            # 因走了哪条路径而 KeyError。
             return {"novel": False, "novelty": round(novelty, 3),
-                    "action": "routine"}
+                    "action": "routine", "degraded": []}
 
         # 高新奇 → 强化编码：importance 提升 + 标签 + 建边
         # novelty 复用上面已算出的值（#389：避免对同一输入重复全库扫描）
