@@ -26,12 +26,18 @@
 #   · lingshu/core/core.py 78 → 77：FTS 索引挂载腿的宽 except **补 `warnings.warn`**（不再静默）
 #   · lingshu/core/retrieval.py 1 → 0（条目移除）：`_doc()` 的 `except Exception` **改窄**为 `(TypeError, ValueError)`
 #   ⇒ 二者都按本文件语义「真正让它不再被计数」，不是把判据放宽。
+# 2026-10-16 (本笔) lingshu/core/longterm_gate.py 11 → 7，**只下调、无上调**（真实修复，非放宽判据）：
+#   · issue #292 追加变体：`prefeed` 的主写入宽 except 由 `except: pass` 改为
+#     fail-closed 回报（`prefeed_failed`）＋ `_log.warning` 留痕；建边 / `protect_node`
+#     两处降级宽 except 同样补 `_log.warning`（失败面登记进返回键 `degraded`）；
+#     `write_snapshot` 的「已存在」腿宽 except 补 `_log.warning` ＋ `write_failed` 键。
+#   ⇒ 4 处按本文件语义「补审计动作」让工具数不到，不是把判据放宽。
 # ── 登记面 · 结束 ──
 
 lingshu/_pathguard.py	17
 lingshu/core/component_resolver.py	7
 lingshu/core/core.py	77
-lingshu/core/longterm_gate.py	11
+lingshu/core/longterm_gate.py	7
 lingshu/core/provenance.py	4
 lingshu/core/structure_service.py	0
 lingshu/nn/hex_cnn.py	0

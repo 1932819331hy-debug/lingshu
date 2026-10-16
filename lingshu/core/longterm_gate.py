@@ -17,7 +17,10 @@
 - 0.4 ≤ imp < 0.7 → 知识层常规写入（importance = imp）
 - imp < 0.4  → 情境层（短期，睡眠巩固时再评估提升）
 """
+import logging
 import time
+
+_log = logging.getLogger(__name__)
 
 
 class LongTermMemoryGate:
@@ -323,6 +326,12 @@ class LongTermMemoryGate:
 
         返回的 `layer` = **实际落库层**（读回 DB），`evaluated_layer` = 决策层；
         二者不一致的旧行为已修（lingshu #224）。
+
+        #292 追加变体：新增结果键 `write_failed`（成功路径 `False`）与
+        `write_error`（成功路径 `None`）——「已存在」腿的层级/重要度 `UPDATE`
+        失败时不再与成功路径同值（旧实现 try 尾与 except 各写一遍
+        `node_id = existing_id`，异常在返回值上不可观测）。既有键的语义与取值
+        形态一字未改。
         """
         engine = self.engine
         from .core import MemoryLayer, _finite_clamp
@@ -331,6 +340,13 @@ class LongTermMemoryGate:
         # 后续裸 SQL 更新绕过 add_node 的 IMMUTABLE_LAYERS + Role 校验，
         # 使 SUB 只凭一段内容片段即可改写共享层节点（并登记永久保护）。
         existing_id = None
+        # #292（复核者 123WP-a 追加的同族变体）：`except` 分支**不得**与成功路径
+        # 同值——旧实现里层级/重要度提升的 `UPDATE` 失败被吞，`node_id` 仍赋
+        # `existing_id`（与上一行完全相同的赋值），异常在返回值上**不可观测**。
+        # 现加结果键 `write_failed` / `write_error`：成功路径 `False` / `None`。
+        # 既有键（status / layer / importance / node_id …）的语义与取值形态不变。
+        write_failed = False
+        write_error = None
         try:
             hits = engine.store.search_content(
                 content, layers=[MemoryLayer.KNOWLEDGE, MemoryLayer.CONTEXT], limit=1)
@@ -365,7 +381,8 @@ class LongTermMemoryGate:
         if decided == "context" and importance_hint is None:
             return {"status": "discarded", "importance": round(imp, 3),
                     "layer": "context", "features": ev["features"],
-                    "decision": ev["decision"]}
+                    "decision": ev["decision"],
+                    "write_failed": False, "write_error": None}
 
         node_id = None
         if existing_id:
@@ -396,8 +413,14 @@ class LongTermMemoryGate:
                          node.confidence, new_layer, existing_id))
                     engine.store.conn.commit()
                     node_id = existing_id
-                except Exception:
+                except Exception as exc:
                     node_id = existing_id
+                    write_failed = True
+                    write_error = type(exc).__name__
+                    _log.warning(
+                        "write_snapshot 层级/重要度更新失败（既有节点未更新，"
+                        "回报仍指向既有 node_id=%s）：%s: %s",
+                        existing_id, type(exc).__name__, exc)
 
         if node_id is None:
             if decided == "context":
@@ -422,7 +445,8 @@ class LongTermMemoryGate:
         stored_layer = stored.layer.value if stored is not None else decided
         result = {"node_id": node_id, "importance": round(imp, 3),
                   "layer": stored_layer, "evaluated_layer": decided,
-                  "features": ev["features"]}
+                  "features": ev["features"],
+                  "write_failed": write_failed, "write_error": write_error}
         if decided == "long_term":
             try:
                 engine.protect_node(node_id, f"LongTermMemoryGate:{source}")
@@ -453,9 +477,14 @@ class LongTermMemoryGate:
                 tags: list = None, entities: list = None) -> dict:
         """海马体式前馈：输入到来时先检测新奇度，高新奇 → 当场强化编码。
 
-        返回 {novel, novelty, action, node_id, importance, links}
-        - novel=True：触发了强化编码（标记 novel_prefeed + importance 提升 + 建边）
-        - novel=False：常规路径（novelty 未达阈值，不干预）
+        返回 {novel, novelty, action, node_id, importance, links, degraded}
+        - novel=True / action='prefeed_boost'：触发了强化编码（标记 novel_prefeed
+          + importance 提升 + 建边）；`degraded` 列出**实际失败**的降级面
+          （'links' / 'protect'），无降级时为 `[]`。
+        - novel=False / action='routine'：常规路径（novelty 未达阈值，不干预）。
+        - novel=False / action='prefeed_failed'：主写入失败（fail-closed，附
+          `error` = 异常类名）；`node_id=None`、`importance=0.0`、`links=0`
+          ——**不**回报一个并未生效的成功语义（#292 追加变体）。
         """
         engine = self.engine
         try:
@@ -475,6 +504,15 @@ class LongTermMemoryGate:
         node_id = None
         links = 0
         actual_imp = None
+        # #292（复核者 123WP-a 追加的同族变体）：**失败必须在返回值上可观测**。
+        # 旧实现主写入（add_perception）抛异常被宽 `except: pass` 吞掉后，
+        # `node_id` 停在 None 却仍回报 `novel=True / action='prefeed_boost'`
+        # ——0 个节点写入却回报成功（与同文件 `write_snapshot` 的
+        # 「回报 ≠ 事实」纪律同族，前一处按该纪律修过、后一处漏改）。
+        # 现：主写入失败 ⇒ fail-closed 回报 `prefeed_failed`；降级面（建边 /
+        # protect_node）失败 ⇒ 节点已写入仍算成功，但失败面逐项登记进
+        # `degraded`（#170 口径：宽 except 必须留痕或收窄）。
+        degraded = []
         try:
             # #292：主动沉淀（前馈强化编码）必须独立成节点——不带 skip_dedup 时
             # M5 去重会把新输入并入相似旧节点（只加 duplicate 标签），回执却报
@@ -487,31 +525,40 @@ class LongTermMemoryGate:
             # 去重命中时 add_perception 返回的是**既有**节点：回报实际落库值，
             # 不要回报一个并未生效的计算值（"回报 ≠ 事实"）。
             actual_imp = getattr(node, "importance", None)
-            # 与相关知识建边（信息差驱动的关联）
+        except Exception as exc:
+            _log.warning("prefeed 主写入失败（fail-closed，不报 boost）：%s: %s",
+                         type(exc).__name__, exc)
+            return {"novel": False, "novelty": round(novelty, 3),
+                    "action": "prefeed_failed", "node_id": None,
+                    "importance": 0.0, "links": 0,
+                    "error": type(exc).__name__, "degraded": degraded}
+        # 与相关知识建边（信息差驱动的关联）——降级面：失败留痕，不吞。
+        try:
+            from .core import EdgeType
+            rel = engine.store.search_content(content, limit=3)
+            for other, sim in rel:
+                if other.id != node_id and sim >= self.NOVEL_EDGE_SIM:
+                    engine.add_edge(node_id, other.id,
+                                    relation_type=EdgeType.SIMILAR,
+                                    source_evidence="inferred")
+                    links += 1
+        except Exception as exc:
+            degraded.append("links")
+            _log.warning("prefeed 建边降级（节点已写入）：%s: %s",
+                         type(exc).__name__, exc)
+        # 长期层 → 保护——同为降级面：失败留痕。
+        if imp >= self.LONG_TERM_THRESHOLD:
             try:
-                from .core import EdgeType
-                rel = engine.store.search_content(content, limit=3)
-                for other, sim in rel:
-                    if other.id != node_id and sim >= self.NOVEL_EDGE_SIM:
-                        engine.add_edge(node_id, other.id,
-                                        relation_type=EdgeType.SIMILAR,
-                                        source_evidence="inferred")
-                        links += 1
-            except Exception:
-                pass
-            # 长期层 → 保护
-            if imp >= self.LONG_TERM_THRESHOLD:
-                try:
-                    engine.protect_node(node_id, f"Prefeed:{source}")
-                except Exception:
-                    pass
-        except Exception:
-            pass
+                engine.protect_node(node_id, f"Prefeed:{source}")
+            except Exception as exc:
+                degraded.append("protect")
+                _log.warning("prefeed 保护登记降级（节点已写入）：%s: %s",
+                             type(exc).__name__, exc)
         return {"novel": True, "novelty": round(novelty, 3),
                 "action": "prefeed_boost", "node_id": node_id,
                 "importance": round(float(actual_imp if actual_imp is not None
                                           else imp), 3),
-                "links": links}
+                "links": links, "degraded": degraded}
 
     def promote_from_context(self, limit: int = 30) -> list:
         """情境层批量提升扫描（睡眠巩固/会话结束时调用）：
