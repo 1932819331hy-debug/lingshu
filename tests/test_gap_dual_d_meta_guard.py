@@ -23,11 +23,27 @@
   `D_task = min_{p 可用} dist(C_task, CondSet(p))`）、:6 与 :91 的
   `d(D_meta)/dt ≥ 0` 结构性论证；triage #124（判定成立）。
 
+#456（成立，与 #159 同型）`update_meta` 的**第一个位置形参 `d_task` 在函数
+  体内零引用**：签名声明它是必需输入、仓内调用点全部按位置传入，但 docstring
+  的增长公式（盲区事件 + 新条件暴露 + 时间衰减）不含它，实现也确实不用——
+  声明的输入与实现的输入不一致（公开契约不成立）。修复采路线 A（与模块头
+  :4-10 的 D_task/D_meta 符号区分一致）：`d_task` 为调用面兼容保留，docstring
+  显式记录为**有意无操作**（不静默吞掉名字，也不假装它生效——与
+  `brain_store.BrainEngine.add_perception` 对 `skip_dedup` 的处理同一口径）。
+  本文件把「偶然的静默」升为「被断言的声明」：C 组行为断言（d_task 取
+  0.0/0.3/1.0/±1e6/±inf 读数逐位相同）+ 对照组（blindspot/
+  new_conditions_seen 变化必须被检出——证明 C 组的「相同」不是探针失效）+
+  AST 断言（`d_task` 在签名中且函数体零引用）。
+  判据来源：issue #456（实测 7 值 10 步读数逐位相同）；模块头 :8-10
+  （D_meta 不纳入 D_norm 数值计算，仅作结构性边界 ⇒ 与 D_task 解耦有意）。
+
 定点变异自证（抽掉修复 ⇒ 必红，逐条对应）：
   还原 `self._last_meta = max(0.0, cred_blend(...))` ⇒ G1/G3 红（序列下降）。
   还原 `key=lambda p: p.get("dist", inf)` 且无缺口优先 ⇒ G4 红（选 p_close）。
   还原 `best.get("id", "")` ⇒ G5 红（best_path=""）。
   还原 `"blindspot": False` ⇒ G6 红（blindspot=False 而 d_task=inf）。
+  把 `d_task` 接进 growth（如 `growth += d_task`）⇒ C1/C2 红（读数随 d_task 漂移）；
+  从签名删掉 `d_task` ⇒ C1/C2 红（既有调用点按位置传参 ⇒ TypeError）+ C3 红。
 
 与别批守卫的关系（防代偿）：`tests/test_time_core_lint.py` 的 EX5 只断言
 `retain=1.0 - self.decay` 这一**片段存在**（核形态豁免点），不断言 D_meta 的
@@ -40,6 +56,7 @@
 """
 from __future__ import annotations
 
+import ast
 import math
 import os
 import sys
@@ -136,17 +153,63 @@ def group_d_task_selection():
        r5["blindspot"] is False and r5["d_task"] == 0.7, r5)
 
 
+# ==================== #456 d_task 有意无操作（声明的契约） ====================
+
+def group_d_task_inert():
+    print("#456：update_meta 的 d_task 对 D_meta 更新零作用（有意解耦，被断言的声明）")
+    STEPS = 10
+
+    def run(d_task, blindspot, cond=0):
+        g = GapDual()
+        return [g.update_meta(d_task, blindspot, cond) for _ in range(STEPS)]
+
+    # C1 行为面：d_task 取值不变性（含极端值 ±1e6/±inf ⇒ 读数逐位相同）
+    base = run(0.0, True)
+    for dt in (0.3, 1.0, 1e6, -1e6, float("inf"), float("-inf")):
+        got = run(dt, True)
+        ok("#456-C1 d_task=%r 读数与 0.0 逐位相同" % dt, got == base,
+           [round(v, 6) for v in got])
+
+    # C2 行为面：无事件序列同样不受 d_task 影响（0 读数面并非唯一探针）
+    zero_base = run(0.0, False)
+    ok("#456-C2 无事件序列 d_task=1e6 与 0.0 逐位相同",
+       run(1e6, False) == zero_base, zero_base)
+
+    # C3 对照组：另外两个形参的变化必须被检出（证明 C1/C2 的「相同」非探针失效）
+    ok("#456-C3a blindspot 变化被检出（读数不同）",
+       run(0.0, True) != run(0.0, False))
+    ok("#456-C3b new_conditions_seen 变化被检出（读数不同）",
+       run(0.0, False, 3) != zero_base)
+
+    # C4 静态面：d_task 在签名中（调用面兼容保留）且函数体零引用（有意无操作）
+    src = os.path.join(REPO, "lingshu", "world", "gap_dual.py")
+    fn = next(n for n in ast.walk(ast.parse(open(src, encoding="utf-8").read()))
+              if isinstance(n, ast.FunctionDef) and n.name == "update_meta")
+    params = [a.arg for a in fn.args.args]
+    loads = {x.id for x in ast.walk(fn)
+             if isinstance(x, ast.Name) and isinstance(x.ctx, ast.Load)}
+    ok("#456-C4a d_task 仍在签名中（self 后首位，不静默吞掉名字）",
+       params[:2] == ["self", "d_task"], params)
+    ok("#456-C4b d_task 函数体零引用（有意无操作，非假装生效）",
+       "d_task" not in loads, sorted(loads))
+    # C5 文档面：docstring 必须显式声明 d_task 为无操作（契约不再互相矛盾）
+    doc = ast.get_docstring(fn) or ""
+    ok("#456-C5 docstring 显式记录 d_task 无操作", "d_task" in doc
+       and "不使用" in doc, "docstring 首段含 `d_task`：**本方法不使用**")
+
+
 def run_checks():
     _PASS.clear(); _FAIL.clear()
     group_d_meta_direction()
     group_d_task_selection()
+    group_d_task_inert()
     print()
     print("===== SUMMARY %d/%d 通过 =====" % (len(_PASS), len(_PASS) + len(_FAIL)))
     if _FAIL:
         print("FAILS:", _FAIL)
         return 1
     print("VERDICT=PASS（#124 D_meta 单调不减 + trend 按方向 + 条件缺口选路 + "
-          "best_path 可溯源 + ∞ 即 BLINDSPOT）")
+          "best_path 可溯源 + ∞ 即 BLINDSPOT；#456 d_task 有意无操作被断言）")
     return 0
 
 

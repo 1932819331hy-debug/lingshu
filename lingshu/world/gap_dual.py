@@ -131,6 +131,15 @@ class GapDual:
         观测代理：盲区事件（BLINDSPOT）+ 新条件暴露 + 时间衰减。
         返回当前 D_meta 估计（结构性边界，非数值计算进 D_norm）。
 
+        `d_task`：**本方法不使用**（#456）。按模块头 :4-10 的 D_task/D_meta
+        符号区分，D_meta 是「未被建模的现实总量」这一**结构性边界**，与当前
+        任务的操作性距离 D_task 解耦（D_meta 不纳入 D_norm 数值计算，映射
+        声明 DEV-002）。该形参为调用面兼容保留——显式接收并如实记录为无
+        操作，不静默吞掉名字，也不假装它生效（与 `brain_store.
+        BrainEngine.add_perception` 对 `skip_dedup` 的处理同一口径）。
+        判据来源：issue #456（实测 d_task 取 0.0/0.3/1.0/±1e6/±inf 共 7 值，
+        10 步读数逐位相同，而 blindspot/new_conditions_seen 的变化均有响应）。
+
         #124：D_meta 是「未被建模的现实总量」，契约方向是**单调不减**（模块头
         :6）。旧实现把 `cred_blend` 当更新式直接写回：无盲区、无新条件（即
         「无干预」，growth=0）时估计值按 retain=1-decay 几何衰减，10 步后只剩
