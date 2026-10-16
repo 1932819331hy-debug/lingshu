@@ -54,6 +54,7 @@ from . import contradiction as _contradiction
 
 from .component_resolver import (
     COMPONENT_NAMES as _COMPONENT_NAMES,
+    configured_roots as _configured_component_roots,
     discovery_report as _component_discovery_report,
     install as _install_component_resolver,
 )
@@ -13128,15 +13129,23 @@ class SpacetimeMemoryEngine:
         检索时命中相似节点会附「这两个的区别」提示——细化条件得到精确知识。"""
         try:
             import sys as _s
-            _kb = r'<local-path> Files\2_ai\knowledge-base'
+            # issue #10（② 在 core.py 的未收口子项）：原赋值是导出脱敏把**路径操作数**
+            # 改写成中性占位字面量后的残留——`os.path.isabs` 在 Windows/Linux 均恒
+            # False ⇒ 本注入在公开仓**恒不发生**（死代码），故该残留已删除。
+            # 现改为**环境变量驱动**（#10 §三.③ 的导出精修先例：本机字面量 → 环境变量）：
+            # 取值面 = 部署方显式声明的组件根 `LINGSHU_COMPONENT_ROOT`（`os.pathsep`
+            # 多根，与 `activation.py` 的 `LINGSHU_DATA_ROOT` 同款约定；真源即
+            # `component_resolver.configured_roots`，不另造第二份解析）。未声明 ⇒ 空表
+            # ⇒ **不做任何注入**（保持 #381 的 fail-safe 语义）。
             # issue #381：只接受**绝对**条目。相对条目（含空串 / `.`）的解析目标
             # 由判定时的 cwd 决定（判据同 `lingshu/_pathguard.py::_is_relative_entry`）
             # ⇒ 插进 `sys.path` 等于把本包 import 期刚消除的 cwd 面还给**普通**
             # import：cwd 下任何同名裸模块（含标准库名）可被抢先执行。白名单组件名
             # 由 `component_resolver` 的 meta_path finder 拦截、不受此影响；受影响的
             # 恰是非白名单裸名，故本处一律不插相对条目。
-            if os.path.isabs(_kb) and _kb not in _s.path:
-                _s.path.insert(0, _kb)
+            for _kb in reversed(_configured_component_roots()):
+                if os.path.isabs(_kb) and _kb not in _s.path:
+                    _s.path.insert(0, _kb)
             from pattern_separation import PatternSeparation
             ps = PatternSeparation(self)
             return ps.scan(limit=limit)
@@ -13151,11 +13160,14 @@ class SpacetimeMemoryEngine:
         不代表真实发生的过去就是如此（0.0.3 局部不可知）。"""
         try:
             import sys as _s
-            _kb = r'<local-path> Files\2_ai\knowledge-base'
-            # issue #381：同 `pattern_separation_scan`——只接受绝对条目，
-            # 相对条目的解析目标由 cwd 决定，不得插进 `sys.path`。
-            if os.path.isabs(_kb) and _kb not in _s.path:
-                _s.path.insert(0, _kb)
+            # issue #10：同 `pattern_separation_scan`——脱敏残留的字面量已删除，
+            # 改由 `LINGSHU_COMPONENT_ROOT`（`component_resolver.configured_roots`）
+            # 环境变量驱动；未声明 ⇒ 不做注入。
+            # issue #381：只接受**绝对**条目，相对条目的解析目标由 cwd 决定，
+            # 不得插进 `sys.path`。
+            for _kb in reversed(_configured_component_roots()):
+                if os.path.isabs(_kb) and _kb not in _s.path:
+                    _s.path.insert(0, _kb)
             from scene_reconstruction import SceneReconstruction
             sr = SceneReconstruction(self)
             return sr.reconstruct(clue, depth=depth, max_nodes=max_nodes)
