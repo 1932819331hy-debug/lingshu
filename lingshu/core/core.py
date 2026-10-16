@@ -7545,6 +7545,35 @@ class SpacetimeMemoryEngine:
     #: 边界（削掉的判别力）：**不**加扩展名白名单（issue 建议 2）——issue 自身实测
     #: 边界已证非图像扩展名由 `PIL.Image.save` 抛 `ValueError` 拒绝，本件不重复设卡；
     #: 亦**不**加 `overwrite=False`（issue 建议 3，属新的产品决策，非本缺陷面）。
+    EXPORT_OUT_ROOT_ENV = "LINGSHU_EXPORT_OUT_ROOT"
+
+    @classmethod
+    def _export_out_roots(cls):
+        """`export_all` / `export_trajectory` 输出白名单根（**仅显式配置面**）。"""
+        raw = os.environ.get(cls.EXPORT_OUT_ROOT_ENV, "")
+        return [p for p in str(raw).split(os.pathsep) if p.strip()] if raw else []
+
+    @classmethod
+    def _confine_export_out_path(cls, out_path: str) -> str:
+        """导出落点根闸（与 `_confine_simloop_out_path` 同三条口径）。
+
+        ① 未显式配置根 ⇒ **不限制**（保持既有行为）；
+        ② 归一用 `realpath + normcase`（穿透符号链接、大小写不敏感）；
+        ③ 越界 **fail-closed** 抛 `ValueError`，不静默放行。
+        边界：只做包含性判定，不创建目录、不改目标权限。
+        """
+        roots = cls._export_out_roots()
+        if not roots:
+            return out_path
+        target = os.path.normcase(os.path.realpath(out_path))
+        for r in roots:
+            root = os.path.normcase(os.path.realpath(r))
+            if target == root or target.startswith(root + os.sep):
+                return out_path
+        raise ValueError(
+            "export 落点越界（%s）：须在 %s 任一白名单根内"
+            % (out_path, roots))
+
     WORLD3D_OUT_ROOT_ENV = "LINGSHU_WORLD3D_OUT_ROOT"
 
     @classmethod
@@ -10545,6 +10574,8 @@ class SpacetimeMemoryEngine:
         # 边界（如实标注）：只搬**权限位**，不搬属主/属组（`chown` 需特权，未做）；
         # 目标不存在时行为与改前逐字一致（umask 默认）；不引入目录 fsync（#330
         # 面边界不变）；返回值 `path` 仍是**调用方给的**路径（对外契约不变）。
+        # #746：落点根闸（越界 fail-closed）。
+        output_path = self._confine_export_out_path(output_path)
         target_path = os.path.realpath(output_path)
         tmp_path = "%s.tmp-%s" % (target_path, uuid.uuid4().hex[:8])
         # #698：覆盖已存在目标 ⇒ 显式上报（不改覆盖语义，只让「静默」消失）。
@@ -11445,6 +11476,9 @@ class SpacetimeMemoryEngine:
             "condition_space": "轨迹导出 · 训练资产格式（有损投影）",
         })
         if output_path:
+            # #746：与 `export_all` 同款白名单根闸（越界 fail-closed）。本方法
+            # 此前不过根闸（#698 只把「静默覆盖」改为显式上报，未及根判定）。
+            output_path = self._confine_export_out_path(output_path)
             # #698：覆盖已存在目标 ⇒ 显式上报。读数取在写入**之前**（写后目标必在）。
             # 只进返回值、不进文件：落盘内容形状与 #57 契约逐字不变。
             overwrote_existing = os.path.exists(output_path)
