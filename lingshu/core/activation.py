@@ -42,10 +42,12 @@
 """
 from __future__ import annotations
 import json
+import math
 import os
 import sqlite3
 import time
 import uuid
+import warnings
 from typing import Dict, List, Optional, Tuple
 
 try:
@@ -77,19 +79,48 @@ EDGE_BASE_DECAY: Dict[str, float] = {
 }
 DEFAULT_DECAY = 0.5     # 未注册边类型
 
+# 条件空间重合率的中性值(不奖励也不惩罚)——`cond_match` 的既有回落值。
+# #709:同一常量也用作 `_load_graph` 里该函数意外异常时的兜底衰减因子(两处同源)。
+COND_MATCH_NEUTRAL = 0.5
+
 # self-conditioning 回注权重(工程默认值,与 EDGE_BASE_DECAY 同类;可调用级覆盖)。
 # 0.0 = 关闭(与 ACTIVATION-REV1 行为严格等价);0.5 = 推荐值(先验与种子同权)。
 SELF_CONDITION_WEIGHT = 0.5
 
 
 def cond_match(cs_a: Dict, cs_b: Dict) -> float:
-    """条件空间重合率(4 维:观测位置/工具/时间窗/存在约束——逐维比对)。"""
+    """条件空间重合率(4 维:观测位置/工具/时间窗/存在约束——逐维比对)。
+
+    #709:入参与 `time_window` **逐层**校验——守卫不能只查外层容器。库里的
+    `condition_space` 是外部卡/灾备恢复产物（`Provenance.from_json` docstring 已
+    逐字记载「core 自己的 ConditionSpace 规范化后会产出」`time_window=[null,null]`），
+    故下列形状**都会出现**：`null` / `5` / `[1,2]`（整列非 dict）、
+    `[null,null]` / `["a","b"]`（元素非有限数值）。旧实现下 `if ta and tb` 对
+    `[None,None]` 为真（列表非空）⇒ 直接进 `max(ta[0], tb[0])` ⇒
+    `TypeError: '>' not supported between instances of 'NoneType' and 'float'`。
+    现一律回落 docstring 声明的中性值 `0.5`（「单边无条件声明→中性(不奖励也不惩罚)」），
+    与 `null` / 非法 JSON 的既有回落口径一致。
+    """
+    if not isinstance(cs_a, dict) or not isinstance(cs_b, dict):
+        return COND_MATCH_NEUTRAL  # #709:非 dict 入参(JSON 里的 5 / [1,2] / null)→中性
     if not cs_a or not cs_b:
-        return 0.5  # 单边无条件声明→中性(不奖励也不惩罚)
+        return COND_MATCH_NEUTRAL  # 单边无条件声明→中性(不奖励也不惩罚)
     keys = ("observation_position", "observation_tool", "existence_constraint")
     hits = sum(1 for k in keys if cs_a.get(k) == cs_b.get(k))
+
+    def _finite_pair(v) -> bool:
+        """#709:`time_window` 必须是「两个有限数值」——元素级判据（bool 不算数值）。"""
+        if not isinstance(v, (list, tuple)) or len(v) != 2:
+            return False
+        for x in v:
+            if isinstance(x, bool) or not isinstance(x, (int, float)):
+                return False
+            if isinstance(x, float) and not math.isfinite(x):
+                return False
+        return True
+
     ta, tb = cs_a.get("time_window"), cs_b.get("time_window")
-    if ta and tb and isinstance(ta, list) and isinstance(tb, list) and len(ta) == 2 and len(tb) == 2:
+    if _finite_pair(ta) and _finite_pair(tb):
         lo, hi = max(ta[0], tb[0]), min(ta[1], tb[1])
         if hi > lo:  # 时间窗有交叠
             hits += 1
@@ -164,6 +195,7 @@ class ActivationEngine:
                 os.makedirs(parent, exist_ok=True)
         self.audit_path = audit_path
         self._ensure_tables()
+        self._warn_if_content_tables_absent()
         self._adj = None            # 本轮稀疏邻接(node_idx 矩阵,仅兴奋边)
         self._adj_inh = None        # 本轮抑制邻接(仅 opposite 边,存 |decay|)
         self._node_index = None     # node_id → idx
@@ -185,19 +217,56 @@ class ActivationEngine:
             return self._conn
         return sqlite3.connect(self.db_path, timeout=30)
 
+    def _warn_if_content_tables_absent(self):
+        """#714：构造期给出一条明确 warning——`nodes` 表缺席时激活面是**空工作态**。
+
+        构造成功不等于「图已就绪」：本引擎的表只有 `activation_nodes`，内容表由
+        `core.py` 的 `LayeredStore` 建。缺 `nodes` 时 `activate()` 仍返回
+        `status=ok, size=0`（与 `workset_state` 的降级口径一致），故调用方须有
+        一条可检索的提示，避免把「空图」误读成「查询无命中」。
+        这里只探测表名（`sqlite_master` 在空库上恒存在），不触碰内容表本身。
+        """
+        con = self._con()
+        try:
+            have = {r[0] for r in con.execute(
+                "SELECT name FROM sqlite_master WHERE type='table'")}
+        except sqlite3.OperationalError:  # 表名都探不到 ⇒ 不臆断，读图腿各自降级
+            return
+        finally:
+            con.close()
+        if "nodes" not in have:
+            warnings.warn(
+                "ActivationEngine: 本库无内容表 nodes（独立激活库/新目录），"
+                "activate() 将按空图返回 status=ok, size=0；如需内容记忆请指向 "
+                "LayeredStore 的 db_path（#714）", RuntimeWarning, stacklevel=2)
+
     # ---------------- 本轮图读取(numpy 全图矩阵化) ----------------
     def _load_graph(self):
         """每轮重读全图，保证已提交的节点/边变更进入索引与传播底物。
 
         与 edge-list 路径一致，不跨轮复用缺乏失效机制的稀疏矩阵。
+
+        #714：内容表（`nodes` / `edges`）**不存在**是受支持场景——独立激活库 /
+        灾备恢复出只含激活表的库 / `LINGSHU_DATA_ROOT` 指向新目录（同文件
+        `workset_state` 对同一情形已显式 `except sqlite3.OperationalError` 降级，
+        注释：「恢复库无内容表(独立激活库)——仅返回激活值」）。故两条 SELECT 各自把
+        `no such table` 视作**空图**（`nodes=[]` / `edges=[]`），让 `activate()` 落到
+        既有的空工作态返回路径（`status=ok, size=0`），而不是整轮抛穿。
+        两条腿分开 catch：缺 `edges` 而 `nodes` 在场时仍保留节点域。
         """
         con = self._con()
         cur = con.cursor()
-        cur.execute("SELECT id, condition_space FROM nodes")
-        node_rows = cur.fetchall()
+        try:
+            cur.execute("SELECT id, condition_space FROM nodes")
+            node_rows = cur.fetchall()
+        except sqlite3.OperationalError:  # #714:无内容表 ⇒ 空图
+            node_rows = []
         node_ids = [r[0] for r in node_rows]
-        cur.execute("SELECT source_id, target_id, relation_type, condition_space FROM edges")
-        edges = cur.fetchall()
+        try:
+            cur.execute("SELECT source_id, target_id, relation_type, condition_space FROM edges")
+            edges = cur.fetchall()
+        except sqlite3.OperationalError:  # #714:无内容表 ⇒ 空图
+            edges = []
         con.close()
         idx = {nid: i for i, nid in enumerate(node_ids)}
         n = len(node_ids)
@@ -221,7 +290,14 @@ class ActivationEngine:
             # #53:节点对级条件衰减修正——decay = base(边类型) × cond_match(两端条件空间)
             #   （模块 docstring 核心公式 :26）。重合率由两端节点静态决定、与跳数无关，
             #   故装载期算一次即等价于逐跳算（稀疏与 edge-list 两后端同口径）。
-            d *= cond_match(cur_cs.get(src), cur_cs.get(dst))
+            # #709：`cond_match` 自身已对非 dict 入参 / 非有限数值 `time_window` 回落中性；
+            #   此处再兜一层——未枚举到的坏条件空间只让**该条边**回落中性衰减，
+            #   不得让一条形状异常记录把整轮 `_load_graph`（进而 `activate()`）抛穿
+            #   （`_load_graph` 每轮全图重读，坏节点是否参与本次查询都无关）。
+            try:
+                d *= cond_match(cur_cs.get(src), cur_cs.get(dst))
+            except (TypeError, ValueError):
+                d = d * COND_MATCH_NEUTRAL
             if d < 0:  # 负记忆同价(第五篇):相反边走独立抑制通路,不进兴奋邻接(issue #229)
                 inh_rows.append(si); inh_cols.append(di); inh_mags.append(-d)
             else:
@@ -278,9 +354,14 @@ class ActivationEngine:
         toks = {query[i:i + 2] for i in range(len(query) - 1)} | {query}
         con = self._con()
         cur = con.cursor()
-        cur.execute("SELECT id, content, tags FROM nodes")
+        try:
+            cur.execute("SELECT id, content, tags FROM nodes")
+            rows = cur.fetchall()
+        except sqlite3.OperationalError:  # #714:无内容表(独立激活库)⇒ 无可投票词元
+            rows = []
+        con.close()
         scores = []
-        for nid, content, tags_json in cur.fetchall():
+        for nid, content, tags_json in rows:
             hay = content or ""
             try:
                 hay += " " + " ".join(json.loads(tags_json)) if tags_json else ""
@@ -289,7 +370,6 @@ class ActivationEngine:
             s = sum(1 for t in toks if t in hay) / max(1, len(toks))
             if s > 0:
                 scores.append((nid, s))
-        con.close()
         scores.sort(key=lambda x: -x[1])
         return scores[:top_k]
 
