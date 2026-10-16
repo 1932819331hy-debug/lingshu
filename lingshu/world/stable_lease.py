@@ -83,6 +83,20 @@ class StableLease:
 
         now = time.time()
         age = now - lease["t_verified"]
+        # 负 age 闸（#729）：`t_verified` 落在**未来**（时钟回拨/容器迁移/VM 挂起
+        # 恢复/双机主备切换/NTP 校正）时 age < 0。判据：本模块 3.2.2 的
+        # `(t - t_verified)` 是**已流逝时长**，物理上非负；且 DEV-005 的共享衰减核
+        # exp(-γ·t) 在 t < 0 时 > 1（确认度反增、越界），`gamma * age` 足够负时
+        # 更直接 `OverflowError: math range error`（回拨 1e7 s 实测）。故与 #196
+        # 同一口径：不可判 ⇒ 降级 weak（不给 stable），且**不**把 decayed_conf
+        # 钳成 1.0 —— 钳位会把「时钟坏了」静默译成「租约仍有效」，正是 #196 要拦
+        # 的那种误译（本波 #732 的 max(1, …) 静默升级即同类）。
+        # 闸必须落在 `decayed_conf` 计算**之前**：exp 在极端回拨下溢出。
+        if age < 0.0:
+            lease["state"] = "weak"  # 降级（作用于状态，不删除记录——P1-003）
+            return {"key": key, "state": "weak", "in_lease": False,
+                    "reason": "t_verified 在未来（时钟回拨）——不可判，降级待重新验证",
+                    "age": round(age, 1)}
         expired = age >= lease["ttl"]
         # 指数衰减核 exp(-γ·t)：TTL 超时 = confidence 衰减至弱阈值以下
         decayed_conf = lease["confidence"] * math.exp(-self.gamma * age)

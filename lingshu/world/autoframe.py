@@ -75,6 +75,20 @@ def frame_points(points: Sequence[Vec3], screen_w: int, screen_h: int, *,
     fit = [tuple(float(v) for v in p) for p in (fit_points or points)]
     if not pts or not fit:
         raise ValueError("frame_points：点集为空")
+    # fov_deg 闸（#731）：初值 `dist = (scale·0.5)/tan(fov/2)·(1+2·margin)`
+    # 的除数在 `fov_deg == 0` 时为 0（`math.tan(0.0) == 0.0`）⇒ ZeroDivisionError。
+    # 值域判据（不是拍的）：同仓 `Camera3D.from_meta` 已把同一参数的合法域定为
+    # `0 < fov_deg < 180` 并对越界 fail-closed 报错——此处与该既有契约对齐。
+    # 该域同时排掉三类退化：`fov ≤ 0`（tan 非正 ⇒ dist ≤ 0，相机落到目标背面/
+    # 无穷远）、`fov ≥ 180`（半角 ≥ 90° ⇒ tan 爆炸或翻负，`focal()` 同步退化）、
+    # 以及 NaN（比较全 False ⇒ 相机各字段被 NaN 污染）。
+    # 处置口径与同模块一致：`points`/`iters`/`margin_frac` 的边界一律显式 raise，
+    # 本参数不得例外；不静默 clamp 成 50.0——那会把「调用方传了非法视场」译成
+    # 「照默认视场出图」，正是本波 #732 那类静默升级。
+    if not (0.0 < fov_deg < 180.0):
+        raise ValueError(
+            "frame_points：fov_deg 必须落在开区间 (0,180)，收到 %r"
+            % (fov_deg,))
 
     lo = [min(p[k] for p in pts) for k in range(3)]
     hi = [max(p[k] for p in pts) for k in range(3)]
