@@ -128,11 +128,19 @@ class CuriosityExplorer(WorldLearner):
         """当前预测不确定度（可达域/边界）——IG 的"不确定"分量。"""
         if not self.model:
             self.learn()
-        if self._is_stationary(eid):
-            age = max(0, self.tick - self.last_observed.get(eid, self.tick))
-            return self.hit_threshold * (1 + age / float(self.window))
         m = self.model
         speed = m.get("per_entity", {}).get(eid, {}).get("speed_est", 0.3)
+        if self._is_stationary(eid):
+            # #726：静止读数（最近两帧位置未变）只把边界**收窄到「学得速度的
+            # 可达域」**，不再直接返回 `hit_threshold`——旧码不读 `speed_est`，
+            # 把「最近两帧未动」当成「学得速度可忽略」，于是「高动量但恰在观测
+            # 间隙停住」的实体被系统性低估（实测 speed_est=3.49 时 0.5，而本模型
+            # `predict()` 对同实体给 1.896；它一旦恢复运动，真误差 3.49 > 0.5
+            # ⇒ 边界不再是上界，IG 低估数倍 ⇒ L7 好奇资源错配）。
+            # `_reach` 自带 `hit_threshold` 下限，故学得速度 ≈ 0 的**真静止**
+            # 实体读数与旧码逐位相同（「静止时收窄」的初衷保留）。
+            age = max(0, self.tick - self.last_observed.get(eid, self.tick))
+            return round(self._reach(speed) * (1 + age / float(self.window)), 4)
         pers = m.get("per_entity", {}).get(eid, {}).get("persistence", 0.0)
         rel = next((r for r in m.get("relations", []) if r["source"] == eid), None)
         if rel:
@@ -195,7 +203,16 @@ class CuriosityExplorer(WorldLearner):
         n = len(eids)
         if not n:
             return [], {}
-        b = max(1, min(int(budget), n))
+        # #732：`budget <= 0` ⇒ **零带宽**（本轮一个都不观测），不再静默升为 1。
+        # 旧码 `max(1, min(int(budget), n))` 把 0/负数夹成 1（历史为规避
+        # `random.sample([], 0)` 与 `% 0` 的下限），而返回面又用 `int(budget)`
+        # 回填**原始输入** ⇒ 「声明零带宽、实际每 tick 观测 1 个」（改前实测：
+        # `explore(ticks=3, budget=0)` 返回 budget=0 而每 tick chosen 各 1 个）。
+        # 该下限对 n>0 的三个分支都**不必要**：curiosity 的 `[:0]`、random 的
+        # `sample(eids, 0)`、round_robin 的 `range(0)` + `(idx+0) % n`（n>0 已由
+        # 上一行挡住）都是安全的空选择——与 #55 修出的空世界路径（无候选 ⇒ `[]`）
+        # 同一语义。负数与 `explore(ticks)` 的既有口径一致，**钳 0 不抛**。
+        b = min(max(0, int(budget)), n)
         if policy == "curiosity":
             scores = {e: self._info_gain(e) for e in eids}
             chosen = sorted(eids, key=lambda e: scores[e], reverse=True)[:b]
@@ -250,10 +267,17 @@ class CuriosityExplorer(WorldLearner):
         现场 `uncertainty()`，不再借偷跑的那一步撑出读数。
         """
         n = max(0, int(ticks))
+        # #732：报数面与观测面同源——`budget` 仍如实回填输入，另加
+        # `effective_budget`＝本轮每 tick **真正允许**的观测上限（`budget<=0`
+        # 钳 0、并受实体数封顶，与 `_select` 的 `b` 同一算式）。旧码只有
+        # `int(budget)`，而 `_select` 内部把 0/负数静默升为 1 ⇒ 两者对不上时
+        # 从返回值无从判读（改前实测：声明 0、实际每 tick 观测 1 个）。
+        effective_budget = min(max(0, int(budget)), len(self.world.entities))
         for _ in range(n):
             self.explore_tick(budget=budget, policy=policy)
         return {"status": "ok", "ticks": n, "tick": self.tick,
                 "policy": policy, "budget": int(budget),
+                "effective_budget": effective_budget,
                 "final_uncertainty": (self.uncertainty_curve[-1]
                                       if self.uncertainty_curve
                                       else self.uncertainty()),
