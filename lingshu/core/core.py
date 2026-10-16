@@ -5541,6 +5541,20 @@ class SpacetimeMemoryEngine:
     # 标记」这一最小面，不做极性求和——本仓零外部依赖，不跨仓 import）。
     _NEGATION_MARKERS = ("不", "非", "未", "无", "没", "别", "莫", "勿")
 
+    # ---- #484：否定判据的**词面**豁免表（单字嵌在非否定常用词里 ≠ 否定） ----
+    # 判据来源：公开 issue #484（「按**词**而不是按**字**匹配」）＋ 复用仓内既有词面
+    # 口径 `lingshu/core/contradiction.py::_NON_NEG`（其 `_has_neg` 在差异片段上先整词
+    # 剔除的「非否定常用词」表），并按 issue 点名的清单补 4 词：无法 / 不同 / 不久 /
+    # 没事。中文无空格词界（本仓不引分词器，与 `_synonym_trigger_hit` 同款声明），故
+    # 以「整词剔除后判剩余否定标记」代替 `\b`；剔除按**长词优先**（确定性排序）。
+    # `_NEGATION_MARKERS` 本身**取值集合不变**（本件不扩否定标记词表）。
+    # 边界（削掉的判别力，如实标注）：`无法`/`不同`/`不久`/`没事` 被豁免后，
+    # 「无法完成 ↔ 能完成」「不同 ↔ 相同」这类**单侧替换**不再判 `negation`
+    # （旧实现会判）——这是 issue 点名要求的豁免，代价如实登记，不隐藏。
+    _NON_NEGATION_WORDS = tuple(sorted(
+        set(_contradiction._NON_NEG) | {"无法", "不同", "不久", "没事"},
+        key=lambda _w: (-len(_w), _w)))
+
     # ---- M5 去重的「成败极性」标签（lingshu #225） ----
     # 判据来源：经验标定（#225 修复轮；**理论章节追不到**）。极性由
     # `record_action_sequence` 的 `success`/`failure` 标签承载（正文前缀
@@ -5575,6 +5589,26 @@ class SpacetimeMemoryEngine:
         b0, b1 = b.time_window
         return min(a1, b1) >= max(a0, b0)
 
+    # ---- #484：否定判据的**词面**口径（非否定常用词豁免） ----
+    # 判据来源：公开 issue #484（「比较两句之间的差异，而不是各自的全局存在性」）＋
+    # 仓内既有词面口径 `lingshu/core/contradiction.py::_NON_NEG`（整词出现即不算否定的
+    # 常用词表，供其 `_has_neg` 在差异片段上使用）。此处**复用同一张表**（不另造词表、
+    # 不引第三方分词库）：中文无空格词界，故以「整词剔除」代替 `\b`。
+    @staticmethod
+    def _has_negation_word(s: str) -> bool:
+        """整串是否含**否定词**（#484：按词面判，而非「是否含否定字」）。
+
+        `_NEGATION_MARKERS` 里的单字大量嵌在**非否定的常用词**里（非常/未来/无法/
+        无论/不同/不久/别人/没事…）：先整词剔除 `_NON_NEGATION_WORDS` 里的非否定
+        常用词，再判剩余否定标记。非 `str` / 空串返回 `False`（退化输入不抛）。
+        """
+        if not isinstance(s, str) or not s:
+            return False
+        t = s
+        for w in SpacetimeMemoryEngine._NON_NEGATION_WORDS:
+            t = t.replace(w, " ")
+        return any(m in t for m in SpacetimeMemoryEngine._NEGATION_MARKERS)
+
     @staticmethod
     def _assertion_divergence(a: str, b: str) -> str:
         """判定两条内容是否构成**实质分歧**（而非同一断言的重复表述）。
@@ -5584,10 +5618,28 @@ class SpacetimeMemoryEngine:
         仍不可达（如实声明边界，不猜）。判据保守：宁判分歧（另立节点）不判重复。
         边界（削掉的判别力）：数值判据只认**阿拉伯数字**字面量；「百分之五十 →
         百分之六十」这类纯中文数词变更不在本判据内（仍按重复合并）——如实声明。
+        #484：否定判据按**词面**（否定**词**）而非「否定**字**」——`_NEGATION_MARKERS`
+        里的单字大量嵌在**非否定的常用词**里（非常/未来/无法/无论/不同/不久/别人/
+        没事…）。旧实现 `any(w in a …) != any(w in b …)` 只比「两句**各自**是否出现过
+        任一否定字」：原句带一个这样的常用词即为 True，更正句再插入「不」/「尚未」
+        也是 True ⇒ 判为无分歧，更正被 M5 当重复吞并（更正文本不落库、无 conflict
+        标签、无 OPPOSITE 边，且 #223 的合并把**错误节点**的 importance 抬到更正的
+        0.9 ⇒ 用更正的原话 recall 反而返回错误事实）。
+        现按**整词**判（`_has_negation_word`，复用仓内 `contradiction._NON_NEG`），且
+        只在「**一方被否定、另一方未被否定**」时判 `negation`——两句都含否定标记
+        （含同向「都 不 X」）仍判无分歧。判据来源：公开 issue #484 正文与维护者复核帖
+        （判据 = 否定标记的**差异**，按词不按字）。
+        边界（判别力变化，如实标注）：①`_NEGATION_MARKERS` **取值集合不变**（未扩
+        否定标记词表；豁免表见 `_NON_NEGATION_WORDS` = 仓内 `contradiction._NON_NEG`
+        ∪ {无法, 不同, 不久, 没事}）；②判在**整句**上（非差异片段）——「他非常认可」
+        vs「他非常认可，不过还需复核」会判分歧（保守方向：宁另立不误并）；③豁免表
+        内的词被整词剔除 ⇒「无法完成 ↔ 能完成」「不同 ↔ 相同」这类**单侧替换**不再
+        判 `negation`（旧实现会判）——这是 issue 点名要求的豁免，代价如实登记；
+        ④不做英文否定识别（旧实现也没有，不扩大面）。
         """
         import re as _re
-        marks = SpacetimeMemoryEngine._NEGATION_MARKERS
-        if any(w in a for w in marks) != any(w in b for w in marks):
+        if (SpacetimeMemoryEngine._has_negation_word(a)
+                != SpacetimeMemoryEngine._has_negation_word(b)):
             return "negation"
         na = _re.findall(r"\d+(?:\.\d+)?", a)
         nb = _re.findall(r"\d+(?:\.\d+)?", b)
