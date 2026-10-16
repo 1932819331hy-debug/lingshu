@@ -104,6 +104,11 @@ class SpacetimeConsistency:
         self._drift_events: List[Dict] = []
         self._active_drift: Optional[Dict] = None
         self._low_streak = 0                  # 连续低于漂移阈值的 tick 数
+        #: #716：不变量违例的**当前状态**窗口（每 tick 追加 0/1）。
+        #: 与 `_rolling` / `_entity_hits` 共用 `self.window` 口径 ⇒ 三者都读
+        #: 「最近 window 个 tick」。判定读它；累计值 `_invariant_violations`
+        #: 只作审计（见 `consistency_report` docstring）。
+        self._inv_window: deque = deque(maxlen=self.window)
         self._invariant_violations = 0
         self._pending_events: List[Tuple[str, Tuple[float, float, float]]] = []
         self.tick_count = 0
@@ -367,7 +372,13 @@ class SpacetimeConsistency:
             if eid not in pred:
                 del self._entity_hits[eid]
         # 不变量校验（世界保持自身一致）
+        # #716：窗口记录「本 tick 是否违规」（0/1）——判定读窗口，累计值只作审计。
+        #   旧实现只有终身累计计数，判定直接读它 ⇒ 一次瞬时违规（teleport /
+        #   瞬时抖动 / 外部写入）之后世界即便完全自愈，`verdict` 也**永久**停在
+        #   `invariant_violated`、`self_consistent()` 永久 False —— 「持续运行」
+        #   框架下最严重的语义倒退（本条即报此）。
         inv_ok, inv_issues = self._check_invariants()
+        self._inv_window.append(0 if inv_ok else 1)
         if not inv_ok:
             self._invariant_violations += 1
         # 一致性漂移检测（#9：以最差实体的窗口命中率为判据）
@@ -507,6 +518,22 @@ class SpacetimeConsistency:
 
         判据来源：`docs/plans/待裁清单_v0.1.md` D-65（无样本在数值比较**之前**
         独立判定）／C-11；triage #303（不变量只作数字输出、不进 verdict）。
+
+        #716（本件）：不变量违例判据从**终身累计**改为**窗口内当前状态**
+        —— 字段名 `_invariant_violations` 与本节 docstring 的 `invariant_violated`
+        都在描述「世界状态**被破坏**」，而 `_check_invariants()` 是**每 tick 的
+        当前态校验**（不变量本身是状态谓词，不是事件计数）⇒ 本条判为「当前状态」
+        语义。旧实现读终身累计 ⇒ 一次瞬时违规后世界即便完全自愈，`verdict` 也
+        永久停在 `invariant_violated`、`self_consistent()` 永久 False。
+        修法：新增 `self._inv_window = deque(maxlen=self.window)`，每 tick 追加
+        0/1，判定改读 `any(self._inv_window)`；累计值 `_invariant_violations`
+        **保留**（审计口径不变，`report["invariant_violations"]` 仍是终身计数）。
+        判据来源：triage #716（判定成立）；#303 的修复建议已明写该取舍
+        （「如果 owner 倾向『一次违规永久不自洽』，只需把窗口改成全程」——
+        本条报的正是代码落到了它标注为**待决**的那一侧）。
+        告警行为变化（如实标注）：世界在窗口（`self.window` 个 tick，缺省 20）内
+        自愈后，`verdict` 由 `invariant_violated` 回落为按命中率判定；
+        `invariant_violations` 累计值**不变**，故「曾经违规」仍可审计。
         """
         overall = self.overall_hit_rate()
         rolling = self._rolling_rate()
@@ -516,7 +543,7 @@ class SpacetimeConsistency:
             verdict = "no_observation"
         elif active:
             verdict = "drift_detected"
-        elif self._invariant_violations > 0:
+        elif any(self._inv_window):
             verdict = "invariant_violated"
         elif overall < self.consistent_rate:
             verdict = "inconsistent"

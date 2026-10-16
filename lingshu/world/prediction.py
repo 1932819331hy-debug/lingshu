@@ -329,13 +329,25 @@ class PredictionEngine:
         return [self.engine.store.get_node(_nid) for _nid in path]
 
     def _boundary_consistency(self, path: List[str], nodes: List = None) -> float:
-        """D₂：路径节点是否均有可信边界声明（boundary 标记/不确定声明）"""
+        """D₂：路径节点是否均有可信边界声明（boundary 标记/不确定声明）。
+
+        #718：`n.tags` 是 `Optional[List[str]]`（`STNode.tags` 缺省 `[]`，但
+        `store` 读回的行 `tags` 列可为 JSON `null` ⇒ `STNode.from_row` 得 `None`，
+        `import_all` 亦按备份行原样落该列）⇒ 旧实现直接对 `n.tags` 做 `in`
+        成员判断，对 `tags is None` 抛 `TypeError: argument of type 'NoneType'
+        is not iterable`。
+        本方法是 `_score_route` 的必经之路（每条路线都过）⇒ **一个 tags=None 的
+        节点让整批路线评分抛异常**。修法：`(n.tags or [])` —— 与同文件
+        `render_semantic_cube_3d` 的 `(n.tags and f"ent:…" in n.tags)` **同口径**
+        （None/空 均视为「无该标记」，不命中而非抛错）。
+        """
         if not path:
             return 0.0
         ok = 0
         _ns = nodes if nodes is not None else self._path_nodes(path)
         for n in _ns:
-            if n and ("boundary" in n.tags or "不确定" in n.content or "边界" in n.content):
+            if n and ("boundary" in (n.tags or []) or "不确定" in n.content
+                      or "边界" in n.content):
                 ok += 1
         return round(ok / len(path), 4)
 

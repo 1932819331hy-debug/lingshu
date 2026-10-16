@@ -204,8 +204,22 @@ class VoxelWorld:
     # ---- 时空轨迹与占用 ----
 
     def trail(self, entity_id: str) -> List[Dict]:
-        """实体的时空轨迹（A→B 完整记录）。"""
-        return self._trails.get(entity_id, [])
+        """实体的时空轨迹（A→B 完整记录）。
+
+        #719：返回**副本**（`list(...)`），不再交回内部列表本体。旧实现
+        `return self._trails.get(entity_id, [])` 让调用方拿到 `_trails[eid]`
+        本身 ⇒ 一次 `trail(eid).clear()` 即把时空历史抹掉（`occupancy_at(t)`
+        随之返回空——#134 修复后它已是时空真值来源），`append({"t": 999, …})`
+        则可凭空捏造任意时刻的占用点；两者都不经任何写接口、无留痕。
+        口径与同族只读查询一致（`spacetime_consistency.drift_events()` /
+        `prediction_history()` 都返回 `list(...)` 拷贝）；**不加**
+        `copy.deepcopy` —— 调用方拿到的是轨迹点 dict 的浅拷贝，本仓无任何
+        调用方依赖「拿到同一个 list 对象后原地改它」（`core.py` 门面只把
+        结果放进返回值 JSON 序列化）。
+        边界（如实标注）：浅拷贝 ⇒ 调用方**仍可**改轨迹点 dict 内部（如
+        `trail(eid)[0]["t"] = 999`）；本件只闭合「列表本体」这一面。
+        """
+        return list(self._trails.get(entity_id, []))
 
     def occupancy_at(self, t: int) -> List[Dict]:
         """t 时刻的 4D 时空占用（该时刻所有实体的空间位置）。

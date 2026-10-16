@@ -93,9 +93,19 @@ def apply_move(pos, speed, d, size, margin=BOUND_MARGIN, quant=QUANT,
     `step_cap`       非 None 时步长按 `min(speed, step_cap)` 封顶（spacetime #249）
     `on_nonfinite`   非有限坐标的处置策略（`#347`：不许静默抬成边界值）
     `zero_shortcut`  零方向短路的量化范围（见 ZERO_* 常量）
+
+    `d` 为**方向序列**（tuple / list 均可，只要三分量可取）；`#717`：零方向
+    判据用 `not any(d)` 而非 `d == (0.0, 0.0, 0.0)` —— 后者对**语义等价**的
+    list 入参恒假（`[0.0, 0.0, 0.0] == (0.0, 0.0, 0.0)` 在 Python 为 False），
+    于是越界位置的零方向移动**未被短路**、被 x/z 钳制**改写**（同一次移动
+    因入参容器类型不同而得到两个位置）。`not any(d)` 对 `-0.0`/整数 0 与
+    tuple 口径逐位一致，且对非有限分量（`any` 为真）同样不短路。
+    边界（如实标注）：判据只看「所有分量是否为零」，**不校验长度**——长度
+    非 3 的序列（如空序列）此前会在 `d[0]` 处 `IndexError`，现一并落入短路
+    分支返回量化后的原位置。三分量口径内的调用方行为逐位不变。
     """
     q = (lambda v: round(float(v), quant)) if quant is not None else float
-    if d == (0.0, 0.0, 0.0):
+    if not any(d):
         if zero_shortcut == ZERO_XZ_ONLY:
             return (q(pos[0]), float(pos[1]), q(pos[2]))
         return tuple(round(float(v), quant if quant is not None else 6) for v in pos) \
