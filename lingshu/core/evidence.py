@@ -128,6 +128,13 @@ class EvidenceLedger:
         ⇒ `PermissionError`。层与角色都从 `self.store` 上取（单一真源），
         本模块**不** import `core`（避免循环导入，见 `_PRIMARY_ROLE_VALUE` 注）。
 
+        ★本笔（#769 / #780）**不再自持判据本体**：优先**委托** store 的唯一单点
+        `assert_node_writable_by_role`（`core.py` 的 `layer_writable_by_role`）。
+        原实现是本模块内联一份「层 ∈ SHARED_LAYERS 且 role != PRIMARY」——同一
+        判据两份实现正是本族缺陷（#769 三条旁路 + #780 整链）的成因，故收归单点。
+        对**鸭子类型** store（无该方法的测试替身 / 旧宿主）保留原内联兜底，避免
+        本闸因宿主换形而静默失效（兜底判据与原实现逐字一致，行为不变）。
+
         边界（如实）：
           · 本闸是**角色/层判据**，不是身份核验——`role` 仍是进程内构造参数
             （该面属 issue #779，不在本条）。
@@ -138,6 +145,13 @@ class EvidenceLedger:
           · 闸只认**节点在库中的层**；节点不存在时交由调用方既有的
             `KeyError` 语义处理（`record` 已先判存在性）。
         """
+        # ★本笔（#769/#780）：判据收归 store 的唯一单点（存在性也由该单点处理：
+        # 节点不存在 ⇒ 放行，交由调用方既有语义）。
+        single = getattr(self.store, "assert_node_writable_by_role", None)
+        if callable(single):
+            single(node_id, "经证据账本写入共享层节点的 confidence")
+            return
+        # 兜底（鸭子类型 store）：与原实现逐字一致的判据，行为不变。
         node = self.store.get_node(node_id)
         if node is None:
             return

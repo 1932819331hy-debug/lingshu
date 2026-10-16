@@ -1774,6 +1774,62 @@ class LayeredStore:
 
     # ---------- 节点操作 ----------
 
+    # ---- 治理列写面的角色闸（唯一真源 · #769 / #780） ----
+    #: 沿革：本类此前只有 `add_node` 一处按「层 × 角色」判写权限；其余写面
+    #: （TMS 传播 / 数值接口 / 结构重要性重算链 / 构造期坐标迁移 / 自我快照回收）
+    #: **零判据** ⇒ SUB 可绕过 `add_node` 直接改写共享层行的
+    #: `confidence` / `importance` / `state_attributes` / 坐标列，甚至硬删 SELF 行
+    #: （公开 issue #769 三条 + #780 整链；`docs/plans/待裁清单_v0.1.md` **D-33**
+    #: 「`#127` 数值接口是否同批 → 本批不动，另笔」——本笔即那一笔）。
+    #: 判据来源（不另造）：`SHARED_LAYERS` 的语义注释 ＋ `add_node` 的既有闸
+    #: （「共享层仅 PRIMARY 可写」）＋ `#127` 的 D-07「写入前查旧行（按行判权限）」
+    #: / D-08「禁同 id 换层」形状。故把该判据**提成单点**，`add_node` 与全部旁路
+    #: 写面共用同一实现（同一列两套口径的成因正是「每处各写一份判据」）。
+
+    def layer_writable_by_role(self, layer) -> bool:
+        """角色 × 层 的写权限判据（**唯一真源**）：共享层仅 PRIMARY 可写。
+
+        `layer` 可传 `MemoryLayer` 或库中原始文本值（调用方常直接持 SQL 读回的
+        字符串）；`None` / 未知层值 ⇒ 放行——存在性与合法性由各调用方既有的
+        `KeyError` / 容错语义承担，本判据只回答「层 × 角色」这一问。
+        """
+        if layer is None:
+            return True
+        if not isinstance(layer, MemoryLayer):
+            try:
+                layer = MemoryLayer(layer)
+            except ValueError:
+                # 库中 layer 列的非法值不在本判据的判面内：这类行在 `get_node` /
+                # `STNode.from_row` 的枚举转换处即 fail-closed 抛错（本判据只回答
+                # 「层 × 角色」，不重复承担数据合法性校验——否则同一校验两处实现，
+                # 正是本族缺陷的成因）。
+                return True
+        return not (layer in self.SHARED_LAYERS and self.role != Role.PRIMARY)
+
+    def _deny_shared_layer_write(self, layer, node_id=None, action="写入共享层"):
+        raise PermissionError(
+            f"role={self.role.value} 无权{action}"
+            + (f"（{node_id} 为 {layer.value}）" if node_id is not None
+               else f"（{layer.value}）")
+            + "，共享层由父节点主控")
+
+    def assert_node_writable_by_role(self, node_id, action="写入共享层节点"):
+        """写前按**库中旧行**的 layer 判权限（#127 D-07「按行判权限」的形状）。
+
+        节点不存在 ⇒ 放行（存在性不由本判据回答）。非 PRIMARY 且目标行属共享层
+        ⇒ `PermissionError`（fail-closed，调用方须在**任何写之前**调用）。
+        """
+        node = self.get_node(node_id)
+        if node is None:
+            return
+        if not self.layer_writable_by_role(node.layer):
+            self._deny_shared_layer_write(node.layer, node_id, action)
+
+    def assert_nodes_writable_by_role(self, node_ids, action="写入共享层节点"):
+        """批量形态（整体预判 ⇒ 先判后写、被拒时零落库）。"""
+        for nid in node_ids:
+            self.assert_node_writable_by_role(nid, action)
+
     @_transactional
     def add_node(self, node: STNode) -> str:
         """写入节点并返回 id。共享层（anchor/structure）仅 PRIMARY 角色可写，
@@ -1803,7 +1859,9 @@ class LayeredStore:
         `apply_shared_sync(overwrite=True)` 合法路径），故「覆盖受保护节点内容」这一
         判别力仍未收口，只收口了「保护标记被静默抹掉」。
         数值接口 `update_node_confidence` / `update_node_importance` 的层与角色校验
-        不在本件范围内（待裁清单 D-33：本批不动，另笔）。
+        原不在本件范围内（待裁清单 D-33：本批不动，另笔）——**该「另笔」已由
+        `#769` / `#780` 一笔落地**（本文件 `layer_writable_by_role` 判据单点 ＋
+        两个数值接口的写前判据），本段保留以记录沿革。
         另注（#191 口径）：自我层行不受「共享层仅 PRIMARY 可写」约束后，
         `#127` 的同 id 禁换层闸对自我层**仍然生效**（换层判据与层集合无关）。
 
@@ -1828,10 +1886,10 @@ class LayeredStore:
         ⇒ 该节点在 `decay_cycle` 里**永不被选中删除**，#185 的「NaN 永不遗忘」
         症状仍在。取默认 0.5 ⇒ 节点回到普通衰减面。**阈值本体未改**。
         """
-        if node.layer in self.SHARED_LAYERS and self.role != Role.PRIMARY:
-            raise PermissionError(
-                f"role={self.role.value} 无权写入共享层（{node.layer.value}），共享层由父节点主控"
-            )
+        # 本判据已提为单点 `layer_writable_by_role`（#769/#780）——`add_node` 与
+        # TMS 传播 / 数值接口 / 重算链 / 构造期迁移 / 自我快照回收共用同一实现。
+        if not self.layer_writable_by_role(node.layer):
+            self._deny_shared_layer_write(node.layer)
         # #164：值域钳制（唯一写入汇聚点）——见 docstring。原位写回 node，使
         # 调用方拿到的返回对象与落库值一致（回报=事实）。
         # #185：钳制改经 `_finite_clamp`（非有限值 → 字段默认 0.5，而非 Python
@@ -1865,7 +1923,7 @@ class LayeredStore:
         existing = self.get_node(node.id)
         overwrite_protected = None
         if existing is not None:
-            if existing.layer in self.SHARED_LAYERS and self.role != Role.PRIMARY:
+            if not self.layer_writable_by_role(existing.layer):
                 raise PermissionError(
                     f"role={self.role.value} 无权覆盖共享层行（id={node.id} 现为 "
                     f"{existing.layer.value}），共享层由父节点主控"
@@ -2146,6 +2204,17 @@ class LayeredStore:
         上报（不静默吞；`warn` 属既有审计动作，lint 计数零净增），返回值形状
         保持 `{"migrated_nodes": N}` 不变（不破坏既有调用方契约）。**未**新增宽
         `except Exception`；迁移**判据与阈值未动**（仍是顶层 `startswith` 三前缀）。
+
+        #769 ③（共享层写面补角色闸）：本方法是**构造期维护**（`__init__` 无条件
+        调用），不是用户写操作——但旧实现无条件改写**全部行**的
+        `spatial_coordinates` / `semantic_coordinates` ⇒ 「仅构造一个 SUB 实例」
+        即越权改写共享层（锚点/结构层）行的坐标列（核验帖实测：8 字段中这两列
+        被改、其余 6 列不动，并留一条不记发起者角色的 `structure_event` 审计）。
+        修法取**取向 (b)**：非 PRIMARY 时**只跳过共享层行**、本地层照迁——既不
+        越权改共享层，又不让 SUB 实例的本地数据永久停在旧格式（取向 (a)「SUB
+        整体不迁移」会让本地层旧格式永久滞留，代价更大）。判据复用唯一单点
+        `layer_writable_by_role`（与 `add_node` 同源）。跳过数经既有
+        `warnings.warn` 面上报（不静默），返回值形状不变。
         """
         # 常规启动通常已无旧字段：先做只读候选检查，避免每次启动争写锁。
         candidates = self.conn.execute(
@@ -2168,10 +2237,12 @@ class LayeredStore:
             return {"migrated_nodes": 0}
         migrated = 0
         skipped_bad_rows = 0
+        skipped_shared_rows = 0
         with self._structure_event_transaction() as c:
-            c.execute("SELECT id, spatial_coordinates, semantic_coordinates FROM nodes")
+            c.execute("SELECT id, spatial_coordinates, semantic_coordinates, layer FROM nodes")
             for row in c.fetchall():
                 nid, sp_json, se_json = row[0], row[1], row[2]
+                nid_layer = row[3]
                 # #691 P1-c：坏行跳过并计数（构造期不再崩）。
                 try:
                     sp = json.loads(sp_json or "{}")
@@ -2185,6 +2256,18 @@ class LayeredStore:
                 semantic_keys = [k for k in sp if k.startswith(
                     ("protocol_", "radical_", "neural_"))]
                 if not semantic_keys:
+                    continue
+                # #769 ③（构造期维护 ≠ 用户写操作，但仍属共享层写面）：本方法由
+                # `__init__` **无条件**调用 ⇒ 旧实现「仅构造 SUB 实例」即改写共享层
+                # 行的 `spatial_coordinates` / `semantic_coordinates`（核验帖实测：
+                # 8 字段中 spatial/semantic 两列被改，其余 6 列不动；并留一条
+                # `structure_event` 审计，但不记发起者角色）。取向 (b)——**只跳过
+                # 共享层行、本地层照迁**（既不越权改共享层，又不让 SUB 实例的本地
+                # 数据永久停在旧格式；取向 (a)「SUB 整体不迁移」会让本地层旧格式
+                # 永久滞留，代价更大）。跳过数经既有 `warnings.warn` 面上报（不静默），
+                # 返回值形状 `{"migrated_nodes": N}` 不变（不破坏既有调用方契约）。
+                if not self.layer_writable_by_role(nid_layer):
+                    skipped_shared_rows += 1
                     continue
                 se.setdefault("protocol", {}).setdefault("concept", {})
                 se.setdefault("radical", {})
@@ -2212,6 +2295,13 @@ class LayeredStore:
             warnings.warn(
                 "#691 坐标迁移跳过 %d 条坏 JSON 行（spatial/semantic 非法，原文未改）"
                 % skipped_bad_rows, RuntimeWarning, stacklevel=2)
+        if skipped_shared_rows:
+            # #769 ③：共享层行被角色闸跳过 ⇒ 上报（不静默）。取向 (b) 的代价面：
+            # 这些行仍是旧格式，需由 PRIMARY 实例完成迁移。
+            warnings.warn(
+                "#769 坐标迁移跳过 %d 条共享层（anchor/structure）行：role=%s 无权改写"
+                "共享层坐标列（本地层行已照迁；共享层行需由 PRIMARY 实例迁移）"
+                % (skipped_shared_rows, self.role.value), RuntimeWarning, stacklevel=2)
         return {"migrated_nodes": migrated}
 
 
@@ -2406,8 +2496,17 @@ class LayeredStore:
         旧实现把 delta 原样拼进 `confidence + ?` ⇒ `confidence + NaN = NaN` 落库成
         NULL（`MIN/MAX` 遇 NULL 仍回 NULL）；此后 `decay_cycle` 的
         `WHERE confidence > ? AND confidence < 1.0` 对 NULL 全不成立 ⇒ 该行永不衰减。
+
+        #769 ④ / #780 ②（D-33 的「另笔」）：本接口此前**无层/角色判据** ⇒ SUB 直调
+        即把 PRIMARY 建的锚点/结构层行 `confidence 1.0 → 0.5`（核验帖实测，跨实例读回
+        同值）。现按 `add_node` 的同款判据（`layer_writable_by_role` 单点）**写前按
+        库中旧行判权限**（`#127` D-07 形状）：非 PRIMARY 且目标行属 `SHARED_LAYERS`
+        ⇒ `PermissionError`（fail-closed、零落库）。本地层（knowledge/context/self）
+        的增信路径不受影响（SUB 对自己节点的复核照旧放行——`#191` 裁定 SELF 属本地层）。
         """
         delta = _finite_or(delta, 0.0)
+        # 闸落在 UPDATE 之前（本方法已挂 @_transactional ⇒ 被拒时零落库）。
+        self.assert_node_writable_by_role(node_id, action="改写共享层节点的 confidence")
         with self._lock:
             c = self.conn.cursor()
             c.execute('''
@@ -4800,6 +4899,28 @@ class LayeredStore:
         rows = c.fetchall()
         if len(rows) <= keep:
             return 0
+        # #769 ②（治理列写面补角色闸）：SELF 层在 `IMMUTABLE_LAYERS` 内——`delete_node`
+        # 对 SELF 行一律返回 `False`，而本方法此前**零角色判据**直接 `DELETE` ⇒
+        # 同一层的「不可删」语义两套口径：SUB 调 `prune_self_snapshots(keep=0)` 即
+        # 硬删全部 SELF 快照（核验帖实测 SELF 行 `3 → 0`，而 `delete_node` 对同层
+        # 仍返回 `False`）。现按 `delete_node` 的**同判据**收口：非 PRIMARY 一行都不删。
+        #
+        # 取向（二选一，如实标注理由与代价）：**返回 0 并经 `warnings.warn` 上报**，
+        # 不抛 `PermissionError`。理由：SELF 属**本地层**（#191 裁定：SUB 可写自我层），
+        # `update_self` 在 SUB 上是合法路径（其内部即调本方法做有界保留）⇒ 若在此抛错，
+        # SUB 的 `update_self` 会被一并打掉，属**回归 #191**（正是 `add_node` 改用
+        # `SHARED_LAYERS` 而非 `IMMUTABLE_LAYERS` 所要避免的形态）。代价（如实）：
+        # 本闸是「拒删 + 告警」而非 fail-closed 抛错，调用方若忽略告警只会看到
+        # `0`——故告警文案显式点名角色与跳过条数，且该口径只在「确实有候选被跳过」
+        # 时触发（`len(rows) > keep`），正常小库与 PRIMARY 侧零告警噪音。
+        if self.role != Role.PRIMARY:
+            warnings.warn(
+                "#769 prune_self_snapshots 拒绝：role=%s 无权回收自我层快照"
+                "（SELF 属不可遗忘层，与 delete_node 同判据）——本次跳过 %d 条候选，"
+                "零删除；如需回收请以 PRIMARY 身份执行。"
+                % (self.role.value, len(rows) - keep),
+                RuntimeWarning, stacklevel=2)
+            return 0
         protected = set(self.get_protected_nodes())
         # keep 保留的是**最近** keep 条（rowid 降序前缀）；保护件在淘汰候选里跳过。
         doomed = []
@@ -4930,8 +5051,17 @@ class LayeredStore:
         旧实现原样拼进 `importance + ?` ⇒ NaN 落库成 NULL，此后 `decay_cycle` 的
         `WHERE importance > ?`（情境层遗忘门）对 NULL 全不成立 ⇒ 该节点**永不遗忘**；
         `+inf` 则使其在所有 `ORDER BY importance DESC` 检索里永远排第一。
+
+        #769 ④ / #780 ②（D-33 的「另笔」）：同 `update_node_confidence`——本接口
+        此前无层/角色判据（既有守卫 docstring 明写「数值接口不在本件范围」），SUB
+        直调即把锚点 `importance 0.3 → 0.8` / `0.9 → 1.0`。现按同款单点判据
+        **写前按库中旧行**判权限：非 PRIMARY 且旧行属共享层 ⇒ `PermissionError`。
+        内部调用方（`recalc_structural_importance` / `_protect_upstream` /
+        `add_perception` 去重 / 巩固周期）一律先经各自入口的层判，故本闸对它们
+        只做**兜底**，不改变 PRIMARY 侧读数。
         """
         delta = _finite_or(delta, 0.0)
+        self.assert_node_writable_by_role(node_id, action="改写共享层节点的 importance")
         c = self.conn.cursor()
         c.execute("UPDATE nodes SET importance = MIN(1.0, MAX(0.0, importance + ?)) WHERE id=?",
                   (delta, node_id))
@@ -5021,11 +5151,14 @@ class LayeredStore:
         # 旧实现在下方循环里逐节点调 `_read_state_attr(nid, "structural_boost", 0.0)`
         # ⇒ N 次 `SELECT state_attributes FROM nodes WHERE id=?`（N+1）。该列与
         # `id, importance` 同表同行 ⇒ 一并取出、按 `_state_attr_of` 单点解析一次。
-        c_.execute("SELECT id, importance, state_attributes FROM nodes")
+        # #769/#780：`layer` 一并取出——下方**逐节点**判「目标行层 × 角色」，避免
+        # 每节点一次 `SELECT layer`（与既有 N+1 收口同法）。
+        c_.execute("SELECT id, importance, state_attributes, layer FROM nodes")
         rows = c_.fetchall()
-        imp_map = {nid: (imp if imp is not None else 0.5) for nid, imp, _sa in rows}
+        imp_map = {nid: (imp if imp is not None else 0.5)
+                   for nid, imp, _sa, _ly in rows}
         _sb_map = {nid: self._state_attr_of(_sa, "structural_boost", 0.0)
-                   for nid, _imp, _sa in rows}
+                   for nid, _imp, _sa, _ly in rows}
 
         # 因果上游度传播（BFS · 深度上限 · 节点去重 · 路径置信度加权）
         influence: Dict[str, float] = {}
@@ -5050,9 +5183,20 @@ class LayeredStore:
 
         movers = []
         protected = []
+        skipped_shared = []
         applied = 0
-        for nid, imp, _sa in rows:
+        for nid, imp, _sa, nid_layer in rows:
             infl = influence.get(nid, 0)
+            # #769/#780：**逐节点隔离**——非 PRIMARY 时共享层行整体跳过（既不写
+            # `state_attributes`、也不抬 `importance`、也不登记 `protections`）。
+            # 取向理由：旧实现只在下游 `_protect_upstream` 的 `#234` 闸处抛错，
+            # 而 `_write_influence` **已提交** ⇒ 「先写后抛」的部分落库（核验帖
+            # 点名的非原子格）。逐节点跳过（而非整链抛错）使：①零部分落库；
+            # ②SUB 对**本地层**节点的重算照旧生效（不回归既有语义，`self` 层不在
+            # `SHARED_LAYERS`）；③跳过数经 `skipped_shared` 上报，不静默。
+            if not self.layer_writable_by_role(nid_layer):
+                skipped_shared.append(nid)
+                continue
             # 上游度写入 state_attributes（可检索/可查）
             if infl > 0 and not dry_run:
                 self._write_influence(nid, infl)
@@ -5110,6 +5254,10 @@ class LayeredStore:
                 "candidates": len(movers), "applied": applied,
                 "influence_nodes": len(influence),
                 "protected": len(protected),
+                # #769/#780：非 PRIMARY 时被跳过的共享层节点数（逐节点隔离 ⇒
+                # 零部分落库；上报而不静默）。
+                "skipped_shared": len(skipped_shared),
+                "skipped_shared_nodes": skipped_shared[:50],
                 "top_influence": [{"node_id": n, "concept_influence": v} for n, v in top_influence],
                 "movers": movers[:50]}
 
@@ -5120,7 +5268,17 @@ class LayeredStore:
 
         #299：新增 `key` 参数（默认 `concept_influence`，旧行为不变），供
         `recalc_structural_importance` 复用同一通道写入 `structural_boost`。
+
+        #780 ① / #769 ③：本方法此前**无层/角色判据**（核验帖实测：SUB 直调
+        `_write_influence(锚点, 7.77)` 即改写共享层行的 `state_attributes`，且该列被
+        下游 `_state_attr_of` 当结构化真值读回 ⇒ 篡改会改变后续结构提升基准）。
+        现按 `add_node` 的同款单点判据**写前按库中旧行**判权限：非 PRIMARY 且目标行
+        属 `SHARED_LAYERS` ⇒ `PermissionError`（闸在 SELECT/UPDATE **之前** ⇒
+        被拒时零落库）。共享层节点的 `state_attributes` 是治理列，由父节点主控；
+        SELF/本地层不在 `SHARED_LAYERS`，照旧可写。
         """
+        self.assert_node_writable_by_role(
+            node_id, action="改写共享层节点的 state_attributes")
         c = self.conn.cursor()
         c.execute("SELECT state_attributes FROM nodes WHERE id=?", (node_id,))
         row = c.fetchone()
@@ -5177,7 +5335,15 @@ class LayeredStore:
         return self._state_attr_of(row[0], key, default)
 
     def _protect_upstream(self, node_id: str, infl: float, floor: float):
-        """越上游越要记录：保护登记 + no_forget + importance 保底。"""
+        """越上游越要记录：保护登记 + no_forget + importance 保底。
+
+        #780 ①：本助手此前零角色判据（其内部 `protect_node` 有 `#234` 闸，但闸抛在
+        `_write_influence` **已提交之后** ⇒ 整次 recalc「先写后抛」、部分落库）。
+        现在**入口先判**（`assert_node_writable_by_role`）：非 PRIMARY 且目标行属
+        共享层 ⇒ 在任何写之前 `PermissionError`（零落库）；共享层节点的保护登记由
+        父节点主控（与 `protect_node` 的 `#234` 判据同源，此处只是把它提到最前）。
+        """
+        self.assert_node_writable_by_role(node_id, action="保护共享层节点")
         self.protect_node(node_id, f"结构保护:概念影响度 {infl}（因果上游度≥阈值，2026-08-20）")
         node = self.get_node(node_id)
         if node and node.importance is not None and node.importance < floor:
