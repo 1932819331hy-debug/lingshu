@@ -2403,6 +2403,12 @@ class LayeredStore:
         #168：删边改经 `_strip_incident_edges`（单一真源）——对端为锚点/结构层
         （`IMMUTABLE_LAYERS`）的边在删除前落一条 `immutable_edge_stripped` 审计，
         使不可变层节点失去关联边**可追查**（详见该助手 docstring）。
+
+        ★本笔（治理写面「同列两套口径」收口 · P3）：对端标签清理腿补**层 × 角色**
+        判据——主闸只判被删**目标行**，本腿此前对 `nodes.tags` 零判据 ⇒ SUB 删本地行
+        时可改写共享层 peer 的 `tags`（实测，跨实例读回同值）。形态＝peer 不可写则
+        **跳过该 peer 的标签清理 + 计入 `last_skipped_rows`**（不抛错，与同段 `#720`
+        坏 tags 容错同款口径；理由与后果面见循环内注释）。
         """
         # #517：快速预读只服务 bool 契约的早退（不存在/不可变层），**保护判定不再
         # 留在无事务快照上**——旧实现「autocommit 读判定（t0 快照）→ 首条 DML 才隐式
@@ -2447,6 +2453,7 @@ class LayeredStore:
             self._strip_incident_edges(c, node_id)
             c.execute("DELETE FROM nodes WHERE id=?", (node_id,))
             _bad_tag_peers: List[str] = []
+            _locked_tag_peers: List[str] = []
             for peer in peers:
                 c.execute("SELECT COUNT(*) FROM edges WHERE relation_type=?"
                           " AND (source_id=? OR target_id=?)",
@@ -2463,8 +2470,25 @@ class LayeredStore:
                 # 口径与 `_tolerant_nodes` 一致：坏行**跳过**（本处＝该 peer 的
                 # `conflict` 标签清理跳过、标签原样留在库，不去猜它的内容），
                 # 跳过 id 如实计入 `last_skipped_rows`；**不**阻断删除主流程。
-                c.execute("SELECT tags FROM nodes WHERE id=?", (peer,))
+                c.execute("SELECT tags, layer FROM nodes WHERE id=?", (peer,))
                 _prow = c.fetchone()
+                # ★本笔（治理写面「同列两套口径」收口 · P3）：主闸只判**被删目标行**
+                # （上方 `node.layer in IMMUTABLE_LAYERS`），本 peer 腿此前对
+                # `nodes.tags` **零层/角色判据** ⇒ SUB 删自己的本地行时，可把共享层
+                # peer 的 `tags` 由 `["conflict","no_forget"]` 改成 `["no_forget"]`
+                # （实测，PRIMARY 跨实例读回同值）；而同列经 `tag_node` 打共享层目标
+                # 必被 `#234` 拦 ⇒ 同一列两套口径。判据复用 store 侧单点
+                # （`layer_writable_by_role`，不另造第二份）。
+                # 形态＝**跳过该 peer 的标签清理 + 计入 `last_skipped_rows`**，不抛错
+                # （与同段 `#720` 坏 tags 容错同款口径）：`delete_node` 的语义是删
+                # **本地层**节点，因一个**邻居**是共享层就让整条删除失败，会把
+                # `decay_cycle` / `enforce_context_cap` 等既有删除路径打成红。
+                # 后果面（如实标注）：跳过会在共享层 peer 上留下**悬挂的 `conflict`
+                # 标签**（OPPOSITE 边已随删除消失、标签未被移除）——这是「宁可留脏
+                # 标签，也不让非 PRIMARY 改写共享层」的取舍，清理由 PRIMARY 侧承担。
+                if _prow is not None and not self.layer_writable_by_role(_prow[1]):
+                    _locked_tag_peers.append(peer)
+                    continue
                 try:
                     _ptags = ((json.loads(_prow[0]) if _prow[0] else [])
                               if _prow else None)
@@ -2482,9 +2506,10 @@ class LayeredStore:
                                json.dumps({"reason": "opposite_edge_gone",
                                            "removed_node": node_id}, ensure_ascii=False),
                                json.dumps({}, ensure_ascii=False)))
-            if _bad_tag_peers:
+            if _bad_tag_peers or _locked_tag_peers:
                 self.last_skipped_rows = list(dict.fromkeys(
-                    list(self.last_skipped_rows or []) + _bad_tag_peers))
+                    list(self.last_skipped_rows or [])
+                    + _bad_tag_peers + _locked_tag_peers))
             self._commit_locked()
         return True
 
@@ -5450,7 +5475,12 @@ class LayeredStore:
         # 仍带 insight_event 标签；旧实现只认标签不认层与角色 ⇒ SUB 可把已终裁
         # 的结构层节点 verified→refuted、追加伪造证据、抬 importance 到 0.9。
         # 与 #234 给 tag_node/protect_node/register_conflict/add_edge 加的闸同款。
-        if node.layer in self.SHARED_LAYERS and self.role != Role.PRIMARY:
+        # ★本笔（第 4 项 · 消除第二份实现）：判据改为**委托**单点
+        # `layer_writable_by_role`（G 线本笔落地的唯一真源）——原内联形态
+        # `node.layer in self.SHARED_LAYERS and self.role != Role.PRIMARY` 与单点
+        # 判据同源，但属**第二份实现**。零行为差异已实测（同一批构造 × 两角色，
+        # 返回/抛错与调用后行快照逐字相同）。
+        if not self.layer_writable_by_role(node.layer):
             raise PermissionError(
                 f"role={self.role.value} 无权改写共享层（{node.layer.value}）的洞见"
                 f"（id={insight_id}）——已终裁晋升的洞见归 PRIMARY 主控（#519）")
@@ -11179,10 +11209,25 @@ class SpacetimeMemoryEngine:
         `migrate_v17_coordinates` 的 D-003 映射先例。
         边界（削掉的判别力）：写入前**不**校验 provider 输出是否为合法语义结构
         （非 dict 由 `_flat_semantic_to_nested` 的 `dict(flat or {})` 归一为 `{}`）。
+
+        ★本笔（治理写面「同列两套口径」收口 · P1）：写前补**角色闸**——非 PRIMARY
+        且目标行属共享层（`SHARED_LAYERS`）⇒ `PermissionError`（零落库）。判据复用
+        `LayeredStore.assert_node_writable_by_role` 单点（不另造第二份判据）；
+        闸落在 UPDATE 之前、且在既有的「无节点 / 无 provider ⇒ False」早退之后
+        ⇒ 返回值契约（`bool`）与早退语义逐位不变。未覆盖面（如实标注）：本闸只判
+        「层 × 角色」，不判调用方身份真伪（同进程伪造角色属 #779 威胁模型边界）。
         """
         node = self.store.get_node(node_id)
         if not node or not self._semantic_provider:
             return False
+        # ★本笔（治理写面「同列两套口径」收口 · P1）：本写点此前对
+        # `nodes.semantic_coordinates` **零角色闸** ⇒ SUB 可改写 PRIMARY 建的
+        # 锚点/结构层行的语义坐标（实测 `{}` → `{"protocol":{"concept":{"object":0.75}}}`，
+        # PRIMARY 跨实例读回同值）；而同列经 `add_node` / `update_node_confidence`
+        # 等路径受共享层角色闸约束 ⇒ 同一列两套口径。闸取 `store` 侧既有单点
+        # （`layer_writable_by_role` 的写前查旧行形态，`#127` D-07），落在 UPDATE 之前。
+        self.store.assert_node_writable_by_role(
+            node_id, action="改写共享层节点的 semantic_coordinates")
         coords = self._semantic_provider.to_coordinates(node.content)
         merged = dict(node.semantic_coordinates or {})
         for bucket, val in _flat_semantic_to_nested(coords).items():
@@ -12287,6 +12332,14 @@ class SpacetimeMemoryEngine:
         钳制）。#429：裁决、`engine_meta` 持久化与留史收进同一工作单元；任一步失败 ⇒
         盘上回滚**且**内存配置回退（否则「留史失败」会留下一个盘上没有、内存里生效的
         配置——正是本件要消的不一致）。
+
+        ★本笔（治理写面「同键两套口径」收口 · P2）：`approved` 分支在**改内存配置与
+        写 `engine_meta` 之前**补 `store._assert_meta_key_writable("verifier_config")`
+        ——`verifier_config` ∈ `ENGINE_META_GUARDED_KEYS`，非 PRIMARY（且非 `:memory:`
+        自有库）⇒ `PermissionError`。判据复用 `#768` 的既有单点（不另造第二份）。
+        边界（如实标注）：本闸只判「实例角色 × 库归属」，不判 `designer_key` 的持有
+        者身份——A-2 的密钥闸取自进程环境变量，同部署下 SUB 天然持有（`#586` 已就
+        同一理由判定「密钥闸不构成角色隔离」），故本闸是本写点唯一的角色隔离面。
         """
         # 提交与发布都持锁，后续终裁才能基于刚提交的配置继续修改。
         with self.store._lock:
@@ -12301,6 +12354,15 @@ class SpacetimeMemoryEngine:
                     if not result:
                         return False
                     if result["status"] == "approved":
+                        # ★本笔（治理写面「同键两套口径」收口 · P2）：本方法此前
+                        # 自开一句 `INSERT OR REPLACE INTO engine_meta` 写治理键
+                        # `verifier_config` **无角色闸** ⇒ SUB 走完 A-2 四步即把
+                        # `dedup_static` 写穿库（实测 0.85 → 0.5，PRIMARY 重启回读
+                        # 生效）；而**同一键**经 `store.set_meta` 必被 `#768` 单点
+                        # 拒（实测 `PermissionError`）⇒ 同键两套口径。闸取 `store`
+                        # 侧既有单点，落在改内存配置与 INSERT **之前**（被拒时内存
+                        # 配置由下方 `except BaseException` 一并回退，零分叉）。
+                        self.store._assert_meta_key_writable("verifier_config")
                         self._apply_verifier_standard(result["param"], result["value"])
                         cursor.execute(
                             "INSERT OR REPLACE INTO engine_meta(key,value) VALUES (?,?)",
