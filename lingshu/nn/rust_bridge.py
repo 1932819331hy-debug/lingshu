@@ -226,11 +226,36 @@ def pack_vec(vec: np.ndarray, k1: int, k2: int, path: Path, k3: int = 0) -> Path
     return path
 
 
+_MAGIC = 0x4845584E4E4F5554
+_HEAD = 16  # 8 字节魔数 + 8 字节 steps
+
+
 def unpack_out(path: Path) -> Tuple[np.ndarray, np.ndarray, float]:
+    """读取 .hexout：魔数须为 HEXNNOUT，且长度自洽。
+
+    ★ 原实现用 `assert` 校验魔数（#454）：**`python -O` 下 assert 整体消失**，
+    非法二进制会被静默当成合法结果返回（实测 `-O` 时 trash 文件也返回三个值）。
+    外部数据校验不得依赖 assert —— 改为显式 raise（与本模块 `HexExeError` 同口径）。
+    另补长度自洽：载入期把「长度不足 / steps 越界」挡在门口，而不是留给下游
+    在 `vals[:steps]` 处产出**空数组**这种更难定位的形态。
+    """
     raw = path.read_bytes()
-    assert int.from_bytes(raw[:8], "little") == 0x4845584E4E4F5554
+    if len(raw) < _HEAD + 8:
+        raise HexExeError(
+            "unpack_out：文件过短（%d 字节，至少需 %d）——非 .hexout 或已截断：%r"
+            % (len(raw), _HEAD + 8, str(path)))
+    magic = int.from_bytes(raw[:8], "little")
+    if magic != _MAGIC:
+        raise HexExeError(
+            "unpack_out：魔数不符（期望 0x%X，实得 0x%X）——非 .hexout：%r"
+            % (_MAGIC, magic, str(path)))
     steps = int.from_bytes(raw[8:16], "little")
     vals = np.frombuffer(raw[16:], dtype=np.float64)
+    # 末尾 1 个 float 是标量，其余按 steps 切曲线
+    if steps < 0 or steps > len(vals) - 1:
+        raise HexExeError(
+            "unpack_out：steps=%d 与载荷不符（载荷 %d 个 float64，最多允许 %d）"
+            % (steps, len(vals), len(vals) - 1))
     curve = vals[:steps]
     vec = vals[steps:-1]
     return curve, vec, float(vals[-1])
