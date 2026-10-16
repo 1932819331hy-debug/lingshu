@@ -2566,6 +2566,14 @@ def projectile_state(decl, t):
     弹跳（`bounce=True` 且 `restitution ∈ (0,1]` 且给了 `ground_z`）：逐次解
     `½·g_up·τ² + v_up·τ + (p_up − ground) = 0` 取正根；落地瞬间 `v_up ← −e·v_up`，
     水平速度不变。**不依赖帧率、不会穿透**（与 `Reflector` 同一立场：解析优先）。
+
+    `max_bounces`（缺省 / `0` / `False` / `None` ⇒ **8**；负值原样生效）是**落地反射
+    次数上限**。上限用尽、或初值已贴地且 `v0_up <= 0`（第 1 轮就没有下一次落地）时，
+    球**落到 `ground_z` 并停住**：up 轴坐标钳到 `ground_z`、**竖直速度为 0**，`t` 再大
+    也不再下降（水平分量仍按匀速外推）。只有「窗口在落地前结束」（球仍在空中）与
+    「初值已在 `ground_z` 以下、永远回不到地面」两腿才走自由抛体外推。
+    ⇒ 上面那句「不会穿透」的**前提是初值不在 `ground_z` 以下**；`p0_up < ground_z`
+    时地面约束不成立，函数按无地面自由抛体外推（不做钳位）。
     """
     up = _axis_of(decl.get("up", 1))
     p0 = _vec3(decl["p0"], "projectile_state.p0")
@@ -2589,6 +2597,14 @@ def projectile_state(decl, t):
     vh, vu = _hv(v0, up)
     rem, bounces = tau, 0
     max_b = int(decl.get("max_bounces") or 8)
+    # 「退出时球是否已落到地面并停住」——只有这两种退出才钳位（#777）：
+    #   ① `flight <= 0`：第 1 轮就没有下一次落地（初值已贴地且 v_up <= 0）⇒ 贴地静止；
+    #   ② `bounces >= max_b`：预算用尽 ⇒ 本段落地后停在地面。
+    # ⚠ **不能**只看 `bounces >= max_b` 就钳位：`or` 里 `rem < flight` 排在它前面，
+    #   而 `rem < flight` 是**正常空中腿**（球仍在空中，窗口在落地前结束）——那种情形下
+    #   `bounces` 往往已等于 `max_b`（例：默认 cap 8、t=10.9 时 bounces=8 而 rem<flight），
+    #   一并钳位会把「球还在空中」的正常读数改掉（回归）。
+    resting = False
     while True:
         disc = vu * vu - 2.0 * gz * (pu - ground)
         if disc < 0.0:
@@ -2596,7 +2612,13 @@ def projectile_state(decl, t):
         flight = (-vu - math.sqrt(disc)) / gz
         if flight <= 0.0:
             flight = (-vu + math.sqrt(disc)) / gz
-        if flight <= 0.0 or rem < flight or bounces >= max_b:
+        if flight <= 0.0:
+            resting = True
+            break
+        if rem < flight:
+            break
+        if bounces >= max_b:
+            resting = True
             break
         h = (h[0] + vh[0] * flight, h[1] + vh[1] * flight)
         rem -= flight
@@ -2605,6 +2627,10 @@ def projectile_state(decl, t):
         #    写 `vu = -e*vu` 会让球带着发射方向的速度继续走 ⇒ 直接穿地（实测 min(z)=-21.3）。
         vu = -e * (vu + gz * flight)
         bounces += 1
+    if resting:
+        # 贴地静止：up 轴钳到 ground、竖直速度 0（球停在面上，不再穿地、随 t 不下降）
+        return (_unhv((h[0] + vh[0] * rem, h[1] + vh[1] * rem), ground, up),
+                _unhv(vh, 0.0, up))
     return (_unhv((h[0] + vh[0] * rem, h[1] + vh[1] * rem),
                   pu + vu * rem + 0.5 * gz * rem * rem, up),
             _unhv(vh, vu + gz * rem, up))
