@@ -54,7 +54,7 @@
     {
      "file": "curiosity_explorer.py",
      "src": "aeis.curiosity_explorer",
-     "sha256": "e3ca453c8bc3a5b0",
+     "sha256": "4a551240f4594c68",
      "rewrites": 4,
      "sanitized": 0,
      "patches": 0,
@@ -83,7 +83,7 @@
     {
      "file": "multiview.py",
      "src": "aeis.multiview",
-     "sha256": "b32ed5d636f3b6d3",
+     "sha256": "a3526709deddaaaa",
      "rewrites": 0,
      "sanitized": 0,
      "patches": 0,
@@ -94,7 +94,7 @@
     {
      "file": "prediction.py",
      "src": "aeis.prediction",
-     "sha256": "94372fa58b56b710",
+     "sha256": "e4a5308e72f80948",
      "rewrites": 0,
      "sanitized": 0,
      "patches": 0,
@@ -108,7 +108,7 @@
     {
      "file": "scene_model.py",
      "src": "aeis.scene_model",
-     "sha256": "7da16366de9e052a",
+     "sha256": "78e656c7fc559126",
      "rewrites": 4,
      "sanitized": 0,
      "patches": 0,
@@ -141,7 +141,7 @@
     {
      "file": "seven_layer_loop.py",
      "src": "aeis.seven_layer_loop",
-     "sha256": "32ba2b8a8b45ca7c",
+     "sha256": "c15d58217999f1df",
      "rewrites": 8,
      "sanitized": 0,
      "patches": 0,
@@ -187,7 +187,7 @@
     {
      "file": "spacetime_consistency.py",
      "src": "aeis.spacetime_consistency",
-     "sha256": "2d908c35a1d391a9",
+     "sha256": "8261f462319c1312",
      "rewrites": 4,
      "sanitized": 0,
      "patches": 0,
@@ -198,7 +198,7 @@
     {
      "file": "stable_lease.py",
      "src": "aeis.stable_lease",
-     "sha256": "084b71b05e3efa5a",
+     "sha256": "83e206dc296f4e54",
      "rewrites": 0,
      "sanitized": 0,
      "patches": 0,
@@ -220,7 +220,7 @@
     {
      "file": "voxel_world.py",
      "src": "aeis.voxel_world",
-     "sha256": "59f6b67f0f0c2047",
+     "sha256": "c96c94ee03354211",
      "rewrites": 0,
      "sanitized": 0,
      "patches": 0,
@@ -231,7 +231,7 @@
     {
      "file": "vprim.py",
      "src": "aeis.vprim",
-     "sha256": "c76947ab75733cc7",
+     "sha256": "bb8decff1930e68a",
      "rewrites": 0,
      "sanitized": 0,
      "patches": 0,
@@ -266,7 +266,7 @@
     {
      "file": "world_learner.py",
      "src": "aeis.world_learner",
-     "sha256": "dff96d6120d1287f",
+     "sha256": "69ddbddd97489708",
      "rewrites": 8,
      "sanitized": 0,
      "patches": 0,
@@ -279,7 +279,7 @@
     {
      "file": "world_model.py",
      "src": "aeis.world_model",
-     "sha256": "027e62b8a72e839e",
+     "sha256": "d51abaddae091627",
      "rewrites": 4,
      "sanitized": 0,
      "patches": 0,
@@ -297,7 +297,7 @@
     {
      "file": "world_process.py",
      "origin": "lingshu_native_development",
-     "sha256": "950f3d9669ffaf5c"
+     "sha256": "9b736b05e11637c9"
     }
    ],
    "private_hits": []
@@ -307,7 +307,7 @@
     {
      "file": "activation.py",
      "src": "aeis.activation",
-     "sha256": "4bf1dff7c6f7a431",
+     "sha256": "f4632f5dd3245410",
      "rewrites": 0,
      "sanitized": 0,
      "patches": 1,
@@ -329,7 +329,7 @@
     {
      "file": "core.py",
      "src": "aeis.core",
-     "sha256": "1460511bd553df5b",
+     "sha256": "7e1ae4a7903e4cd5",
      "rewrites": 34,
      "sanitized": 2,
      "patches": 2,
@@ -530,7 +530,7 @@
     {
      "file": "hex_unit.py",
      "src": "aeis.hex_unit",
-     "sha256": "69d773a48b561334",
+     "sha256": "36594de8726159b6",
      "rewrites": 0,
      "sanitized": 0,
      "patches": 0,
@@ -590,7 +590,7 @@
     {
      "file": "hexgen_c1_real.py",
      "src": "experiments.hexgen_c1_real",
-     "sha256": "6ee446078ee08449",
+     "sha256": "1f3c99f7c01c9ce7",
      "rewrites": 0,
      "sanitized": 0,
      "patches": 0,
@@ -601,7 +601,7 @@
     {
      "file": "hexgen_multi_seed.py",
      "src": "experiments.hexgen_multi_seed",
-     "sha256": "c24a0951a6a86f1f",
+     "sha256": "d78b2cb5bfb05f56",
      "rewrites": 1,
      "sanitized": 1,
      "patches": 0,
@@ -636,7 +636,7 @@
     {
      "file": "hexgen_subject_split.py",
      "src": "experiments.hexgen_subject_split",
-     "sha256": "ff04264905b36903",
+     "sha256": "d41f1edf1137c019",
      "rewrites": 3,
      "sanitized": 0,
      "patches": 0,
