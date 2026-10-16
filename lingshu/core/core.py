@@ -1681,6 +1681,29 @@ class LayeredStore:
                       (key, str(value)))
             self._commit_locked()
 
+    @_transactional
+    def merge_meta(self, key: str, value_fn) -> Optional[str]:
+        """读改写单点：同一写事务内「读旧值 → `value_fn(old)` 算新值 → 写回」（#483）。
+
+        为什么必须是单点：`#483` 的自我模型快照要「先读回、再合并、后写」。若读与写
+        分处两次调用，读到的旧值在写入之前就可能被他方（另一实例 / 另一进程）改掉，
+        合并就建立在过期读数上。本方法把「读旧值」与「写新值」收进**同一条**写事务
+        （`@_transactional` ⇒ 最外层 `BEGIN IMMEDIATE` 先取写锁），故事务内读到的必是
+        最新已提交态，且其间无其他写者可插入——这是「不另加版本号也能免丢更新」的
+        根据（读-改-写窗口被事务与写锁闭合）。
+        返回被替换的旧值（键不存在则 None），供调用方判定/留痕。
+        """
+        with self._lock:
+            c = self.conn.cursor()
+            c.execute("SELECT value FROM engine_meta WHERE key = ?", (key,))
+            row = c.fetchone()
+            old = row[0] if row else None
+            new = value_fn(old)
+            c.execute("INSERT OR REPLACE INTO engine_meta (key, value) VALUES (?, ?)",
+                      (key, str(new)))
+            self._commit_locked()
+            return old
+
     @contextmanager
     def _structure_event_transaction(self):
         """结构事件工作单元；已有调用方事务时只释放自己的 savepoint。"""
@@ -5170,6 +5193,11 @@ class SpacetimeMemoryEngine:
         # 恢复结果（含失败）显式记入 `_self_restore`，供 self_check 观测（D-21/C-2）。
         self._self_restore = self._restore_self_model(identity)
         self.self_model._persist_hook = self._save_self_model
+        # #483：持久态**基线**（本实例「上次与库内同步时」的内存快照）。写前合并的
+        # 判据基准：字段值 == 基线 ⇒ 本实例自上次同步以来未改过该字段 ⇒ 采纳库内
+        # 现值（他方更新不丢）；≠ 基线 ⇒ 本实例改过 ⇒ 保留本实例值（字段级后写胜）。
+        # 构造点在恢复之后：基线即「启动时内存与库内一致」的那份快照。
+        self._self_model_baseline = self.self_model.to_dict()
         self._decay_thread = None
         self._running = False
         self._decay_wake = threading.Event()   # #37：可唤醒的等待（替代裸 sleep）
@@ -6190,15 +6218,58 @@ class SpacetimeMemoryEngine:
 
 
     def _save_self_model(self) -> None:
-        """把运行态自我模型整份写入 `engine_meta` 权威键（#33 落库出口）。
+        """把运行态自我模型写入 `engine_meta` 权威键（#33 落库出口）。
 
         由 `SelfModel._persist_hook` 在**模型的全部变更出口**（`update` /
         `record_value_change` / `update_trust_state`）回调，故 `record_value_change`
         这条由仓外自我认知引擎驱动的路径也被覆盖（旧实现该路径不落库 ⇒ `values`
         重启即回默认）。
+
+        #483（本笔 · 数据丢失 P0）：旧实现**不读库**，把本实例内存副本整份
+        `INSERT OR REPLACE` 回去 ⇒ 凡本实例内存落后于库（多进程共库时另一实例刚写过；
+        `import_all` 灾备恢复后内存未刷新），第一次普通写入就把别人的更新整份抹掉，
+        且 `integrity_ok=True` / `restore=restored`，无任何信号。现改为
+        **写前读回 ＋ 三方合并**（`_merge_self_model_value`，判据基准
+        `_self_model_baseline`），且读与写收在**同一写事务**内
+        （`LayeredStore.merge_meta`，最外层 `BEGIN IMMEDIATE` 先取写锁 ⇒ 读到的必是
+        最新已提交态，其间无写者可插入）。
+
+        削掉的判别力（边界，如实标注）：合并粒度是**字段级**——同一字段被两方并发
+        改写时仍后写者胜（不对 `trust_history` / `value_evolution` 做逐条归并，那属
+        语义裁定面）；且合并**不回填内存**（本实例内存保持原样，只是落库值不再抹掉
+        他方字段）。跨写者的同字段语义合并留设计者裁。
         """
-        self.store.set_meta(self.SELF_MODEL_META_KEY,
-                            json.dumps(self.self_model.to_dict(), ensure_ascii=False))
+        self.store.merge_meta(self.SELF_MODEL_META_KEY, self._merge_self_model_value)
+
+    def _merge_self_model_value(self, raw: Optional[str]) -> str:
+        """`LayeredStore.merge_meta` 的取值回调：读回库内快照，按字段判归属（#483）。
+
+        三方合并：基线（`_self_model_baseline`，本实例上次同步时的内存快照）／本实例
+        现值（local）／库内现值（disk）。字段归属判据＝**本实例是否改过**：
+          · `local[k] == base[k]` ⇒ 本实例未改过 ⇒ 采纳 `disk[k]`（他方更新不丢）；
+          · `local[k] != base[k]` ⇒ 本实例改过 ⇒ 保留 `local[k]`（本实例的变更不丢）。
+        基线在返回前更新为 `local`（**不是** merged）——内存未回填，故该字段仍处
+        「本实例未改动」态；若把基线置成 merged，下一笔写入就会把刚采纳的他方值
+        当成「本地改动」再覆写回去（第二笔写复活丢更新）。
+
+        库内快照不可解析（`raw` 坏）时按「无他方更新」处置（`merged = local`，与旧
+        行为同效）；无基线（理论上不会——构造器已置）亦同。
+        """
+        disk = None
+        if raw:
+            try:
+                disk = json.loads(raw)
+            except (TypeError, ValueError):  # 坏快照：按「无他方更新」处置，不阻断写入
+                disk = None
+        local = self.self_model.to_dict()
+        base = getattr(self, "_self_model_baseline", None)
+        merged = dict(local)
+        if isinstance(disk, dict) and isinstance(base, dict):
+            for k, v in disk.items():
+                if k in merged and merged[k] == base.get(k):
+                    merged[k] = v
+        self._self_model_baseline = local
+        return json.dumps(merged, ensure_ascii=False)
 
     def _load_self_snapshot(self) -> Optional[Tuple[Dict, str]]:
         """读库内自我模型快照，返回 `(data, source)`；无快照返回 None。
