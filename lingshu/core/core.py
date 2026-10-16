@@ -12977,6 +12977,30 @@ class SpacetimeMemoryEngine:
         边界（削掉的判别力）：本件**不**按结果严重度加权（issue 允许「由同一函数按
         结果严重度计算」；那需先裁定严重度来源，本件不引入）；`recall` 的排序仍会
         用 confidence 等其它信号。
+
+        #216（成功分支读同序列 open 负记忆 · 读侧接线）：失败 N 次的序列一旦成功，
+        旧实现**完全不读**负记忆——技能照常提取/强化，调用方从返回值里看不到任何
+        失败信息（负记忆表在技能面上「只写不读」）。现成功分支在建/升技能**之前**
+        用既有 `find_rejected_paths` 查**同序列**的 open 负记忆
+        （`path_type='action_sequence'`），命中即把读数
+        `neg_memory_open:<N>` 追加为该节点的标签（节点增量，返回类型仍是
+        `Optional[STNode]`——零契约变更）。
+        查询串＝`"操作序列失败：" + " > ".join(actions[:5])`，与失败分支写入
+        `register_rejected_path` 的 `description` **逐字同拼法** ⇒ 同序列必然命中
+        （含单步短序列；实测同序列 5 步 = 0.66、单步 = 0.31，均 > 阈值 0.15）。
+        边界（削掉的判别力，如实标注）：①读数走 **tags** 而非 content——不动正文
+        ⇒ 对 M5 去重（#225 的极性闸比正文二元组）与 `recall` 的文本面无任何影响；
+        代价是同一节点被多次强化且 N 变化时会累积多个计数标签（只增不删）；
+        ②匹配仍是**文本相似**（`char_bigram_jaccard > 0.15`）而非精确序列比对，
+        且失败分支写入的 `description` 带固定前缀「操作序列失败：」，短串之间会
+        因共享前缀 bigram 而越过阈值（实测异序列 `backup > verify > upload` 对
+        `deploy` 相似度 0.1778 ⇒ **可能虚报条数**）；③**不**拒绝成功技能化
+        （取向保守：照常提取/强化，只把读数带出）——fail-closed 拒绝不在本件边界内；
+        ④**不**新增 `subject_key`/`count` 结构化列（须升 `SCHEMA_VERSION`，属另一条
+        面，本件一字未碰）。
+        判据来源：本端（zcode 值守）2026-10-16 对 issue #216 的补充裁定「一项『无争议、
+        可直接落地』的读侧接线」（`.tmp/prowatch/reply216_ruling.md`）＋ 先例
+        `propose_promotion` 的读侧接线（`find_rejected_paths` + `path_type` 过滤）。
         """
         node = self.add_perception(
             f"[action_seq] {'成功' if success else '失败'}：{' > '.join(actions[:5])}（{outcome[:40]}）",
@@ -12984,6 +13008,14 @@ class SpacetimeMemoryEngine:
             tags=["action_sequence", "success" if success else "failure"]
                  + ([f"hint:{skill_hint}"] if skill_hint else []))
         if success and skill_hint:
+            # #216：先读同序列 open 负记忆，把读数带出（见上方 docstring）。
+            seq_key = " > ".join(actions[:5])
+            prior_failures = [
+                p for p in self.find_rejected_paths("操作序列失败：" + seq_key)
+                if p.get("path_type") == "action_sequence"]
+            if prior_failures:
+                self.store.tag_node(
+                    node.id, "neg_memory_open:%d" % len(prior_failures))
             # #200：绑定用**精确名称**（`get_skill_by_name`），不得用 `recall_skill`
             # 的 LIKE 子串召回——hint「备份」会命中「删除备份」并把备份步骤拼进
             # 删除技能、为删除技能增信（分诊表行 200 第 1 条）。
