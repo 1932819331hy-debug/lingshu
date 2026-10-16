@@ -255,8 +255,9 @@ def _importer_is_lingshu() -> bool:
 class _ComponentFinder:
     """meta_path finder：只对 `COMPONENT_NAMES` 生效，不走 cwd/空串条目。
 
-    被询问时（即 `sys.modules` 未命中——别名缺失）在受控面上查找；受控面命中
-    即返回 spec。受控面**未命中**时分两种（issue #275）：
+    被询问时（即 `sys.modules` 未命中——别名缺失）**一律先**在受控面上查找
+    （issue #750 已登记最小改动；此前宿主帧不查受控面）；受控面命中即返回 spec
+    ——**不论调用方是包内还是宿主**。受控面**未命中**时才分两种（issue #275）：
 
       · 调用栈来自 lingshu 包内（引擎自己的组件导入）⇒ 按「组件缺失」抛原生
         同文本 `ModuleNotFoundError`（**不**回落到 cwd 解析面），并告警；
@@ -276,15 +277,23 @@ class _ComponentFinder:
     def find_spec(self, fullname, path=None, target=None):
         if fullname not in COMPONENT_NAMES:
             return None
-        if not _importer_is_lingshu():
-            # issue #275：宿主进程发起的同名导入不属 lingshu 组件面 ⇒ 一律
-            # 交还后续 finder（由标准 PathFinder 按 sys.path 解析宿主自己的
-            # 模块）。**先于**受控面查找判定，故宿主绝不会被本守卫截走。
-            return None
+        # issue #750（已登记最小改动）：**先**查受控面，命中即返回受控实现——
+        # 不再按调用方分档短路。旧顺序为「宿主帧一律 return None（#275）」先于
+        # 受控面查找，于是宿主帧发起 `import vision` 这类白名单名导入时，
+        # 标准 PathFinder 会按 sys.path 解析到 cwd/脚本目录里的**同名毒模块**并
+        # 在引擎进程内执行（逃生口 LINGSHU_ALLOW_CWD_IMPORTS=1 打开时更直接）。
+        # 收口后：受控面（组件根 / PYTHONPATH 显式声明目录）有实现就**绝不**落到
+        # cwd；受控面未命中仍 `return None` 交还后续 finder（#275 语义逐字保留：
+        # 宿主自有同名模块依旧可解析）。
         roots = safe_search_path()
         spec = importlib.machinery.PathFinder.find_spec(fullname, roots)
         if spec is not None:
             return spec
+        if not _importer_is_lingshu():
+            # issue #275：宿主进程发起的同名导入不属 lingshu 组件面 ⇒ 受控面
+            # 未命中时交还后续 finder（由标准 PathFinder 按 sys.path 解析宿主
+            # 自己的模块）。
+            return None
         # 受控面缺失 ⇒ 按「组件缺失」失败（原生同文本异常 + 可观测告警）
         try:
             warnings.warn(
