@@ -10161,17 +10161,51 @@ class SpacetimeMemoryEngine:
         finally:
             if own_tx:
                 self.store.conn.commit()
-        tmp_path = "%s.tmp-%s" % (output_path, uuid.uuid4().hex[:8])
+        # #498（#330 修复的副作用）：`os.replace` 把目标换成**新 inode** ⇒
+        # ①新档权限取 `0o666 & ~umask`，**不继承**旧档权限——运维刻意对备份设的
+        #   `0600` 被静默放宽成 `0644`（全库导出含 `sensitivity=private` 条目、
+        #   自我层快照、action_logs ⇒ 同机其他用户可读，属信息泄露面）；
+        # ②目标是**符号链接**时，`os.replace` 替换的是**链接本身**（链接被换成
+        #   普通文件），链接指向的真实备份位置不再更新 ⇒ 静默的灾备失效。
+        # 旧实现 `open(output_path, "w")` 截断写**同一个 inode**，权限与符号链接
+        # 都自然保留（对照旧基准 e18562f）。
+        # 修法（最小 · 本件 #498）：目标先 `realpath` 穿透符号链接，临时件建在
+        # **真实目标同目录**（同卷原子性不丢）；`os.replace` 前把旧档权限位拷到
+        # 临时件（`os.stat` 跟随链接 ⇒ 取真实目标的 mode；目标不存在则跳过，
+        # 保持 umask 默认）。
+        # 判据来源：公开 issue #498 的参考补丁（`realpath` + `chmod(tmp,
+        # stat(target).st_mode & 0o7777)`）。用 `& 0o7777` 字面量而**不**在顶层
+        # `import stat`：加 `import stat` 会让 `tests/test_issue156_component_
+        # discovery.py` 的「未知裸名」判据 D2/D4a 变红（该件自证已锁定）。
+        # 边界（如实标注）：只搬**权限位**，不搬属主/属组（`chown` 需特权，未做）；
+        # 目标不存在时行为与改前逐字一致（umask 默认）；不引入目录 fsync（#330
+        # 面边界不变）；返回值 `path` 仍是**调用方给的**路径（对外契约不变）。
+        target_path = os.path.realpath(output_path)
+        tmp_path = "%s.tmp-%s" % (target_path, uuid.uuid4().hex[:8])
         # #698：覆盖已存在目标 ⇒ 显式上报（不改覆盖语义，只让「静默」消失）。
         # 读数取在 `os.replace` **之前**——replace 之后目标必在，届时再查恒为 True。
         overwrote_existing = os.path.exists(output_path)
         try:
             with open(tmp_path, "w", encoding="utf-8") as f:
                 json.dump(data, f, ensure_ascii=False, indent=2)
-            os.replace(tmp_path, output_path)
+            # #498：继承旧档权限（`os.stat` 跟随符号链接 ⇒ 取真实目标的 mode）。
+            # 目标不存在（新建备份）⇒ `FileNotFoundError` ⇒ 跳过，用 umask 默认。
+            try:
+                os.chmod(tmp_path, os.stat(target_path).st_mode & 0o7777)
+            except FileNotFoundError:
+                pass
+            os.replace(tmp_path, target_path)
         except BaseException:
             try:
                 if os.path.exists(tmp_path):
+                    # #498 反向腿：临时件可能刚被 chmod 成旧档的**只读位**——Windows
+                    # 上只读档删不掉（`os.remove` ⇒ PermissionError）⇒ 失败路径会留下
+                    # `.tmp-` 残件。清理前先尽力恢复可写（POSIX 上 unlink 只看目录
+                    # 权限，此步无害；Windows 上是必需的）。
+                    try:
+                        os.chmod(tmp_path, 0o600)
+                    except OSError:
+                        pass
                     os.remove(tmp_path)
             except OSError:
                 pass

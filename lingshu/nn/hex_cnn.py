@@ -296,20 +296,42 @@ def save_consolidated(kernels: Dict[str, np.ndarray], meta: Dict, path: str) -> 
 
     原子落盘：先写同目录临时档再 os.replace 顶替目标档——写入中途失败（含
     元数据不可序列化）时目标档保持原样，不会被先截断成空档/半截坏档。
+
+    #498（#393 修复的副作用）：`os.replace` 把目标换成**新 inode** ⇒ ①新档权限
+    取 `0o666 & ~umask`，不继承旧档刻意收紧的权限位（`0600` 固化档被静默放宽成
+    `0644`）；②目标是符号链接时替换的是**链接本身**（链接被换成普通档，真实
+    固化位置不再更新）。旧实现 `open(path, "w")` 截断写同一 inode，两者都保留。
+    修法：目标先 `realpath` 穿透链接（临时档建在真实目标同目录 ⇒ 同卷原子性
+    不丢），`os.replace` 前把旧档权限位拷到临时档（目标不存在则跳过，用 umask
+    默认）。用 `& 0o7777` 字面量而不在顶层 `import stat`（避免打掉 #156 组件
+    发现的「未知裸名」判据 D2/D4a）。边界：只搬权限位，不搬属主/属组。
     """
     payload = {"algo": ALGO, "consolidated": True,
                "kernels": {k: [round(float(x), 6) for x in v] for k, v in kernels.items()},
                **meta}
-    os.makedirs(os.path.dirname(path) or ".", exist_ok=True)
-    tmp = f"{path}.tmp-{os.getpid()}"
+    target = os.path.realpath(path)
+    os.makedirs(os.path.dirname(target) or ".", exist_ok=True)
+    tmp = f"{target}.tmp-{os.getpid()}"
     try:
         with open(tmp, "w", encoding="utf-8") as f:
             json.dump(payload, f, ensure_ascii=False, indent=1)
             f.flush()
             os.fsync(f.fileno())
-        os.replace(tmp, path)
+        try:
+            os.chmod(tmp, os.stat(target).st_mode & 0o7777)
+        except FileNotFoundError:
+            pass
+        os.replace(tmp, target)
     except BaseException:
         try:
+            # #498 反向腿：临时档可能刚被 chmod 成旧档的**只读位**——Windows 上只读
+            # 档删不掉（`os.unlink` ⇒ PermissionError）⇒ 失败路径留下 `.tmp-` 残件。
+            # 清理前先尽力恢复可写（POSIX 上 unlink 只看目录权限，此步无害）。
+            if os.path.exists(tmp):
+                try:
+                    os.chmod(tmp, 0o600)
+                except OSError:
+                    pass
             os.unlink(tmp)
         except OSError:
             pass

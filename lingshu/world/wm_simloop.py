@@ -838,14 +838,36 @@ class SimulationLoop:
             os.makedirs(os.path.dirname(os.path.abspath(out_path)), exist_ok=True)
             if overwrite:
                 # #324 口径：临时文件 + os.replace（原子、覆盖式语义保留）
-                tmp_path = "%s.tmp-%s" % (out_path, uuid.uuid4().hex[:8])
+                # #498（#324 修复的副作用）：`os.replace` 把目标换成**新 inode**
+                # ⇒ ①不继承旧档刻意收紧的权限位（如运维设的 `0600` 被静默放宽成
+                #   `0644`）；②目标是符号链接时替换的是**链接本身**（链接被换成
+                #   普通档，链接指向的真实产物不再更新）。旧实现
+                #   `open(out_path, "w")` 截断写同一 inode，两者都保留。
+                # 修法：目标先 `realpath` 穿透链接（临时档建在真实目标同目录 ⇒
+                # 同卷原子性不丢），`os.replace` 前把旧档权限位拷到临时档
+                # （目标不存在则跳过，用 umask 默认）。返回值仍回报调用方给的
+                # `out_path`（对外契约不变）。边界：只搬权限位，不搬属主/属组。
+                target_path = os.path.realpath(out_path)
+                tmp_path = "%s.tmp-%s" % (target_path, uuid.uuid4().hex[:8])
                 try:
                     with open(tmp_path, "w", encoding="utf-8") as f:
                         f.write(md)
-                    os.replace(tmp_path, out_path)
+                    try:
+                        os.chmod(tmp_path, os.stat(target_path).st_mode & 0o7777)
+                    except FileNotFoundError:
+                        pass
+                    os.replace(tmp_path, target_path)
                 except BaseException:
                     try:
                         if os.path.exists(tmp_path):
+                            # #498 反向腿：临时件可能刚被 chmod 成旧档的**只读位**——
+                            # Windows 上只读档删不掉（`os.remove` ⇒ PermissionError）
+                            # ⇒ 失败路径留下 `.tmp-` 残件。清理前先尽力恢复可写
+                            # （POSIX 上 unlink 只看目录权限，此步无害）。
+                            try:
+                                os.chmod(tmp_path, 0o600)
+                            except OSError:
+                                pass
                             os.remove(tmp_path)
                     except OSError:
                         pass
