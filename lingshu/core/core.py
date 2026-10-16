@@ -860,6 +860,17 @@ class SelfModel:
     def record_value_change(self, value: str, trigger: str):
         """价值观版本化：2.1.2 价值观修正事件可追溯。
 
+        .. deprecated:: lingshu #212（路 B）
+           本方法的语义是**全量替换（重置）**：`values = [value]`，整套价值观被
+           压成一条。**旧名与旧语义逐字保留**——仓外唯一调用方（自我认知引擎）
+           按两个位置参数调用，改签名或改缺省语义会**静默改变仓外行为**，故本名
+           不删、行为不动（向后兼容是硬约束 · #212 裁定理由 1）。新调用方请按
+           意图改用三个**条目级**显式入口（同 `_persist_hook` 出口）：
+             · `refine_value(old, new, trigger)` —— 只改指定条目（其余逐条仍在）；
+             · `add_value(value, trigger)`       —— 追加一条（列表变长，不抹既有）；
+             · `retire_value(value, trigger)`    —— 退役一条（其余仍在）。
+           保留原因：仓外调用方不可见、不可同步改；删除或改语义即断仓外契约。
+
         lingshu #212（无界增长）：旧实现每次调用为**每个** value 追加一条
         superseded、再追加一条新值 ⇒ 反复调用（含重复同一 value）令
         `value_evolution` 无上限增长（且重复同一 value 产生语义等价的冗余条目）。
@@ -886,6 +897,104 @@ class SelfModel:
         if len(self.value_evolution) > self.VALUE_EVOLUTION_MAX:
             self.value_evolution = self.value_evolution[-self.VALUE_EVOLUTION_MAX:]
         self._persist()  # #33：values 变更落库（旧实现只改内存，重启回默认）
+
+    # ---- 价值观条目级显式入口（lingshu #212 · 路 B）-----------------------------
+    #
+    # 记法（`trigger` 取值扩展 · **不新增列、不改表结构**）：旧方法的取值
+    # `"superseded"` 逐字保留；三个新入口用「前缀:目标条目|调用方原因」形态：
+    #   refine:<old>|<trigger>   条目 old 被 new 替换（记 old 与 new 两条）；
+    #   add:<value>|<trigger>    条目 value 新增（记 value 一条）；
+    #   retire:<value>|<trigger> 条目 value 退役（记 value 一条）。
+    # `trigger` 为**必填**（签名逐字对齐裁定原文）；空串/None 时省略 `|` 段，
+    # 故前缀与目标条目始终可解析。
+    #
+    # 三者的变更出口与旧方法**同一收口**：`_persist()`（即 `_persist_hook`，
+    # 引擎注入 `_save_self_model`）＋ `VALUE_EVOLUTION_MAX` 同款钳制；裸用场景
+    # （钩子为 None）与旧方法同款处理——空操作、不抛错。
+
+    def _append_value_evolution(self, entries: List[Dict]):
+        """条目级变更的统一出口：追加 → 钳制到 `VALUE_EVOLUTION_MAX` → 落库。
+
+        与 `record_value_change` 的钳制/落库手法逐字同款（对齐 `trust_history` /
+        `history` 的既有口径）；钳制保留**最近**（tail），与 I3 的既有语义一致。
+        """
+        self.value_evolution.extend(entries)
+        if len(self.value_evolution) > self.VALUE_EVOLUTION_MAX:
+            self.value_evolution = self.value_evolution[-self.VALUE_EVOLUTION_MAX:]
+        self._persist()
+
+    @staticmethod
+    def _evolution_trigger(prefix: str, target: str, trigger) -> str:
+        """拼 `value_evolution` 的 `trigger` 取值（前缀扩展记法 · 不新增列）。"""
+        base = "%s%s" % (prefix, target)
+        return base if not trigger else "%s|%s" % (base, trigger)
+
+    def refine_value(self, old: str, new: str, trigger: str) -> bool:
+        """**细化一条**价值观：只改指定条目，其余条目逐条仍在（lingshu #212 路 B）。
+
+        与旧名 `record_value_change`（全量替换）的关键差异：本方法**不动**其它
+        条目——`values` 中与 `old` 相等的条目原位替换为 `new`，列表长度不变。
+
+        幂等短路（对齐旧方法 `#212` 的既有手法，避免语义等价的冗余条目）：
+          · `old == new`，或 `old` 不在 `values` 中 ⇒ 无变化，返回 False，不记演化。
+
+        留痕：经 `_append_value_evolution` 记 **两条**——`old`（from=True→to=False）
+        与 `new`（from=False→to=True），二者 `trigger` 同为
+        `"refine:<old>|<trigger>"`（可据此成对分组）。
+
+        `trigger` 为调用方给出的原因（必填 · 签名逐字对齐裁定原文）。
+        返回：是否发生了变更（`bool`）。
+        """
+        if old == new or old not in self.values:
+            return False
+        self.values[self.values.index(old)] = new
+        trg = self._evolution_trigger("refine:", old, trigger)
+        now = time.time()
+        self._append_value_evolution([
+            {"value": old, "from": True, "to": False, "trigger": trg, "at": now},
+            {"value": new, "from": False, "to": True, "trigger": trg, "at": now},
+        ])
+        return True
+
+    def add_value(self, value: str, trigger: str) -> bool:
+        """**新增一条**价值观：列表变长，不抹掉既有条目（lingshu #212 路 B）。
+
+        旧实现只能 `values = [value]`（赋值＝重置），连「新增一条而不抹掉其余」
+        都表达不了；本方法做 append（`len(values)` +1）。
+
+        幂等短路：`value` 已在 `values` 中 ⇒ 无变化，返回 False，不记演化
+        （与旧方法 `#212` 的去重手法同款，防重复条目撑大 `values`）。
+
+        留痕：记 **一条** `value`（from=False→to=True），`trigger` 为
+        `"add:<value>|<trigger>"`。
+        返回：是否发生了变更（`bool`）。
+        """
+        if value in self.values:
+            return False
+        self.values.append(value)
+        self._append_value_evolution([{
+            "value": value, "from": False, "to": True,
+            "trigger": self._evolution_trigger("add:", value, trigger),
+            "at": time.time()}])
+        return True
+
+    def retire_value(self, value: str, trigger: str) -> bool:
+        """**退役一条**价值观：移除目标条目，其余条目逐条仍在（lingshu #212 路 B）。
+
+        幂等短路：`value` 不在 `values` 中 ⇒ 无变化，返回 False，不记演化。
+
+        留痕：记 **一条** `value`（from=True→to=False），`trigger` 为
+        `"retire:<value>|<trigger>"`。
+        返回：是否发生了变更（`bool`）。
+        """
+        if value not in self.values:
+            return False
+        self.values = [v for v in self.values if v != value]
+        self._append_value_evolution([{
+            "value": value, "from": True, "to": False,
+            "trigger": self._evolution_trigger("retire:", value, trigger),
+            "at": time.time()}])
+        return True
 
     def update_trust_state(self, t_total: float, round_no: int,
                            p_trust: float = None, p_gap: float = None):
