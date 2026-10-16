@@ -25,6 +25,7 @@ import time
 import math
 import uuid
 import os
+import sys
 import warnings
 import hmac as _hmac
 import threading
@@ -1322,6 +1323,13 @@ class LayeredStore:
         self.last_skipped_rows: List[str] = []
         #: #653 边侧逐行容错计数（每次装载面调用刷新；见 `_tolerant_edges`）。
         self.last_skipped_edges: List[str] = []
+        #: #775 访问计数旁路写的失败诊断读数——旧实现在 `increment_access_many`
+        #: 里 `except sqlite3.OperationalError: pass` ⇒ 写竞争下**静默少记**访问
+        #: 次数（该计数参与提权/降权、遗忘信号与检索排序次键），调用方无从知道。
+        #: 现：失败次数与末次错误原文落在实例上（可读、可断言），并随每次失败
+        #: 经 `warnings.warn` 上报——不再静默，但仍不阻断检索主流程。
+        self.access_count_write_failures: int = 0
+        self.last_access_count_error: Optional[str] = None
         self._structure_writer_active = bool(self.get_meta("structure_writer_schema"))
         if self._structure_writer_active:
             self.conn.execute("PRAGMA foreign_keys=ON")
@@ -1391,6 +1399,47 @@ class LayeredStore:
         self._local.slot = slot
         self._conns.add(slot)
         return slot
+
+    #: #775：本线程 `_tx` 嵌套深度的线程本地存储键（与线程级连接同域）。
+    @property
+    def _tx_depth(self) -> int:
+        """**本线程**的 `_tx` 嵌套深度（#775：从实例级改为线程本地）。
+
+        为什么必须线程本地：连接是**线程级**（`conn` property / `_connect`），
+        而旧实现把深度记在**实例**上。线程 A 把实例深度抬到 2 并持真写锁后，
+        线程 B 读到的是**别人的**深度 ⇒ `_structure_event_transaction` 判
+        `nested=True` 只发 `SAVEPOINT`、**不发 `BEGIN IMMEDIATE`** ⇒ 该结构事件
+        单元全程不持写锁，#36/#517 的「单元期间持写锁以保护快照」保证在跨线程
+        下失效（`SAVEPOINT` 也不开新事务，B 的写落在 autocommit 上）。
+
+        形态：`property` 转发到 `self._local`（`threading.local()`），故
+        ①对外仍是同名属性——`getattr(store, "_tx_depth", 0)` 的既有读者
+        （`_commit_locked` / `delete_node` / `_structure_event_transaction`
+        与仓内测试的桩）读到的是**本线程**的深度，单线程语义逐位不变；
+        ②`_local` 尚未建立时兜底返回 0（`__init__` 之前/极端早访问）。
+        """
+        _local = getattr(self, "_local", None)
+        return getattr(_local, "tx_depth", 0) if _local is not None else 0
+
+    @_tx_depth.setter
+    def _tx_depth(self, value: int):
+        self._local.tx_depth = value
+
+    @property
+    def _tx_owns_txn(self) -> bool:
+        """**本线程**最外层 `_tx` 帧是否自己开了真事务（#775 配套线程本地化）。
+
+        与 `_tx_depth` 同源：它只在「本帧 `_tx` 是最外层（depth==1）」时被赋值，
+        并被 `_commit_locked` 读来判「提交权是否在本层」（#317）。跨线程读到别人
+        的归属位会让本线程的最外层帧误判「自己只是别人的 SAVEPOINT」而放弃提交
+        ⇒ 同样必须随深度一起线程本地化。默认 True（与旧 `getattr(..., True)` 同）。
+        """
+        _local = getattr(self, "_local", None)
+        return getattr(_local, "tx_owns_txn", True) if _local is not None else True
+
+    @_tx_owns_txn.setter
+    def _tx_owns_txn(self, value: bool):
+        self._local.tx_owns_txn = value
 
     @property
     def conn(self) -> sqlite3.Connection:
@@ -2389,8 +2438,17 @@ class LayeredStore:
         `executemany`）与「是否刷新近因」（`touch`）二者**正交**——故同一条连接上
         按 `touch` 选择 `executemany` 的 SQL，两套语义并存。
 
-        失败容忍与旧实现一致：`sqlite3.OperationalError`（写锁持有 ⇒ 立即放弃）
-        整个批次一起吞掉——访问计数是统计性质，不阻断检索主流程。
+        失败容忍（#775 起**不再静默**）：`sqlite3.OperationalError` 仍不阻断检索
+        主流程，但经 `_note_access_count_failure()` 计数 + 留原文 + `warnings.warn`
+        上报——旧实现是 `pass`，写竞争下访问计数**静默少记**（详见类 docstring 与
+        `_note_access_count_failure`）。
+
+        ★`timeout=0` **保留不动**（刻意的非阻塞设计，非本缺陷）：本连接自开、
+        不经 `_connect`，故不继承 `busy_timeout=30000` —— 外部写锁持有时**立即**
+        放弃（裸 SQL 对照：同语句、同持锁态下必抛 `database is locked`），从而
+        绝不把 `recall` / `search_content` 的 touch 路径拖住最多 30 秒。本笔**只**
+        把「被吞掉的失败」改为「被上报的失败」，**不**改锁等待取向（改锁等待属
+        语义变更，见报告「取向题：要不要为访问计数等锁」）。
         """
         ids = [i for i in (node_ids or []) if i]
         if not ids:
@@ -2414,7 +2472,33 @@ class LayeredStore:
             finally:
                 obs.close()
         except sqlite3.OperationalError:
-            pass  # 计数失败可容忍（统计性质），不阻断检索
+            # #775：计数失败仍可容忍（统计性质、不阻断检索），但**不得静默**。
+            self._note_access_count_failure()
+
+    def _note_access_count_failure(self):
+        """上报一次「访问计数旁路写失败」（#775：取代旧实现的 `except …: pass`）。
+
+        三档读数（皆可读、可断言）：
+          ① `self.access_count_write_failures` 自增 —— 累计失败批次数；
+          ② `self.last_access_count_error` —— 末次错误原文（`类型: 消息`）；
+          ③ `warnings.warn` —— 每次失败即时上报（属既有审计动作，
+             `silent_except_lint` 认它；调用方可用 `pytest.warns` / 日志观测）。
+
+        为什么异常对象取自 `sys.exc_info()` 而不写成 `except … as exc`：
+        `increment_access_many` 有一处**既有静态守卫**
+        （`tests/test_core_nplus1_getstats_forgetadvisor.py` 的 K 组）逐字要求该
+        函数体内出现不带 `as` 的 `except sqlite3.OperationalError:`——本笔不为
+        迁就自身写法去改那条既有断言（守卫是既有的，改它属超范围）。
+        """
+        exc = sys.exc_info()[1]
+        self.access_count_write_failures = (
+            getattr(self, "access_count_write_failures", 0) + 1)
+        self.last_access_count_error = (
+            "%s: %s" % (type(exc).__name__, exc) if exc is not None else None)
+        warnings.warn(
+            "#775 访问计数写入失败（第 %d 次；该批已放弃，不阻断检索）：%s"
+            % (self.access_count_write_failures, self.last_access_count_error),
+            RuntimeWarning, stacklevel=3)
 
     # ---------- 边操作 ----------
 
