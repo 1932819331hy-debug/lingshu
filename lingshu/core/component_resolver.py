@@ -27,12 +27,14 @@ component_resolver · 组件发现面收口（lingshu issue #156）
 print/logging/warnings，构造期 stderr 为空），现在有可观测出口。
 
 v2 补强（issue #156 第二版）：
-  - `sys.path` 的 cwd/空串条目由 `lingshu._pathguard` 在**包首次 import 时**
-    全局消除（早于 core.py 的 `import json`）——本模块的 `_is_cwd_entry` 仍保留，
-    用于**包内帧**发起的白名单名导入在逃生口打开（cwd 条目仍在）时**依旧不**从
-    cwd 解析。**本句按调用方分档**（issue #750 实测口径）：宿主帧发起的同名导入
-    不在其内——宿主帧 `return None` 交还后续 finder（v3 段），由标准 `PathFinder`
-    按 `sys.path` 解析，逃生口打开时该面即含 cwd / 脚本目录条目。
+  - `sys.path` 的 cwd/空串条目由 `lingshu._pathguard` 在**包首次 import 时装
+    解析期拒绝 finder**（早于 core.py 的 `import json`）——#273 裁定（路 B）
+    起**不删条目**、只拒绝解析（命中 cwd 面 ⇒ 跳过该条目、在净化路径上继续
+    解析）。本模块的 `_is_cwd_entry` 仍保留，用于**包内帧**发起的白名单名导入在
+    逃生口打开（不装 finder、cwd 条目仍在）时**依旧不**从 cwd 解析。**本句按
+    调用方分档**（issue #750 实测口径）：宿主帧发起的同名导入不在其内——宿主帧
+    `return None` 交还后续 finder（v3 段），由标准 `PathFinder` 按 `sys.path`
+    解析，逃生口打开时该面即含 cwd / 脚本目录条目。
   - **脚本目录**（`python <script>.py` 形态的 `sys.path[0]`）同属「解释器隐式
     塞入的解析面」，不再被当作受控面 ⇒ 白名单名不从脚本目录解析（见
     `_is_script_dir_entry` / `_pathguard.main_script_dir`）。
@@ -41,9 +43,10 @@ v2 补强（issue #156 第二版）：
     不随 import 后的 `chdir` 漂移（旧实现吃判定时 cwd/argv0 ⇒ 启动目录被保留）。
 
 范围边界（精确）：本模块封的是**组件发现面**（白名单 15 名的裸名解析不经
-cwd/空串/脚本目录条目）；「消除一切经 `sys.path` 的裸名解析（含标准库）」由
-`lingshu._pathguard` 承担。同进程代码可读 `os.environ`（密钥面）与
-`sys.modules` 预置/别名冒充属**设计级**事项，不在本模块处理。
+cwd/空串/脚本目录条目）；「一切经 `sys.path` 的裸名解析（含标准库）的 cwd 面
+**解析期拒绝**」由 `lingshu._pathguard` 承担（#273 裁定 · 路 B：不删条目）。
+同进程代码可读 `os.environ`（密钥面）与 `sys.modules` 预置/别名冒充属**设计级**
+事项，不在本模块处理。
 
 v3 收窄（issue #275 · #156 v2 的回归）：上一版 finder 对白名单 15 个**通用顶层名**
 不区分调用方，找不到即 `raise` ⇒ 宿主项目里同名的自有模块（`vision.py` /
@@ -356,14 +359,19 @@ def discovery_report() -> dict:
         "configured_root_env": COMPONENT_ROOT_ENV,
         "configured_roots_set": bool(configured_roots()),
         "search_entries": len(safe_search_path()),
-        # cwd 类条目被挡在受控面之外的计数 = **仅计已由 _pathguard 从 sys.path
-        # 消除**的条目（`path_scrub.removed_count`）——这才是字面意义上的「已排除」。
+        # cwd 类条目被挡在受控面之外的计数 = **被 `_pathguard` 的解析期拒绝
+        # finder 拒绝解析**的 cwd / 空串条目数（`path_scrub.refused_cwd_entry_count`）
+        # ——路 B（#273 裁定）下这才是字面意义上的「已排除」：条目**仍留在**
+        # `sys.path` 里（宿主状态零改写），但其上的解析被跳过。
         # issue #338：旧式 `removed_count + _cwd_live` 把「已消除」与「仍存活于
         # sys.path、只是被本模块忽略」（逃生口打开时）两个**语义相反**的量相加，
         # 使「护栏生效」与「逃生口打开（放弃防护）」两状态下该字段读数相同（实测
-        # 均为 3）⇒ 计数无法反映防护是否生效。仍存活的 cwd 条目由下一字段
-        # `cwd_entries_in_sys_path` 单独给出，二者语义不同、不可相加。
-        "cwd_excluded_count": _pg["removed_count"],
+        # 均为 3）⇒ 计数无法反映防护是否生效。#273 路 B 后旧口径
+        # （`removed_count`）恒为 0 ⇒ 两状态不可区分，本字段改取「被拒解析」口径：
+        # 逃生口关（finder 在位）⇒ ≥1；逃生口开（不装 finder）⇒ 0。
+        # 仍存活的 cwd 条目由下一字段 `cwd_entries_in_sys_path` 单独给出，二者
+        # 语义不同、不可相加。
+        "cwd_excluded_count": _pg["refused_cwd_entry_count"],
         "cwd_entries_in_sys_path": _cwd_live,
         "script_dir_excluded": _main_script_dir() is not None,
         "script_dir_excluded_count": sum(1 for p in entries if _is_script_dir_entry(p)),
