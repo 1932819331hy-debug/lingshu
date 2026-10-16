@@ -1352,17 +1352,22 @@ class LayeredStore:
     #: 自动裁剪会与「审计只追加、无更新/删除路径」的既有声明契约冲突，保留窗口
     #: 的取值属设计者裁面（见 `prune_action_logs` docstring 与交付报告）。
     ACTION_LOGS_KEEP_ROWS = 10000
-    SCHEMA_VERSION = 2  # 建表块每新增表/列时 +1（配合 _init_tables 启动只读化守卫；
+    SCHEMA_VERSION = 3  # 建表块每新增表/列时 +1（配合 _init_tables 启动只读化守卫；
                         # 守卫已兼比结构 _SCHEMA_TABLES/_SCHEMA_COLUMNS，
                         # 版本号不再单独作「跳过建表块」的依据）
                         # v2：promotion_proposals 加 content_hash（#140）
+                        # v3：新增 designer_todos 待办表（#130 路 B）
+                        # ★为什么必须 +1（#130 路 B 裁定帖原文）：只把表加进
+                        # `_SCHEMA_TABLES` 而不升版本，**已有库**的启动只读化守卫
+                        # 会因「版本匹配 + 结构齐全」跳过整个建表块 ⇒ 新表永不被
+                        # 建出，登记待办时运行时报 `no such table: designer_todos`。
 
     # 只读化守卫的结构对照（_init_tables 的全部表 + 三处 ALTER 补出的列）：版本号
     # 与实际 DDL 无强制绑定，故守卫须兼比结构，否则「版本匹配但结构陈旧」的库永远补不上。
     _SCHEMA_TABLES = frozenset(('nodes', 'edges', 'blindspots', 'skills', 'promotion_proposals',
                                 'protections', 'rejected_paths', 'verifier_standards',
                                 'escalation_points', 'action_logs', 'engine_meta', 'gap_history',
-                                'flywheel_reuse'))
+                                'flywheel_reuse', 'designer_todos'))
     _SCHEMA_COLUMNS = {'nodes': ('semantic_coordinates', 'state_attributes', 'entity_id'),
                        'edges': ('source_evidence',), 'blindspots': ('predictability',),
                        'promotion_proposals': ('content_hash',)}
@@ -1839,6 +1844,26 @@ class LayeredStore:
             CREATE TABLE IF NOT EXISTS escalation_points (
                 id TEXT PRIMARY KEY, code TEXT, trigger TEXT, condition TEXT, action TEXT,
                 severity TEXT DEFAULT 'medium', enabled INTEGER DEFAULT 1, created_at REAL
+            )
+        ''')
+        # #130（路 B · 裁定帖原文）：「升级点由谁在何时消费」此前**整条链路缺失**
+        # ——`check_escalation` 是一张已定义、已播种、无人查的表，`needs_designer`
+        # 是一个已置位、无人读的标志。本表即那一格的落点：`needs_designer=True`
+        # 时把「待设计者裁决」登记成一行**可列举**的待办（`status='open'`），
+        # 使「已升级」这件事从返回体里的一句文案变成库内可查的事实。
+        # 命名体例与同区既有表一致（`rejected_paths` 的
+        # `id TEXT PRIMARY KEY … status TEXT DEFAULT 'open' … created_at/consumed_at`）。
+        # ★消费方**尚未接线**（如实标注）：本表当前只有登记面（
+        # `LayeredStore.add_designer_todo`）与只读列举面
+        # （`LayeredStore.list_designer_todos` / 引擎门面同名方法），**没有**任何
+        # 位置读它并推进 `status`（`open` → `consumed`）。方向按裁定帖对齐本仓
+        # 既有的设计者终裁唯一合规通路 `propose → verify → adjudicate`；具体消费点
+        # 与状态推进语义属**未决语义题**（裁定帖「存疑」节自陈未给出），本件不擅自
+        # 接线（见 `add_designer_todo` docstring 与交付报告）。
+        c.execute('''
+            CREATE TABLE IF NOT EXISTS designer_todos (
+                id TEXT PRIMARY KEY, code TEXT, claim TEXT, action TEXT,
+                status TEXT DEFAULT 'open', created_at REAL, consumed_at REAL
             )
         ''')
         # ---- v1.14 观测持久化（OBS-REV1：行为日志/引擎元数据落库，跨进程稳定） ----
@@ -6076,10 +6101,27 @@ class LayeredStore:
 
         issue #130：此开关先前**无授权、无审计**。现补齐与
         `adjudicate_promotion` **同款**的 fail-closed 密钥闸，并把变更写入
-        `action_logs`（审计留痕可查）。"""
+        `action_logs`（审计留痕可查）。
+
+        #130 路 B 补丁（**角色判**，裁定帖原文：「开关限 PRIMARY」）：密钥闸只回答
+        「调用方是否持有设计者密钥」，**不回答「这个实例该不该动共享治理表」**——
+        同一部署下 SUB 实例天然持有同一环境变量（`verify_designer` 只比对本进程
+        `AEIS_DESIGNER_KEY`，见其 docstring 的 #156 事实边界；#586 已就同一理由判定
+        「密钥闸不构成角色隔离」）⇒ SUB 持密钥即可关掉**共享治理表**里的全部升级点
+        （危机响应面被单方面解除，本端读数确认）。现按本类既有单点
+        `layer_writable_by_role` 的同款判据（共享层仅 PRIMARY 可写）补角色判：
+        **仅 `Role.PRIMARY` 可关**，SUB 即便持密钥也 `PermissionError`。
+        闸序：密钥闸在前（既有句面与行为**逐字保留**，无密钥时两处写点的报错文案
+        仍逐字一致——`tests/test_issue749_escalation_write_gate.py` F 组钉此），
+        角色闸在后。**`action_logs` 审计留痕保留不动**（被角色闸拒时零审计行：
+        拒在写之前，与无密钥路径同形）。"""
         if not verify_designer(designer_key):
             raise PermissionError(
                 "D-007 设计者认证失败：密钥无效或未配置 AEIS_DESIGNER_KEY（fail-closed）")
+        if self.role != Role.PRIMARY:
+            raise PermissionError(
+                f"role={self.role.value} 无权启停共享治理表的升级点"
+                "（升级点表跨实例共享，仅 PRIMARY 可写；SUB 持密钥亦拒）")
         c = self.conn.cursor()
         c.execute("UPDATE escalation_points SET enabled=? WHERE id=?",
                   (int(enabled), escalation_id))
@@ -6087,6 +6129,85 @@ class LayeredStore:
             "escalation_toggle",
             f"set escalation {escalation_id} enabled={bool(enabled)}",
             outcome={"escalation_id": escalation_id, "enabled": bool(enabled)})
+
+    # ---- #130（路 B）：升级点的「按 code 直查」面与「待设计者裁决」待办表 ----
+
+    def get_escalation_point_by_code(self, code: str) -> Optional[Dict]:
+        """按 `ESC-00x` **直查**一条升级点（精确匹配），查不到返回 `None`。
+
+        #130（路 B · 裁定帖原文）：「新调用点用 `ESC-00x` 直查（精确、可审计、
+        不受分词影响），**不动** `check_escalation` 现有的双向包含」。本方法即那个
+        直查单点——`WHERE code=?` 精确等值，**不**经 `check_escalation` 的
+        子串/双向包含面（分词、触发词长度、信号写法都不再影响命中）。
+
+        为什么不复用 `check_escalation`（如实标注）：后者的契约是「**信号** → 升级点」
+        的模糊匹配（`signal in trigger` 双向包含，见其 docstring），拿它做「我已知是
+        哪条 code，取回该条」会在语义上引入无关的匹配面（信号恰好含别的触发词时
+        返回多条）。两个面用途不同，故直查单列，**不改** `check_escalation`。
+
+        边界（削掉的判别力）：①同 code 多行时取 `rowid` 最小的一条（`code` 列无
+        唯一约束，`add_escalation_point` 不禁止重复登记同 code）；②**不**过滤
+        `enabled`——本方法是「取回该条」，启用与否由调用方判（`check_escalation`
+        才按 `enabled=1` 过滤）；③返回形状与 `list_escalation_points` 的单行同形
+        （NULL 经 `or ""` 归一，与 #656 同口径）。
+        """
+        c = self.conn.cursor()
+        c.execute("SELECT * FROM escalation_points WHERE code=? ORDER BY rowid LIMIT 1",
+                  (code,))
+        r = c.fetchone()
+        if not r:
+            return None
+        return {"id": r[0], "code": r[1], "trigger": r[2] or "", "condition": r[3] or "",
+                "action": r[4], "severity": r[5], "enabled": bool(r[6]),
+                "created_at": r[7]}
+
+    @_transactional
+    def add_designer_todo(self, code: str, claim: str, action: str) -> str:
+        """登记一条「待设计者裁决」待办（#130 路 B），返回待办 id。
+
+        为什么有这张表（裁定帖原文，问题重述）：「这一步缺的语义是『谁在什么时候查
+        升级点、查到之后系统进入什么状态』——`check_escalation` 是一张已定义、已播种、
+        无人查的表，`needs_designer` 是一个已置位、无人读的标志」。本表把「已升级」
+        从返回体里的一句文案变成库内可查的事实（`status='open'`）。
+
+        ★**消费方尚未接线**（如实标注，裁定帖「存疑」节自陈未给出具体消费点）：
+        本表当前只有**登记面**（本方法）与**只读列举面**（`list_designer_todos` /
+        引擎门面同名方法），**没有**任何位置读它并推进 `status`（`open` →
+        `consumed`，`consumed_at` 列因此恒为 NULL）。推进方向按裁定帖对齐本仓既有的
+        设计者终裁唯一合规通路 `propose → verify → adjudicate`；具体消费点与状态推进
+        语义属**未决语义题**，本件不擅自接线（不新造第二条终裁入口，见 `designer_decide`
+        一节的裁定理由）。
+
+        为什么**不**设 `verify_designer` 密钥闸（如实标注取舍）：登记动作由引擎**自身**
+        的三级终裁（`_terminal_judgment` 判 `needs_designer`）触发，不是「调用方注入
+        任意治理判据」——`recursive_reflect` 是公开 API、任何调用方都不持有设计者密钥，
+        给登记加密钥闸等于让登记在该路径上**永远不可能发生**（本表也就永远为空）。
+        与 #749 的播种分离同款判据：「程序自身的记录动作」与「运行期由调用方注入的
+        治理写」分开。代价（如实标注）：`claim` 文本由调用方控制、会落库；但本表
+        当前**零消费方**，故该文本不构成任何触发判据，也不改变任何既有行为。
+        """
+        tid = f"todo_{uuid.uuid4().hex[:8]}"
+        c = self.conn.cursor()
+        c.execute("INSERT INTO designer_todos VALUES (?,?,?,?,?,?,?)",
+                  (tid, code, claim, action, "open", time.time(), None))
+        self._commit_locked()
+        return tid
+
+    def list_designer_todos(self, status: str = None) -> List[Dict]:
+        """列「待设计者裁决」待办（只读面，缺省全列，可按 `status` 过滤）。
+
+        按 `created_at` 升序（同刻按 `rowid`，保证确定性）。**只读**：不推进任何
+        状态、不写审计（见 `add_designer_todo` 的「消费方尚未接线」段）。
+        """
+        c = self.conn.cursor()
+        if status is None:
+            c.execute("SELECT * FROM designer_todos ORDER BY created_at, rowid")
+        else:
+            c.execute("SELECT * FROM designer_todos WHERE status=?"
+                      " ORDER BY created_at, rowid", (status,))
+        return [{"id": r[0], "code": r[1], "claim": r[2], "action": r[3],
+                 "status": r[4], "created_at": r[5], "consumed_at": r[6]}
+                for r in c.fetchall()]
 
     # ---------- 统计 ----------
 
@@ -10244,6 +10365,21 @@ class SpacetimeMemoryEngine:
            问2 影响（预期输出/验证反馈·1.8）：predict_routes → 影响路线 + 分级
         3. 三级 终裁（维生系统·可逆性优先）：可逆性判定；重要决策升级设计者
         4. 归档（记录单元）：反思链写入行为日志 + 记忆（reflection_chain）
+
+        ★**返回契约**（#130 路 B 起，`status` 取值域**扩展一档**）：
+        - `"structural_blindspot"`：递归深度已达上限（3.12 运行约束），**不**归档；
+        - `"pending_designer"`：三级终裁判 `needs_designer=True`（不可逆 + 结构/存在级
+          影响）⇒ 已按 `ESC-002` 直查升级点并把「待设计者裁决」登记进 `designer_todos`
+          待办表（`verdict["todo_id"]`），**反思本身照常完成归档**（`high` 级只记录
+          不阻断，见 `_terminal_judgment` docstring）；
+        - `"reflected"`：其余情形（既有取值与语义**逐字不变**）。
+
+        ★**下游须同步**（如实标注）：这是返回契约的**扩展**，不是重命名——按
+        `report["status"] == "reflected"` 判「反思成功」的调用方，在升级场景下会
+        把 `pending_designer` 判为非成功。路 B 的语义正是「升级了、但反思照常完成」，
+        故调用方应改判 `status in ("reflected", "pending_designer")`（或用
+        `report["verdict"]["needs_designer"]` 判升级）。本件不改任何既有调用方，
+        也不改 `"reflected"` / `"structural_blindspot"` 两档的行为。
         """
         if depth >= max_depth:
             return {
@@ -10280,7 +10416,10 @@ class SpacetimeMemoryEngine:
         report["verdict"] = verdict
 
         # ---- 4. 归档（记录单元） ----
-        report["status"] = "reflected"
+        # #130 路 B：`needs_designer=True` ⇒ `status` 返回 `pending_designer`
+        # （其余取值与行为逐字不变；契约扩展与下游须同步见 docstring）。
+        report["status"] = ("pending_designer" if verdict.get("needs_designer")
+                            else "reflected")
         self._archive_reflection(report)
         return report
 
@@ -10475,7 +10614,35 @@ class SpacetimeMemoryEngine:
 
     def _terminal_judgment(self, claim: str, verification: dict,
                            impact: dict) -> dict:
-        """三级 终裁（维生系统）：可逆性优先 + 结构一致性（3.12 三级）。"""
+        """三级 终裁（维生系统）：可逆性优先 + 结构一致性（3.12 三级）。
+
+        #130（路 B · 裁定帖原文）：`needs_designer=True` 时，此前只把
+        `action` 写成文案「升级设计者裁决（`designer_decide`）」——而
+        `def designer_decide` **全仓无定义**（唯一命中就是这行字符串），
+        且**没有任何位置**因这次升级而落库/留痕 ⇒ `needs_designer` 是一个
+        「已置位、无人读」的标志。现按路 B 两处最小接线：
+        ① 按 `ESC-00x` **直查**升级点（`store.get_escalation_point_by_code`，
+           精确匹配、不经 `check_escalation` 的子串/双向包含面——分词与信号写法
+           都不再影响命中）；
+        ② 把这次升级登记成一行**待办**（`store.add_designer_todo`，
+           `designer_todos` 表），`action` 文案改为指向该待办 id。
+        ★**不新造 `designer_decide` 函数**（裁定帖理由：本仓设计者终裁已有唯一
+        合规通路 `propose → verify → adjudicate`；另造一个等于给结构层开第二条
+        终裁入口）。★`high` 级**只记录不阻断**：本方法**不**因升级而改变返回值
+        语义、不新增阻断分支（`needs_designer` 的判定与取值逐字不变）。
+        选 `ESC-002`（P0保护触发：结构威胁/信任崩溃）为直查目标——本方法触发升级
+        的判据正是「不可逆 + 结构/存在级影响」，与 `ESC-002` 的 trigger/condition
+        同面；**不**取 `ESC-006`（设计者预备变更，指设计者位置/权责分离，与本处
+        判据不同面）。若 `ESC-002` 不在场（表被清空且未补齐）⇒ 登记仍发生、
+        `escalation` 记 `None`，**不**抛（升级登记不依赖升级点表在场）。
+        边界（削掉的判别力）：①直查取的是**该条升级点的 id/severity**（可审计的
+        引用），**不**据此判定是否需要升级（判定仍由可逆性 + 影响级给出，#154 的
+        词表边界不变）；②登记**不设**密钥闸（理由见 `add_designer_todo` docstring）；
+        ③待办登记失败（表缺失/库只读 ⇒ `sqlite3.OperationalError`）**不**阻断反思
+        ——只兜这一类可预期降级（**不**用宽 `except`，以免把真实缺陷一并吞掉），
+        并如实降级为「未登记」文案（反思链是既有公开 API，登记是新增观测面，
+        不得让它反噬主流程）。
+        """
         # 可逆性判定（工程代理：行为类型的可逆度）
         # #154：旧实现纯子串匹配 ⇒ 「不删除」「别覆盖」等**否定式**被误判为
         # 不可逆并升级设计者裁决（假阳性，且「不删除…只读查询」连可逆词都压不住）。
@@ -10507,13 +10674,29 @@ class SpacetimeMemoryEngine:
         # 重要决策升级：不可逆 + 结构/存在级影响 → 设计者终裁
         needs_designer = (reversibility == "不可逆"
                           and impact.get("impact_level") in ("结构", "存在"))
-        return {
+        verdict = {
             "principle": "可逆性优先 + 结构一致性（3.12 三级）",
             "reversibility": reversibility,
             "needs_designer": needs_designer,
-            "action": ("升级设计者裁决（designer_decide）" if needs_designer
-                       else "本次反思范围内可处理（可逆/半可逆）"),
+            "action": ("本次反思范围内可处理（可逆/半可逆）"),
         }
+        if needs_designer:
+            # #130 路 B：按 code 直查 + 登记待办（只记录不阻断）。
+            esc = self.store.get_escalation_point_by_code("ESC-002")
+            verdict["escalation_code"] = "ESC-002"
+            verdict["escalation_id"] = esc["id"] if esc else None
+            verdict["escalation_severity"] = esc["severity"] if esc else None
+            try:
+                todo_id = self.store.add_designer_todo(
+                    "ESC-002", claim, "设计者终裁（不可逆 + 结构/存在级影响）")
+            except sqlite3.OperationalError:
+                # 表缺失/库只读等**可预期的降级面**（见 docstring 边界③）：
+                # 只兜这一类（**不**宽 except——宽兜会把真实缺陷一并吞掉）。
+                todo_id = None
+            verdict["todo_id"] = todo_id
+            verdict["action"] = ("已登记待设计者裁决（待办 #%s）" % todo_id
+                                 if todo_id else "升级设计者裁决（待办登记失败）")
+        return verdict
 
     def _archive_reflection(self, report: dict) -> None:
         """记录单元归档：反思链 → 行为日志 + 记忆节点（reflection_chain）。"""
@@ -11423,10 +11606,15 @@ class SpacetimeMemoryEngine:
     #: #691 P0-b：清单此前漏掉运行时建的 `flywheel_reuse`（复用观测），
     #: 「全库备份」不覆盖它 ⇒ 重启即丢；现该表已收进 `_init_tables`
     #: （构造期即建）并补进本清单与 `_SCHEMA_TABLES`。
+    #: #130（路 B）：`designer_todos` 同款——它由 `_init_tables` 构造期建出
+    #: （见该表 DDL 段注释），故必须同进两处清单，否则「全库备份」不含待办、
+    #: 且 `test_issue270_m13_table_coverage_guard` 的
+    #: `_SCHEMA_TABLES ⊆ M13_TABLES` 不变量当场红。
     M13_TABLES = ("nodes", "edges", "blindspots", "skills", "promotion_proposals",
                   "protections", "rejected_paths", "verifier_standards",
                   "escalation_points", "entities",
-                  "action_logs", "engine_meta", "gap_history", "flywheel_reuse")
+                  "action_logs", "engine_meta", "gap_history", "flywheel_reuse",
+                  "designer_todos")
 
     def _existing_tables(self) -> Set[str]:
         """当前库实际存在的表名（以 sqlite_master 为准，不假设 DDL 全集）。"""
@@ -12486,6 +12674,14 @@ class SpacetimeMemoryEngine:
         边界（如实标注）：本闸只判「实例角色 × 库归属」，不判 `designer_key` 的持有
         者身份——A-2 的密钥闸取自进程环境变量，同部署下 SUB 天然持有（`#586` 已就
         同一理由判定「密钥闸不构成角色隔离」），故本闸是本写点唯一的角色隔离面。
+
+        #130（路 B · 裁定帖原文）：「`_terminal_judgment` 与 `adjudicate_verifier_standard`
+        按 `ESC-00x` 直查升级点，不再走子串匹配」。本方法即那两处调用点之一——`approved`
+        分支按 `ESC-005`（「验证标准终裁 / 验证标准变更四步制衡第④步」，与本方法同面）
+        **直查**（`store.get_escalation_point_by_code`，`WHERE code=?` 精确等值，不经
+        `check_escalation` 的双向包含面），并把该升级点的 id/severity 记进结构记录
+        metadata。★**只记录不阻断**：升级点缺席 ⇒ 记 `None`、不抛；`enabled` 不参与
+        判定；终裁的返回契约与事务边界**逐字不变**。
         """
         # 提交与发布都持锁，后续终裁才能基于刚提交的配置继续修改。
         with self.store._lock:
@@ -12516,11 +12712,25 @@ class SpacetimeMemoryEngine:
                         record = (f"{result['param']}="
                                   f"{self._verifier_config.get(result['param'], result['value'])}"
                                   f" 终裁通过（{adjudicator}）")
+                        # #130（路 B · 裁定帖原文）：本调用点此前与升级点表**零接触**
+                        # ——「验证标准变更四步制衡第④步」正是内置 `ESC-005` 的
+                        # condition，却从无代码按 code 去查它（`check_escalation` 的
+                        # 子串面也够不着：调用方手里的是 vid/param，不是信号文本）。
+                        # 现按 `ESC-00x` **直查**（精确、可审计、不受分词影响），
+                        # 把该升级点的 id/severity 记进本次结构记录 metadata ⇒
+                        # 「终裁发生了、它对应哪条升级点」成为库内可查的事实。
+                        # ★**只记录不阻断**：不因升级点缺席/被停用而改变终裁行为
+                        # （缺席 ⇒ 记 None，不抛；`enabled` 不参与判定）。
+                        _esc = self.store.get_escalation_point_by_code("ESC-005")
+                        _meta = {"standard_id": vid, "param": result["param"],
+                                 "value": self._verifier_config.get(result["param"],
+                                                                    result["value"]),
+                                 "escalation_code": "ESC-005",
+                                 "escalation_id": _esc["id"] if _esc else None,
+                                 "escalation_severity": _esc["severity"] if _esc else None}
                         self._write_structure_record(
                             record, "verifier_standard", source=adjudicator,
-                            metadata={"standard_id": vid, "param": result["param"],
-                                      "value": self._verifier_config.get(result["param"],
-                                                                         result["value"])},
+                            metadata=_meta,
                             _cursor=cursor)
             except BaseException:
                 # 盘上已随工作单元回滚；内存配置必须一并回退（见 docstring）。
@@ -12577,16 +12787,37 @@ class SpacetimeMemoryEngine:
     # ---- A-3 升级点清单化 ----
 
     def _seed_escalation_points(self):
-        """A-3 默认升级点（对齐 3.15/3.16/12.1；仅空表时播种）
+        """A-3 默认升级点（对齐 3.15/3.16/12.1；按 code 校验**补齐**）
 
         #749：播种走 `store._insert_escalation_point` **裸写**，不经带
         `verify_designer` 闸的 `store.add_escalation_point`——6 条是源码常量、
         属构造期初始化（`__init__` 调用本方法），不能要求部署方为「程序自带的
         默认值」配置密钥。守卫 `tests/test_issue749_escalation_write_gate.py`
         的 E 组锁住这条分离（改回带闸方法 ⇒ 未配置密钥的构造即抛 ⇒ 红）。
+
+        #130（路 B · 裁定帖原文）：「`_seed_escalation_points` 由『仅空表播种』
+        改为『按 code 校验补齐』：表非空但**缺某条内置 code** 时须补上该条；
+        已有 code 的行**不动**（不覆盖、不改写）」。旧口径（`if 表非空: return`）
+        把「表非空」当作「播种已完成」的证据，而两者不等价：任何一次运行期
+        `add_escalation_point`（或 `import_all` 回灌新 id 行）都会让表非空，此后
+        内置 6 条**永久补不齐**——危机响应面上静默缺格，且无任何信号。
+        新口径按**内置 code 集合**逐条校验（判据＝本方法内的 `seeds` 常量，
+        与表内容无关），缺哪条补哪条。
+
+        边界（削掉的判别力，如实标注）：
+        ① 只判「内置 code 在不在」，**不**校验已有行的 trigger/condition/action/
+           severity 是否被改写（裁定帖明写「已有 code 的行不动」，故**不**回写、
+           不「修正」——即便某行被改成了别的语义，本方法也不覆盖）；
+        ② 同 code 重复行（`add_escalation_point` 不禁止）视为「该 code 在场」，
+           不删除、不合并（去重属另一条面）；
+        ③ `enabled` 状态不在校验面内：内置 code 存在但被停用 ⇒ 视为在场、
+           不重新启用（启停是治理动作，构造期无权代作）。
         """
-        if self.store.list_escalation_points(enabled_only=False):
-            return
+        # #130：判据取「**按 code 直查**已播种集合」而非「表是否非空」。
+        # 走 `list_escalation_points` 一次取回（只读、常数代价：内置 6 行 +
+        # 运行期新增行），不逐条发 6 次点查。
+        present = {(p.get("code") or "") for p in
+                   self.store.list_escalation_points(enabled_only=False)}
         seeds = [
             ("ESC-001", "自维持迹象", "自主目标生成/存在危机感知", "立即上报维生系统", "high"),
             ("ESC-002", "P0保护触发", "结构威胁/信任崩溃", "维生系统终裁：冻结/回滚/隔离", "high"),
@@ -12596,11 +12827,29 @@ class SpacetimeMemoryEngine:
             ("ESC-006", "设计者预备变更", "设计者位置/权责分离相关", "维生系统终裁（1.4.3）", "high"),
         ]
         for code, trigger, condition, action, severity in seeds:
+            if code in present:
+                continue          # 已有 code 的行**不动**（不覆盖、不改写）
             self.store._insert_escalation_point(code, trigger, condition, action,
                                                 severity)
 
     def list_escalation_points(self, enabled_only: bool = True) -> List[Dict]:
         return self.store.list_escalation_points(enabled_only)
+
+    def get_escalation_point_by_code(self, code: str) -> Optional[Dict]:
+        """按 `ESC-00x` 直查一条升级点（#130 路 B · 引擎门面，透传 store 单点）。"""
+        return self.store.get_escalation_point_by_code(code)
+
+    def list_designer_todos(self, status: str = None) -> List[Dict]:
+        """列「待设计者裁决」待办（#130 路 B · **只读**列举面）。
+
+        ★**消费方尚未接线**（如实标注）：本方法只列举、不推进状态——仓内**没有**
+        任何位置读 `designer_todos` 并把 `status` 由 `open` 推进到 `consumed`
+        （`consumed_at` 因此恒为 NULL）。推进方向按 #130 裁定帖对齐本仓既有的设计者
+        终裁唯一合规通路 `propose → verify → adjudicate`；**具体消费点与状态推进
+        语义属未决语义题**（裁定帖「存疑」节自陈未给出），故本件只提供这一只读接口，
+        不擅自接线（见 `LayeredStore.add_designer_todo` docstring）。
+        """
+        return self.store.list_designer_todos(status)
 
     def add_escalation_point(self, code: str, trigger: str, condition: str,
                              action: str, severity: str = "medium",
