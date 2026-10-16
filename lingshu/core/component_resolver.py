@@ -29,7 +29,10 @@ print/logging/warnings，构造期 stderr 为空），现在有可观测出口�
 v2 补强（issue #156 第二版）：
   - `sys.path` 的 cwd/空串条目由 `lingshu._pathguard` 在**包首次 import 时**
     全局消除（早于 core.py 的 `import json`）——本模块的 `_is_cwd_entry` 仍保留，
-    用于逃生口打开（cwd 条目仍在）时白名单名**依旧不**从 cwd 解析。
+    用于**包内帧**发起的白名单名导入在逃生口打开（cwd 条目仍在）时**依旧不**从
+    cwd 解析。**本句按调用方分档**（issue #750 实测口径）：宿主帧发起的同名导入
+    不在其内——宿主帧 `return None` 交还后续 finder（v3 段），由标准 `PathFinder`
+    按 `sys.path` 解析，逃生口打开时该面即含 cwd / 脚本目录条目。
   - **脚本目录**（`python <script>.py` 形态的 `sys.path[0]`）同属「解释器隐式
     塞入的解析面」，不再被当作受控面 ⇒ 白名单名不从脚本目录解析（见
     `_is_script_dir_entry` / `_pathguard.main_script_dir`）。
