@@ -11565,7 +11565,13 @@ class SpacetimeMemoryEngine:
         try:
             import sys as _s
             _kb = r'<local-path> Files\2_ai\knowledge-base'
-            if _kb not in _s.path:
+            # issue #381：只接受**绝对**条目。相对条目（含空串 / `.`）的解析目标
+            # 由判定时的 cwd 决定（判据同 `lingshu/_pathguard.py::_is_relative_entry`）
+            # ⇒ 插进 `sys.path` 等于把本包 import 期刚消除的 cwd 面还给**普通**
+            # import：cwd 下任何同名裸模块（含标准库名）可被抢先执行。白名单组件名
+            # 由 `component_resolver` 的 meta_path finder 拦截、不受此影响；受影响的
+            # 恰是非白名单裸名，故本处一律不插相对条目。
+            if os.path.isabs(_kb) and _kb not in _s.path:
                 _s.path.insert(0, _kb)
             from pattern_separation import PatternSeparation
             ps = PatternSeparation(self)
@@ -11582,7 +11588,9 @@ class SpacetimeMemoryEngine:
         try:
             import sys as _s
             _kb = r'<local-path> Files\2_ai\knowledge-base'
-            if _kb not in _s.path:
+            # issue #381：同 `pattern_separation_scan`——只接受绝对条目，
+            # 相对条目的解析目标由 cwd 决定，不得插进 `sys.path`。
+            if os.path.isabs(_kb) and _kb not in _s.path:
                 _s.path.insert(0, _kb)
             from scene_reconstruction import SceneReconstruction
             sr = SceneReconstruction(self)
