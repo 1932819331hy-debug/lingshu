@@ -11539,7 +11539,7 @@ class SpacetimeMemoryEngine:
         #378（**回灌面**，外部报告人 @hawkongz 2026-10-12 追加评论）：写侧
         `add_perception` / `add_node` / `tag_node` 的 `tags` 列已过 `_dumps_tags` 的
         代理码点判据（含 U+D800–U+DFFF ⇒ `ValueError`），而**回灌面**此前绕过该判据：
-        备份里 tags 列是**转义后的 ASCII 文本**（存量行形态即字面量 `\ud83d`），经本
+        备份里 tags 列是**转义后的 ASCII 文本**（存量行形态即字面量 `\\ud83d`），经本
         方法 `json.loads` 回来仍是含真代理码点的 str ⇒ 毒行**重新造出**，实测无异常、
         `integrity_ok=true`、列内含转义代理、库仍可继续写入（**零信号**）。该毒行随后
         会让 `longterm_gate.write_snapshot` 的「已存在分支」UPDATE 抛
