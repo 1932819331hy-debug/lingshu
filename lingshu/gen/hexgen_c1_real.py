@@ -59,7 +59,13 @@ SHAPES = ("circle", "triangle", "square", "rectangle", "diamond", "hexagon",
 COLORS = ("red", "green", "blue", "yellow", "orange", "purple", "pink",
           "black", "brown", "gray", "white")
 PATTERNS = ("plain", "striped", "dotted")
-#   方位短语（prompt 被截断到 64 字符 ⇒ 一律按**前缀**匹配）→ 允许的格子集合（r0..r8）
+#   方位短语（prompt 被**截断** ⇒ 一律按**前缀**匹配）→ 允许的格子集合（r0..r8）
+#   ⚠ #736：本表**逐字保留**（含历史上按当时语料回填的截断键 `upper le`/`right s`/`top cen`/`bott` …
+#   ——它们决定「已能解析的输入」的读数，动它们会改既有读数），**新覆盖一律走 `_zone_cells` 的
+#   推导分支**（见其 docstring）：本表解不出的截断形态由「以它开头的键」求并集补出。
+#   旧实现只做本表的最长前缀匹配 ⇒ 表外截断点**静默**返回 `cells=None`（实测本机 8 条完整模板
+#   按 64 字符截断时 **6/8** 漏判；65/66/67/68 分别漏 6/4/2/1 条）。推导后漏判只剩「空串 / 无匹配
+#   词」，且**本表能解析的输入读数逐字不变**（守门 `tests/test_issue736_zone_truncation_cover.py`）。
 ZONE_CELLS = {
     "upper left": {"r0"}, "upper le": {"r0"}, "upper l": {"r0"}, "top left": {"r0"},
     "top center": {"r1"}, "top cente": {"r1"}, "top cent": {"r1"}, "top cen": {"r1"},
@@ -73,6 +79,36 @@ ZONE_CELLS = {
     "lower right": {"r8"}, "lower ri": {"r8"}, "bottom right": {"r8"},
     "top": {"r0", "r1", "r2"}, "bott": {"r6", "r7", "r8"}, "bottom": {"r6", "r7", "r8"},
 }
+
+
+def _zone_cells(zone_text):
+    """**截断的**方位短语 → 允许的格子集合（issue #736）。判据（两条，均可源端复核）：
+
+    ① **表内最长前缀**（与旧实现逐字同口径）：`zone_text` 以某键开头 ⇒ 取**最长**那个键的值。
+       这一支保证「旧表已能解析的输入」读数**逐字不变**（含 `'top c'` 命中键 `'top'` 这类
+       「被更粗的键遮蔽」的既有读数——那是同族另一面，不在本条点名范围，**不擅自扩面**）。
+    ② **推导支**（表内解不出时才走）：取**所有以 `zone_text` 开头的键**的值**求并集**——
+       `zone_text` 是这些完整/半完整短语的**前缀**，方位只能落进它们的并集
+       （`'le'` ⇒ `left*` ⇒ {r0,r3,r6}；`'lower l'` ⇒ {r6}；`'ri'` ⇒ {r2,r5,r8}；
+       `'bo'` ⇒ {r6,r7,r8}；`'upper r'` ⇒ {r2}）。空串 / 无匹配 ⇒ `None`
+       （判据不适用 ⇒ 保守不判，与旧口径一致）。
+
+    ⚠ 为什么改成「表 + 推导」而不是继续往表里补截断点：截断点是**截断长度**的函数，补不完
+    （每条短语的每个前缀都要列），且漏一个就是**静默** `None`。推导把覆盖与截断长度解耦。"""
+    if not zone_text:
+        return None
+    hit = [p for p in ZONE_CELLS if zone_text.startswith(p)]
+    if hit:
+        return set(ZONE_CELLS[max(hit, key=len)])
+    cut = [p for p in ZONE_CELLS if p.startswith(zone_text)]
+    if not cut:
+        return None
+    out = set()
+    for p in cut:
+        out |= ZONE_CELLS[p]
+    return out
+
+
 RING = 8
 TOL = 40                     # 前景阈值：网格中点；随报告给出面积曲线证明不敏感
 TOL_GRID = (20, 30, 40, 60, 80)
@@ -112,11 +148,7 @@ def parse_prompt(p):
     if pat and pat not in ("striped", "dotted"):
         return None
     zone_text = re.sub(r"\s*(area)?\s*,?\s*(plain)?\s*$", "", rest.strip()).strip()
-    cells = None
-    for phrase in sorted(ZONE_CELLS, key=len, reverse=True):      # 最长前缀优先
-        if zone_text.startswith(phrase):
-            cells = ZONE_CELLS[phrase]
-            break
+    cells = _zone_cells(zone_text)          # #736：表内最长前缀优先 + 表外截断推导
     return {"n": NUM_WORDS[num], "color": color, "pattern": pat or "plain",
             "shape": shape, "zone_text": zone_text, "cells": cells}
 

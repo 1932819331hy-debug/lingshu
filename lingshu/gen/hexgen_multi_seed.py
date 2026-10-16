@@ -164,6 +164,23 @@ def measure(items, d=4):
     return out, fit0
 
 
+def _stab_order_key(r):
+    """`summarize` ① 号指标的**规范行序**键（issue #735）。
+
+    ① 号块按「**相邻**两张是否一致」比较，而相邻关系由 `reads` 的**行序**决定——行序是
+    调用方给的、指标语义里没有它。故比较前先按本键排成**规范序**：先 seed（数值序；外部
+    调用方可能给字符串/None ⇒ 退化到 `str` 序，仍确定性），再按读出内容（同 seed 重复渲染
+    时用它定序）。键是**全序** ⇒ 排序结果只由 `reads` 的**多重集**决定 ⇒ 稳定性读数与行序无关；
+    命令行两条路径（`--gen`/`--measure`）产出的行序恰为 seed 升序 ⇒ 读数**逐位不变**。"""
+    seed = r.get("seed")
+    try:
+        sk = (0, float(seed))
+    except (TypeError, ValueError):
+        sk = (1, str(seed))
+    return (sk, str(r.get("n_read")), str(r.get("shapes")), str(r.get("colors")),
+            str(r.get("patterns")), str(r.get("cells")))
+
+
 def summarize(reads, items):
     """三件事的数字：①读出稳定性 ②真值兑现率 ③件内方差 vs 类间差。"""
     by_sid = {}
@@ -172,10 +189,15 @@ def summarize(reads, items):
     truth_of = {it["sid"]: it["truth"] for it in items}
 
     #   ① 同 prompt 多张之间的读出稳定性（多重集一致性 + 数量一致性）
+    #   ⚠ #735：本块是「相邻两张是否一致」，故**必须先规范化行序**——否则同语料换行序会读出
+    #   不同稳定度（实测同一批 {3 circle, 2 square}：seed 序 0.75 vs 交错序 0.0）。稳定度是
+    #   「同一批渲染之间读出是否一致」的**集合性质**，不该依赖输入的排列（守门
+    #   `tests/test_issue735_multi_seed_stability_order.py`：同多重集任意置换 ⇒ 读数逐位相同）。
     stab = {"shape": [], "color": [], "pattern": [], "count": [], "cell": []}
     for sid, rs in by_sid.items():
         if len(rs) < 2:
             continue
+        rs = sorted(rs, key=_stab_order_key)
         for k in ("shapes", "colors", "patterns", "cells"):
             stab["shape" if k == "shapes" else k[:-1]].append(
                 sum(1 for a, b in zip(rs, rs[1:]) if a[k] == b[k]) / (len(rs) - 1))
