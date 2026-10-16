@@ -2663,6 +2663,17 @@ class LayeredStore:
         同一条因果事实被记录 k 次（`add_edge` 不合并平行边）时路径数是 k⁵——6 节点
         无环链 k=12 即 248832 条 / 3.5s / 669MB，k=24 约 800 万条使长驻进程 OOM
         （issue 实测）。达到上限即停止枚举（结果被截断）。
+        #482（本件）：上列上限**只数「命中 end 的结果」** ⇒ 终点不可达时
+        `len(all_paths)` 恒 0、上限永不触发，DFS 照样走完 `max_depth` 内的全部简单
+        路径（k=12 平行边链：不可达查询 271453 次节点展开 / 2.1s，同图可达查询仅
+        94 次）。现改为**按终态分支计数**（`enumerated`：完整路径 / 截断分支 / 死
+        胡同 / 回边收口各计 1），预算在不可达分支上同样生效。
+        语义边界（如实标注）：① 预算现可能被死胡同/截断分支耗尽 ⇒ 返回的完整路径
+        可能少于 `max_paths`（旧实现只在结果数达上限时截断）；② 是否耗尽在
+        `causal_stats.budget_exhausted`/`.enumerated` 上外传（不静默）；③ 死胡同仍
+        不标 `truncated`（#328 F 组口径不变）；④ issue 建议的「反向可达集剪枝」
+        **不在本件**——`max_depth` 偏紧时会误剪仍可达终点的节点，属判别力取舍，
+        须设计者裁（复核意见已点名）。
         边界（削掉的判别力，如实标注）：① 达到上限时返回的是**前 max_paths 条**
         （非全量），调用方无法从返回类型区分「就这么多」与「被截断」；② issue
         建议 1（`add_edge` 合并平行边 + 存量库迁移）**不在本件**（会改写入语义）。
@@ -2693,15 +2704,34 @@ class LayeredStore:
         # 显式栈：#385——帧=(当前节点, 到达路径, 到达前的路径节点集, 深度)。
         # `on_path` 等价递归版的 `visited`（沿当前路径的节点集合，回溯时消失）。
         # 子帧按边序**逆序**入栈 ⇒ 出栈顺序与递归版的正向遍历逐字一致。
+        # #482：预算从「只数**命中终点的结果**」改为「数**已穷尽的终态分支**」
+        # （`enumerated` = 命中 end 的完整路径 ＋ 到深度预算仍有出边的截断分支 ＋
+        # 死胡同/仅非因果出边 ＋ 回边收口）。旧实现只判 `len(all_paths) >= max_paths`，
+        # 而 `all_paths` **仅在到达 end_id 时增长** ⇒ 终点不可达时该值恒 0、上限永不
+        # 触发：DFS 照样走完 `max_depth` 以内的全部简单路径（本机实测 k=12 平行边 6 节点
+        # 链：不可达查询 271453 次节点展开 / 2.1s，且随 k 指数上升；同图可达查询仅 94 次）。
+        # 本分支的遍历是一棵「帧树」（每帧只入栈一次、弹出一次），**叶子＝终态分支**，
+        # 树深 ≤ max_depth+2 ⇒ 帧数 ≤ max_paths×(max_depth+2)：工作量与**图规模无关**，
+        # 只随两个预算增长。实测（max_paths=1000、max_depth=5）：k=4/8/12/16 的不可达
+        # 查询分别 1334/1145/1094/1070 次节点展开（旧实现 1365/37449/271453/…，随 k
+        # 指数上升）；1500 节点长链不可达查询 1500 次（= 链长，远低于预算上界）。
+        # 可达分支读数不变（同图 k=12 可达查询仍 94 次展开、1000 条）。
+        # 语义边界（如实标注）：预算现在也可能被**死胡同/截断分支**耗尽 ⇒ 此时返回的完整
+        # 路径可能**少于** max_paths（旧实现只在结果数达上限时截断）；预算是否耗尽在
+        # `causal_stats.budget_exhausted` / `.enumerated` 上显式外传（不静默），且**不**把
+        # 死胡同标成 `truncated`（#328 F 组口径：死胡同 ≠ 链太长）。
+        enumerated = 0
         stack = [(start_id, [], frozenset(), 0)]
         while stack:
             current_id, path, on_path, depth = stack.pop()
-            if len(all_paths) >= max_paths:
+            if enumerated >= max_paths:
                 continue
             if current_id == end_id and path:
                 all_paths.append(CausalChain(path))
+                enumerated += 1
                 continue
             if current_id in on_path:
+                enumerated += 1
                 continue
             if max_depth is not None and depth > max_depth:
                 # #328 预算耗尽。**必须先确认本节点仍有出边**（与不传 end_id 分支的
@@ -2712,14 +2742,20 @@ class LayeredStore:
                         truncated_all.append(CausalChain(path, truncated=True))
                     else:
                         truncated_dropped += 1
+                enumerated += 1
                 continue
             next_on = on_path | {current_id}
             edges = self.get_outgoing_edges(current_id)
+            pushed = 0
             for edge in reversed(edges):
-                if len(all_paths) >= max_paths:
+                if enumerated >= max_paths:
                     break
                 if edge.relation_type.value in type_set:
                     stack.append((edge.target_id, path + [edge], next_on, depth + 1))
+                    pushed += 1
+            if not pushed:
+                # 死胡同（无出边，或出边全被 relation_types 滤掉）：该分支穷尽。
+                enumerated += 1
         # 完整路径优先：先按长度与平均置信度排序；截断证据次之（同口径排序），
         # 使「已有完整解」时首元素仍是最短完整路径（既有调用方读数不变）。
         all_paths.sort(key=lambda p: (len(p), -sum(e.confidence for e in p)/len(p)))
@@ -2731,6 +2767,10 @@ class LayeredStore:
                 "complete": len(all_paths),
                 "truncated": len(truncated_all) + truncated_dropped,
                 "truncated_dropped": truncated_dropped,
+                # #482：预算是否被耗尽（含被死胡同/截断分支耗尽的情形）+ 实际枚举的
+                # 终态分支数——终点不可达时上限照样生效，且这一点**可观测**（不静默）。
+                "budget_exhausted": enumerated >= max_paths,
+                "enumerated": enumerated,
             })
         return paths
 
@@ -5993,6 +6033,10 @@ class SpacetimeMemoryEngine:
         800 万条使长驻进程 OOM（issue 实测）。达到上限即停止枚举。
         边界（削掉的判别力，如实标注）：达上限时返回**前 max_paths 条**，未加
         `truncated` 标记（会改返回类型/元素语义，波及 #145 的 CausalChain 契约）。
+        #482（本件）：`end_id` 分支的上限原先只数「命中 end 的结果」⇒ 终点不可达
+        时上限永不触发（该分支的绕过点与计数口径详见 `infer_causal_paths`）。现按
+        **终态分支**计数，不可达查询的工作量同样受 `max_paths` 约束；不传 `end_id`
+        的分支不受影响（其上限本就挂在 `chains` 条数上）。
 
         #385：`collect` 由**递归**改**显式栈**（帧含节点、到达路径、路径节点集、
         深度与**边迭代器**）——旧实现递归深度 = 链长 = `max_depth`，1500 节点线性
@@ -10181,6 +10225,14 @@ class SpacetimeMemoryEngine:
         而非「拒绝整次导入」——取此口径以保持既有返回体形状与「部分恢复」语义
         （nodes 等完好表照常导入），同时把「恢复了损坏备份」当场暴露。
 
+        #482（本件）：上列预筛的实现曾是**list 成员判断**——`orphan_rows = [r for r
+        in rows if r not in keep]` 对 `keep` 逐 dict 比较（约 E²/2 次比较，本机实测
+        E=8000：3.20e7 次 / 3.1s；E=4000：8.0e6 次 / 0.8s），且与同一写事务内的批量
+        `INSERT` 共处一个事务、全程持有写锁 ⇒ 共库进程等到 `busy_timeout` 后报
+        `database is locked`。现改为**单趟分区**（集合成员判断 + 一次遍历同时产出
+        keep/orphan）⇒ O(E)；判据与返回体逐字不变（`orphan_edges` /
+        `orphan_edges_sample` / `integrity_ok` 的语义与顺序均不动）。
+
         返回值指标口径（**勿与 `verify_integrity()` 的 `orphan_edges` 混用**）：
         `dangling_rows` 是**按「违规行」去重**的计数——导入后跑 `PRAGMA
         foreign_key_check`，该指令对**每一条**被违反的外键约束各回一行；同一行若
@@ -10298,9 +10350,27 @@ class SpacetimeMemoryEngine:
             # （`M13_TABLES` 中 nodes 先于 edges），故备份自带的合法端点已被覆盖。
             if table == "edges":
                 node_ids = {r[0] for r in c.execute("SELECT id FROM nodes")}
-                keep = [r for r in rows
-                        if r.get("source_id") in node_ids and r.get("target_id") in node_ids]
-                orphan_rows = [r for r in rows if r not in keep]
+                # #482：旧实现 `orphan_rows = [r for r in rows if r not in keep]` 是
+                # **list 成员判断**——对 `keep` 逐 dict 比较 ⇒ 约 E²/2 次比较
+                # （本机实测 E=8000：3.20e7 次 / 3.1s；E=4000：8.0e6 次 / 0.8s），
+                # 且与同一 `_transactional` 写事务内的批量 INSERT 共处一个事务、
+                # 全程持有写锁 ⇒ 共库进程等到 busy_timeout 后报 `database is locked`。
+                # 现改为**单趟分区**：判据逐字仍是 `source_id/target_id in node_ids`
+                # （集合成员判断，均摊 O(1)），一次遍历同时产出 keep 与 orphan ⇒ O(E)。
+                # 语义等价（含边界）：①满足判据的行必然以**同一对象**出现在 `keep`
+                # 里（list `in` 先按身份命中）⇒ 旧 `orphan_rows` 恰是「不满足判据者」；
+                # ②不满足判据的行不可能 `==` 某个 keep 行（dict 相等蕴含键值全等，
+                # 端点值也就相等 ⇒ 自相矛盾）；③两列表都按原行序一次成形。故重复边、
+                # 缺键、None 端点、同端点异形状行一律落 orphan，与旧判据逐字相同。
+                # 判据来源：公开 issue #482（一）；守卫 tests/test_issue482_resource_regression_guard.py。
+                keep = []
+                orphan_rows = []
+                for r in rows:
+                    if (r.get("source_id") in node_ids
+                            and r.get("target_id") in node_ids):
+                        keep.append(r)
+                    else:
+                        orphan_rows.append(r)
                 rows = keep
                 # #674：边角色闸（与 `add_edge` 同口径、同一真源
                 # `_assert_edge_endpoints_role`）——#586 的导入角色闸只扫
