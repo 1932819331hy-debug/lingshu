@@ -376,6 +376,58 @@ def _find_standalone_word(text: str, word: str) -> int:
         start = i + 1
 
 
+def _scan_esc_number(text: str, i: int):
+    """从 `text[i]` 起扫描**完整数字词元**，返回其结束下标；扫描不出返回 `None`。
+
+    词元形态：`[+-]? ( digits [ "." digits* ] | "." digits ) [ ("e"|"E") [+-]? digits ]`
+    —— 指数段**必须**带数字才被吸收（`"1e"` / `"1e+"` 不算指数，其尾随由调用方
+    判为截断）。
+
+    ★#747：旧实现只吃 `isdigit()` 与 `"."`，`1e3` 被读成 `1`（**静默截断**到
+    `1.0`）。本函数把词元读**全**（含指数段）——词元之后是否合法由
+    `_parse_escalation_value_bound` 按尾随字符判。
+    """
+    n = len(text)
+    j = i
+    if j < n and text[j] in "+-":
+        j += 1
+    int_start = j
+    while j < n and text[j].isdigit():
+        j += 1
+    has_int = j > int_start
+    if j < n and text[j] == ".":
+        j += 1
+        frac_start = j
+        while j < n and text[j].isdigit():
+            j += 1
+        if not has_int and j == frac_start:
+            return None
+    elif not has_int:
+        return None
+    if j < n and text[j] in "eE":
+        k = j + 1
+        if k < n and text[k] in "+-":
+            k += 1
+        exp_start = k
+        while k < n and text[k].isdigit():
+            k += 1
+        if k > exp_start:
+            j = k
+    return j
+
+
+def _esc_has_second_comparison(text: str) -> bool:
+    """`text` 里是否还有第二个比较符、或独立词 `and`/`or`。
+
+    #747：本解析器只认**单个**简单比较。`"value > 0.1 and value < 0.2"` 这类复合
+    条件若只取首个界，会让后半静默失效 ⇒ 检出即让调用方**回落**（`None`），不猜。
+    """
+    if any(ch in "<>=!" for ch in text):
+        return True
+    return (_find_standalone_word(text, "and") >= 0
+            or _find_standalone_word(text, "or") >= 0)
+
+
 def _parse_escalation_value_bound(condition: str):
     """从升级点 `condition` 文本解析 `value <op> <number>` 数值界（#57）。
 
@@ -387,6 +439,27 @@ def _parse_escalation_value_bound(condition: str):
     `deviation` 而非 `value`，**不**被判为数值界（否则会给既有 token 用法
     `check_escalation("deviation")` 引入「无值即不匹配」的回归）。
     允许前后有其它文字（如 `"value > 0.9 时上报"`）。
+
+    ★#747（本件）：数字扫描原先只吃 `isdigit()` 与 `"."`，`1e3` 被读成 `1`
+    （**静默截断**成 `> 1.0`）——含指数记法/尾随子串的写法会被静默钳到前缀值，
+    从而反转触发语义。现改为读**完整数字词元**（`_scan_esc_number`，含指数段），
+    并把三类「读不准」显式回落为 `None`：
+    · **词元被截断**：其后紧跟标识符字符或点（`"0.5xyz"` / `"1and2"` / `"1.2.3"`）；
+    · **复合条件**：词元之后还有第二个比较符或独立词 `and`/`or`（如
+      `"value > 0.1 and value < 0.2"`）——**不**只取首个界（那会让后半静默失效）；
+    · **不可表示**：`float()` 溢出为 `±inf`（`"1e400"`）。
+      判据是**失效方向**：`value < inf` 对一切有限值恒真 ⇒ 该升级点**无条件触发**
+      （危机触发器里最危险的方向）；`value > inf` 恒假。两者都不是书写者能预期的
+      界 ⇒ 一律 `None` 回落，不猜。
+    边界（削掉的判别力，如实标注）：
+    ① 下溢（`"1e-400"` → `0.0`）**不**拒绝：`0.0` 是 IEEE 对该字面量的正确近似，
+       且两侧（`>`/`<`）都与书写意图同向、不会造成无条件触发。故 `1e-400` 解析为
+       `('>', 0.0)`。
+    ② `None` 的语义仍是「回落字符串包含匹配、`value` 不参与」（#57 既有契约）
+       ——对复合条件/畸形尾随/不可表示而言，这不是**更严**的取向，只是**不猜**；
+       若某条升级点的 `condition` 文本恰好含信号词，回落路径仍可能按文本命中。
+       要求值复合条件需表达式引擎，属架构级选择，不在本件范围。
+    ③ 只认单个简单比较；`==`/`!=` 同受②约束（`"value == 0.5 and ..."` 亦回落）。
     """
     if not condition:
         return None
@@ -406,18 +479,20 @@ def _parse_escalation_value_bound(condition: str):
     i += len(op)
     while i < len(condition) and condition[i] in " \t":
         i += 1
-    j = i
-    if j < len(condition) and condition[j] in "+-":
-        j += 1
-    digits_start = j
-    while j < len(condition) and (condition[j].isdigit() or condition[j] == "."):
-        j += 1
-    if j == digits_start:
+    j = _scan_esc_number(condition, i)
+    if j is None:
         return None
     try:
         threshold = float(condition[i:j])
     except ValueError:
         return None
+    if not math.isfinite(threshold):
+        return None                       # 溢出：1e400 ⇒ ±inf（不猜，见 docstring）
+    tail = condition[j:]
+    if tail[:1].isalnum() or tail[:1] in ("_", "."):
+        return None                       # 词元被截断：0.5xyz / 1and2 / 1.2.3
+    if _esc_has_second_comparison(tail.lstrip(" \t")):
+        return None                       # 复合条件：只认单个简单比较
     return (op, threshold)
 
 
