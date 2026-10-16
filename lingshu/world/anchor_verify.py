@@ -86,7 +86,9 @@ class AnchorVerification:
         channel: visual/tactile/audio/action/prediction/search/graph
         evidence: 该通道证据强度 [0,1]（1=完全支持，0=完全反对）
         strong: 显式指定强弱；缺省按通道类型（tactile/action/audio=强）
-        observation_tick: 同一观测时刻只可推进一次稳定轮数。
+        observation_tick: 同一观测时刻只可推进一次稳定轮数；**更早时刻的证据照常
+            入账**（含另一通道迟到的读数）并照常更新 registry，只是不推进稳定轮数
+            （#499：本参数语义是「同刻合并」，不是丢弃陈旧观测的接收闸）。
         evidence_id: 同通道重复递交同一证据时幂等（含 registry 更新）。
         缺省时每次提交视为一次新观测；verify 本身不产生新证据。
         """
@@ -99,10 +101,17 @@ class AnchorVerification:
         if evidence_id is not None and key in seen:
             return self.anchor_state(anchor_id)
         if observation_tick is not None:
-            if observation_tick < rec.get("_latest_tick", observation_tick):
-                return self.anchor_state(anchor_id)
-            rec["_latest_tick"] = observation_tick
-            rec["_round"] = ("tick", observation_tick)
+            # #499：`_latest_tick` 只是「是否推进稳定轮数」的游标，**不是接收闸**。
+            #   原实现按 `observation_tick < _latest_tick` 提前 return ⇒ 更早 tick 的
+            #   证据被整条丢弃：多通道传感器乱序到达时（触觉/行动类强通道天然慢一拍），
+            #   另一通道迟到的强反证既不进 channel_evidence 也不进 registry，读数仍是
+            #   「已被触觉反驳却 ACCEPT_strong」——与 #400/#402 的 fail-closed 方向相反，
+            #   也与本参数声明不符（docstring「同一观测时刻只可推进一次稳定轮数」、
+            #   迁移文档「可传 observation_tick 合并同刻证据」：tick 的语义是同刻合并）。
+            #   故：证据照常入账，只有「比已见时刻更新」时才把 `_round` 前移。
+            if observation_tick >= rec.get("_latest_tick", observation_tick):
+                rec["_latest_tick"] = observation_tick
+                rec["_round"] = ("tick", observation_tick)
         else:
             self._evidence_seq += 1
             rec["_round"] = ("submission", self._evidence_seq)
