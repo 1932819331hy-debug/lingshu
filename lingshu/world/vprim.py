@@ -180,6 +180,12 @@ def parse_anchor(text: str) -> Optional[VPrim]:
         （`world3d.build_camera_observation` / `add_vprim` 只校验有限数）。故坐标
         本就是**有符号**量，读回侧正则必须收 `-?\\d+`；旧式 `\\d+` 是读回侧单方面
         收窄了格式 ⇒ 自家 `anchor_text()`/`describe()` 的负坐标产物读不回。
+      - `axb` 段（宽高）同样允许**负号**（#753）：`describe()` 的宽高由 `x2-x1`/
+        `y2-y1` 求得，x2<x1 的退化框（如目标被检出框反向包含）会产出 `-40x-40`。
+        旧式宽高段只收非负数字 ⇒ 该段**整体匹配不上**，而 `conf=` 被同一个可选组
+        `(?: 空白 + 宽高 + conf=值 )?` 包住 ⇒ 连带吞掉 conf 组，置信度**静默降级**
+        为默认 0.5（不报错、不告警）。故宽高与坐标一样是有符号量，读回侧须收可选
+        负号；conf 组并改用**具名组**，避免以后再加捕获组时位置索引错位。
       - 正则不再带可变长前缀（旧式 `([\\w\\-]+)@\\(` 的无边界前缀在长词串上
         平方回溯：`'a'*16000` 实测 0.69s，调用方 core.world3d build / vprim_query
         对库内 content 不截断 → 可被内容拖垮）。现改为先定位字面量 `@(`
@@ -191,7 +197,7 @@ def parse_anchor(text: str) -> Optional[VPrim]:
 
     m = re.search(
         r"@\((-?\d+),(-?\d+),(-?\d+),(-?\d+)\)"
-        r"(?:\s+\d+x\d+\s+conf=([0-9]*\.?[0-9]+))?", text)
+        r"(?:\s+-?\d+x-?\d+\s+conf=(?P<conf>[0-9]*\.?[0-9]+))?", text)
     if not m:
         return None
     i = m.start()
@@ -202,7 +208,7 @@ def parse_anchor(text: str) -> Optional[VPrim]:
         return None
     cat = text[j:i]
     x1, y1, x2, y2 = (int(g) for g in m.groups()[:4])
-    conf = float(m.group(5)) if m.group(5) else 0.5
+    conf = float(m.group("conf")) if m.group("conf") else 0.5
     return VPrim(category=cat, bbox=(x1, y1, x2, y2),
                  confidence=conf, source="anchor")
 
