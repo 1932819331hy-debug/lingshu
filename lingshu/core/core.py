@@ -1620,6 +1620,19 @@ class LayeredStore:
             c.execute("ALTER TABLE promotion_proposals ADD COLUMN content_hash TEXT DEFAULT ''")
         except Exception:
             pass
+        # #778-F4（加固不对称）：本表**不声明** `FOREIGN KEY(node_id) REFERENCES
+        # nodes(id)`——对照边表（`edges` 有两条 `REFERENCES nodes(id)` ＋ #93 孤儿
+        # 边预筛），`protections` 既无外键也无孤儿闸，故 `PRAGMA foreign_key_check`
+        # **结构上覆盖不到它**：含孤儿保护行（`node_id` 指向不存在节点）的备份可
+        # 无报错落库、`integrity_ok` 仍为 True，且该行随 `export_all` 继续传播。
+        # 为何**不**补外键（如实标注取舍）：本仓每个连接都开 `PRAGMA foreign_keys=ON`
+        # （#93），补上外键后**含孤儿保护行的备份**（正是本缺陷的现场）会在
+        # `import_all` 的通用写腿抛 `FOREIGN KEY constraint failed` 并**中断整次
+        # 导入**——与 #93 当年必须先补「孤儿边预筛」是同一个坑，而导入侧的对称预筛
+        # 落在 `import_all` 内（本笔范围外）。故取「**独立孤儿检查 ＋ 完整性面上报**」
+        # 路线，判据真源＝`LayeredStore.orphan_protection_rows`（单一实现，无第二份
+        # 判据），上报面＝`SpacetimeMemoryEngine.verify_integrity` / `export_all`。
+        # 旧库兼容：本表 DDL 逐字未改（无 schema 变更），旧库无需迁移。
         c.execute('''
             CREATE TABLE IF NOT EXISTS protections (
                 node_id TEXT PRIMARY KEY, reason TEXT, created_at REAL
@@ -3285,6 +3298,19 @@ class LayeredStore:
         #29③：KNOWLEDGE 层**置信度**（非内容）随时间回落——未确证断言不得
         因重复写入而永久为真；已确证（confidence=1.0）与受保护节点不衰减。
 
+        #781（口径声明 · **只声明现状、不改语义**）：`archived` 与 `no_forget` 在
+        两条遗忘路径上**不等价**。本函数的情境层删除段经 `_is_forget_protected`
+        判定，只认 `no_forget` 标签 ∪ `protections` 行登记，**不认 `archived`**
+        ⇒ 仅带 `archived` 的情境节点照样被本路径删除（实测：仅 `archived` 的节点
+        经 200 轮 `decay_cycle` 已消失，同批 `no_forget` 者仍在）；而
+        `SpacetimeMemoryEngine.forget_advisor` 的跳过条件是
+        `"no_forget" in tags or "archived" in tags` ⇒ **认 `archived`**（仅带
+        `archived` 者被跳过、不归档也不删）。故「归档即保护」的直觉在两条路径上
+        结论相反。本件**不**统一两者（是否让 `decay_cycle` 也认 `archived` 属设计
+        面裁定），仅把现状显式落到注释，防日后无声漂移。判据来源：公开 issue #781
+        第 4 点 ＋ 本端独立读数（`tests/test_issue778_781_forget_protection_guard.py`
+        的 G6 钉住该分叉）。
+
         #115：`OPPOSITE`（冲突）边**免疫普通衰减**。冲突边是 `register_conflict`
         建的「矛盾记忆」标记（confidence=0.3、verified=False），旧实现与普通未验证
         边同列衰减（`WHERE e.verified = 0`）⇒ 约 55 轮后 confidence<0.1 被 DELETE，
@@ -3914,6 +3940,16 @@ class LayeredStore:
         角色检查，SUB 可对结构层节点伪造 `promotion_pending`/`conflict` 等标签，改变
         PRIMARY 的治理状态。判据来源：公开 issue #234「期望行为：共享层节点的标签、
         保护、冲突登记也只允许 PRIMARY 修改」＋「建议修复 4」。
+
+        #781（可审计）：打 `no_forget` 标签时落一条 `action_logs`（与 `add_node` 的
+        `protected_node_overwritten` 同例）。该标签是**遗忘保护的第二个真源**
+        （`_is_forget_protected`：`no_forget` ∈ tags ∪ `protections` 行），一旦打上
+        即永久豁免 `decay_cycle` 与 `forget_advisor` 两条遗忘路径，而旧实现打标
+        **零审计**（`action_logs` 增量 0）⇒ 保护名单可被非属主单向扩张却无留痕。
+        审计**只**加在 `no_forget` 这一支，不扩到全部标签面（避免大面积行为变更）。
+        边界（如实标注）：本件只补审计，**不**新增 `untag_node` / `unprotect_node`
+        回收入口，也**不**给 `no_forget` 加配额或审批——那两条属设计取向（谁有权把
+        一条记忆标成不可遗忘），见 issue #781 回帖。
         """
         if self.role != Role.PRIMARY:
             n = self.get_node(node_id)
@@ -3936,10 +3972,23 @@ class LayeredStore:
         if own_tx:
             self.conn.execute("BEGIN IMMEDIATE")
         node = self.get_node(node_id)
+        added = False
         if node and tag not in node.tags:
             node.tags.append(tag)
             c = self.conn.cursor()
             c.execute("UPDATE nodes SET tags=? WHERE id=?", (_dumps_tags(node.tags), node_id))
+            added = True
+        # #781：只对 `no_forget` 落审计（幂等：重复打标不重复留痕——`added` 为真
+        # 才记，避免同一事实被反复刷进审计面）。
+        if added and tag == "no_forget":
+            self.log_action(
+                "no_forget_tagged",
+                f"节点 {node_id} 被打上 no_forget 标签（#781）：该标签是遗忘保护的"
+                f"第二个真源（protections 行之外），豁免 decay_cycle 与 "
+                f"forget_advisor 两条遗忘路径；仓内无 untag 入口",
+                node_ids=[node_id],
+                outcome={"layer": node.layer.value, "role": self.role.value,
+                         "tag": tag})
         if own_tx:
             self._commit_locked()
 
@@ -4394,22 +4443,56 @@ class LayeredStore:
         `no_forget` 改成 `protections` 表的派生视图（issue 并列的第二条建议属设计
         取舍，未采纳）；②`_lock` 为进程内锁、跨进程无效，故用 DB 级 `BEGIN IMMEDIATE`；
         ③已在事务中（嵌套调用）则不插手，交由外层边界。
+
+        #778-F3（数据损坏 · 前置存在性）：本方法此前**先写后查**——旧实现先
+        `INSERT OR REPLACE INTO protections` 再 `get_node(node_id)` ⇒ 拼错 id、
+        传 `None`/空串**一律静默成功**，`protections` 落一条**孤儿行**（`nodes` 无此
+        节点），且该行成为**潜伏保护**：之后同 id 建节点即被拒删（`delete_node`
+        返回 False，而 `no_forget` 标签并未回填）。修法：把取节点提到写行**之前**，
+        不存在即 `ValueError`（异常类型先例：同文件 `promote_to_shared` 的
+        `raise ValueError("节点不存在")`）。
+        判据来源：公开 issue #778 F3 ＋ 其核验帖（另补出 `protect_node(None, …)`
+        可无上界灌 NULL 行、并使 `get_protected_nodes()` 返回 `None`/`''` 条目）。
+        边界（如实标注）：本闸只判「目标节点存在」，**不**判 `reason` 语义、**不**引入
+        配额或审批（「谁有权把一条记忆标成不可遗忘」属设计取向，见 #781 回帖）。
+
+        #781（可审计）：本方法落一条 `action_logs`（与 `add_node` 的
+        `protected_node_overwritten` 同例），使「某节点被登记为不可遗忘」可查——
+        旧实现 `tag_node` / `protect_node` 都不落审计（`action_logs` 增量 0），
+        保护名单可被非属主单向扩张却无留痕。审计只加在**本方法**与 `tag_node` 的
+        `no_forget` 一支，**不**扩到全部标签面（避免大面积行为变更）。
         """
-        if self.role != Role.PRIMARY:
-            n = self.get_node(node_id)
-            if n is not None and n.layer in self.SHARED_LAYERS:
-                raise PermissionError(
-                    f"role={self.role.value} 无权保护共享层节点（{node_id} 为 "
-                    f"{n.layer.value}），共享层由父节点主控（#234）")
         own_tx = not self.conn.in_transaction
         if own_tx:
             self.conn.execute("BEGIN IMMEDIATE")
+        # #778-F3：**先取节点**再写行。这一次读同时供两道闸用（存在性 + #234 角色），
+        # 且落在 #344 的原子边界**之内**——顺序与 #344 的修复口径一致（读 tags 与
+        # 写 tags 同事务），故不引入第二次 `get_node`。
+        node = self.get_node(node_id)
+        if node is None:
+            raise ValueError(
+                "protect_node 拒绝：节点不存在（id=%r）——#778-F3：保护登记要求目标"
+                "节点已存在，否则会落下指向空处的孤儿保护行（旧实现先写后查，拼错 "
+                "id 静默成功，且该行会成为潜伏保护）" % (node_id,))
+        if self.role != Role.PRIMARY and node.layer in self.SHARED_LAYERS:
+            raise PermissionError(
+                f"role={self.role.value} 无权保护共享层节点（{node_id} 为 "
+                f"{node.layer.value}），共享层由父节点主控（#234）")
         c = self.conn.cursor()
         c.execute("INSERT OR REPLACE INTO protections VALUES (?,?,?)", (node_id, reason, time.time()))
-        node = self.get_node(node_id)
-        if node and "no_forget" not in node.tags:
+        tag_added = "no_forget" not in node.tags
+        if tag_added:
             node.tags.append("no_forget")
             c.execute("UPDATE nodes SET tags=? WHERE id=?", (_dumps_tags(node.tags), node_id))
+        # #781：保护登记落审计（只追加，不进检索面）。
+        self.log_action(
+            "protected_node_registered",
+            f"节点 {node_id} 被登记为不可遗忘（#781）：protections 行 + no_forget "
+            f"标签，豁免 decay_cycle 与 forget_advisor 两条遗忘路径",
+            node_ids=[node_id],
+            outcome={"reason": reason, "layer": node.layer.value,
+                     "role": self.role.value,
+                     "no_forget_tag_added": tag_added})
         if own_tx:
             self._commit_locked()
 
@@ -4417,6 +4500,35 @@ class LayeredStore:
         """取保护名单节点 id 列表（不可遗忘层的豁免集合）。"""
         c = self.conn.cursor()
         c.execute("SELECT node_id FROM protections")
+        return [r[0] for r in c.fetchall()]
+
+    def orphan_protection_rows(self) -> List[str]:
+        """取 `protections` 表里的**孤儿行** node_id（指向不存在节点的保护登记）。
+
+        #778-F4（加固不对称）：`protections` 表**无外键声明**（对照 `edges` 有两条
+        `REFERENCES nodes(id)` ＋ #93 的孤儿边预筛）⇒ `PRAGMA foreign_key_check`
+        **结构上覆盖不到它**：`node_id` 指向不存在节点的保护行可静默落库、
+        `integrity_ok` 仍为 True，且该行随 `export_all` 继续传播。本方法是该缺陷的
+        **判据真源**（单一实现），上报面为 `SpacetimeMemoryEngine.verify_integrity`
+        与 `export_all`。
+
+        为何走「独立检查」而不补外键（如实标注取舍）：① SQLite 无法对既有表
+        `ALTER TABLE ... ADD CONSTRAINT` ⇒ 补外键只对新库生效、旧库永久无约束
+        （schema 兼容性分叉）；② 本仓每条连接都开 `PRAGMA foreign_keys=ON`（#93），
+        一旦 `protections` 有了外键，**含孤儿保护行的备份**（正是本缺陷的现场）会在
+        `import_all` 的通用写腿抛 `FOREIGN KEY constraint failed` 并**中断整次导入**
+        ——与 #93 当年「必须先补孤儿边预筛再开外键」是同一个坑，而导入侧的对称预筛
+        落在 `import_all` 内（属另一条修复线）。故取「独立孤儿检查 ＋ 完整性面上报」，
+        不动表结构、不改导入语义。
+
+        边界（如实标注）：本方法**只读不清理**（孤儿行不自动删除——「谁有权解除
+        保护登记」属设计取向，本件不引入回收入口）；返回按 `rowid` 升序（稳定序，
+        便于取样本），`NULL`/空串 `node_id` 同样计入孤儿（它们必不匹配任何节点）。
+        """
+        c = self.conn.cursor()
+        c.execute("SELECT p.node_id FROM protections p "
+                  "LEFT JOIN nodes n ON p.node_id = n.id "
+                  "WHERE n.id IS NULL ORDER BY p.rowid ASC")
         return [r[0] for r in c.fetchall()]
 
     def _is_forget_protected(self, node, protected: Set[str] = None,
@@ -4430,6 +4542,14 @@ class LayeredStore:
         ＋ 待裁清单 D-15/D-17（应用层单一谓词）。
         边界（削掉的判别力）：`protections.created_at` 仍不被读——保护**永久**生效，
         无 TTL（待裁清单 D-11 裁定「永久＋显式解除」，本件不引入时效语义）。
+
+        #781（口径声明 · **只声明现状、不改语义**）：本谓词**不认 `archived`**——
+        它只判 `no_forget` ∈ tags ∪ node_id ∈ protections。而
+        `SpacetimeMemoryEngine.forget_advisor` 的跳过条件是
+        `"no_forget" in tags or "archived" in tags`（**认 `archived`**）⇒ 两条遗忘
+        路径对 `archived` 的处理相反：仅带 `archived` 的情境节点被 `forget_advisor`
+        跳过，却被 `decay_cycle`（经本谓词）照常删除。本件**不**统一（属设计面
+        裁定），只把分叉显式落到注释，防日后无声漂移。
 
         ★优化（本笔 · 零行为变更）：本谓词实际只读 `node.tags` 与 `node.id` 两个字段，
         而批量调用方（`decay_cycle` 的两段循环）此前传的是 `self.get_node(nid)`
@@ -10864,6 +10984,10 @@ class SpacetimeMemoryEngine:
             for table in self.M13_TABLES:
                 if table in existing:
                     data[table] = rows(table)
+            # #778-F4：孤儿保护行读数取在**同一读快照内**（与上方逐表读同事务），
+            # 否则「备份里有孤儿保护行」与「上报的孤儿数」可能跨时刻不一致。
+            _orphan_prot = (self.store.orphan_protection_rows()
+                            if "protections" in existing else [])
         finally:
             if own_tx:
                 self.store.conn.commit()
@@ -10920,7 +11044,16 @@ class SpacetimeMemoryEngine:
             raise
         return {"exported_nodes": len(data.get("nodes", [])), "path": output_path,
                 "tables": len(data) - 1, "skipped_tables": skipped,
-                "overwrote_existing": overwrote_existing}
+                "overwrote_existing": overwrote_existing,
+                # #778-F4：导出面**同时上报** `protections` 孤儿行——该表无外键声明
+                # （对照 `edges` 的 #93 孤儿预筛），孤儿保护行会**随本备份继续传播**
+                # （导入侧无对称预筛，见 `verify_integrity` docstring）。判据真源
+                # `LayeredStore.orphan_protection_rows`。**只上报、不清理**：备份内容
+                # 逐字不变（不静默丢弃保护行），孤儿行是否回收属设计取向（本件不引入
+                # 回收入口）。键为**追加**（与 #698 的 `overwrote_existing` 同例），
+                # 既有键与取值均不变。
+                "orphan_protections": len(_orphan_prot),
+                "orphan_protections_sample": _orphan_prot[:20]}
 
     @_transactional
     def import_all(self, input_path: str, designer_key: str = None) -> Dict:
@@ -11358,15 +11491,29 @@ class SpacetimeMemoryEngine:
         条两端全悬挂的边只计 1）。故上述最小场景下本指标给 **2**、那边给 **1**。
         两者各自都有 `integrity_ok` 判「不通过」，但**不是同一个指标**，勿混用
         （该关系的守卫见 `tests/test_core_dangling_metric_parity.py`）。
+
+        #778-F4：本面**同时**上报 `protections` 表的孤儿行（`orphan_protections`
+        ＋ 前 20 条样本 `orphan_protections_sample`，判据真源
+        `LayeredStore.orphan_protection_rows`）并纳入 `integrity_ok`——`protections`
+        表无外键声明（对照 `edges`），`PRAGMA foreign_key_check` 覆盖不到它，故
+        「保护登记指向不存在节点」这一损坏形态此前在本面**完全不可见**。
+        边界（如实标注）：`orphan_protections` 与 `orphan_edges` 是**两个独立指标**
+        （不同表、不同口径：前者按行、后者按「边×端点」），本面只把两者一并纳入
+        `integrity_ok`；`import_all()` 的 `integrity_ok`（经 `PRAGMA foreign_key_check`）
+        **仍看不到** `protections`（该表无外键）——导入侧对称预筛落在 `import_all`
+        内，属另一条修复线。
         """
         c = self.store.conn.cursor()
         c.execute("SELECT COUNT(*) FROM edges e LEFT JOIN nodes n ON e.source_id=n.id WHERE n.id IS NULL")
         orphan_source = c.fetchone()[0]
         c.execute("SELECT COUNT(*) FROM edges e LEFT JOIN nodes n ON e.target_id=n.id WHERE n.id IS NULL")
         orphan_target = c.fetchone()[0]
+        orphan_prot = self.store.orphan_protection_rows()
         return {"orphan_edges": orphan_source + orphan_target,
+                "orphan_protections": len(orphan_prot),
+                "orphan_protections_sample": orphan_prot[:20],
                 "stats": self.store.get_stats(),
-                "integrity_ok": (orphan_source + orphan_target) == 0}
+                "integrity_ok": (orphan_source + orphan_target) == 0 and not orphan_prot}
 
     # ==================== v1.5 认知增强（A-1~A-5 · ANALYSIS-ARGUS-REV1） ====================
 
@@ -12307,6 +12454,14 @@ class SpacetimeMemoryEngine:
         决策：归档（tags 加 archived + importance 降至 archived_imp）——
         recall 的 importance 加权自然降权（可逆：恢复 importance 即解除）。
         锚点/结构层 no_forget 保护；KNOWLEDGE 层不动（长期知识）。
+
+        #781（口径声明 · **只声明现状、不改语义**）：本函数的跳过条件是
+        `"no_forget" in tags or "archived" in tags` ⇒ **认 `archived`**；而
+        `LayeredStore.decay_cycle` 的情境层删除段经 `_is_forget_protected` 判定，
+        只认 `no_forget` ∪ `protections` 行、**不认 `archived`**。故「归档即保护」
+        的直觉在两条路径上结论相反：仅带 `archived` 的情境节点被本函数跳过
+        （既不归档也不删），却仍被 `decay_cycle` 照常删除。本件**不**统一两者
+        （属设计面裁定，见 issue #781 回帖），只把分叉显式落到注释。
 
         #210（本函数三处错误，逐条修）：
           ① `if (imp or 0.5) < low_value` —— `0.0` 是假值，被 `or` 替换成 0.5，
