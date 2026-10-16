@@ -9566,19 +9566,29 @@ class SpacetimeMemoryEngine:
         判据来源：经验标定（本件 #426），仓内无规定视觉锚点数上限的理论章节。
         边界（削掉的判别力）：第 K+1 个起的锚点不进关系计算（本件只设上限，
         不引入「按置信度/距离择优取 K 个」的替代口径）。
+
+        #718：扫描形态取自 `vprim.ANCHOR_SCAN_PATTERN`（**单一真源**，与
+        `parse_anchor` 共用坐标组常量 `ANCHOR_COORD_PATTERN`）。此前本函数
+        **内联了第二份坐标组副本**（写死 `\\d+`）⇒ 负坐标锚点在 `finditer`
+        阶段就被滤掉（`regex_hits=0`），`parse_anchor` 侧的负号放宽（#730）
+        够不着这里，全负坐标 claim 的空间关系表整体静默失效（返回 None、
+        不报错）。修复只放宽坐标收负号，**不动**上限、截断上报语义、
+        关系计算与返回体形状。
         """
         try:
-            from ..world.vprim import parse_anchor, spatial_relation
+            from ..world.vprim import (ANCHOR_SCAN_PATTERN, parse_anchor,
+                                       spatial_relation)
         except ImportError:
             try:
-                from ..world.vprim import parse_anchor, spatial_relation
+                from ..world.vprim import (ANCHOR_SCAN_PATTERN, parse_anchor,
+                                           spatial_relation)
             except Exception:
                 return None
         anchors = []
         import re as _re
         total_matches = 0
         truncated = False
-        for m in _re.finditer(r"[\w\-]+@\(\d+,\d+,\d+,\d+\)", claim):
+        for m in _re.finditer(ANCHOR_SCAN_PATTERN, claim):
             total_matches += 1
             if len(anchors) >= self.MAX_VPRIM_ANCHORS:
                 truncated = True
