@@ -329,7 +329,7 @@
     {
      "file": "core.py",
      "src": "aeis.core",
-     "sha256": "a270a7d9762bc3ef",
+     "sha256": "1460511bd553df5b",
      "rewrites": 34,
      "sanitized": 2,
      "patches": 2,
@@ -409,7 +409,7 @@
     {
      "file": "hex_cnn.py",
      "src": "aeis.hex_cnn",
-     "sha256": "7c437d607ac743aa",
+     "sha256": "c0d9639796fc8525",
      "rewrites": 0,
      "sanitized": 0,
      "patches": 0,
