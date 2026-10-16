@@ -10547,6 +10547,15 @@ class SpacetimeMemoryEngine:
                 outcome={"requires_review": True, "immutable_rows": len(immutable_rows),
                          "relayer_rows": len(relayer_rows)})
         self._commit_locked()
+        # #493：导入后把运行期容量状态随盘面刷新（与「启动时从库读」同口径）：
+        # 上方逐表 INSERT OR REPLACE 已把备份的 engine_meta（含 context_max）落库，
+        # 但 self._context_max 仍是构造期读到的旧值；而 enforce_context_cap 的 FIFO
+        # 淘汰作用于**整库**情境层 ⇒ 下一次 add_context 会按旧上限（默认 200）静默批量
+        # 删掉备份里多出的情境记忆（灾备恢复等于无效）。复用既有读数路径
+        # _load_context_max（不触发淘汰，语义与构造期一致）；读点置于本次写事务提交
+        # 之后，读到的是已落定状态。不覆盖 set_context_cap 的显式设置语义，也不改
+        # enforce_context_cap 的裁剪判据。判据来源：公开 issue #493。
+        self._context_max = self._load_context_max()
         # 恢复自检：导入后跑 `PRAGMA foreign_key_check` 体检。经上方 #93 预筛，正常
         # 路径下应恒为空；保留本步作为「白名单列裁剪后仍出现悬挂」的兜底观测
         # （不拦写入，随返回值交付）。
