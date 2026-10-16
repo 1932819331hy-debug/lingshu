@@ -456,6 +456,14 @@ def test_w9_python_lingshu_prefixes_converged_and_parent_env_validated():
         "BRAIN_PYTHON 不存在路径未被拒（#652①）"
     assert _rejects(_require_env_dir, missing, "BRAIN_PYTHONPATH"), \
         "BRAIN_PYTHONPATH 不存在路径未被拒（#652①）"
+    # 夹具适配（#748）：新契约要求「该目录下能解析出 md_cg 脑包」⇒ 让夹具值
+    # 满足它。**断言形态与意图（合法值 ⇒ 放行）一字不改**，只改夹具值。
+    # 注意：结构只建在 tmp 上，`missing`（= tmp/nope）必须仍然不存在。
+    os.makedirs(os.path.join(tmp, "md_cg"), exist_ok=True)
+    for _pkg_file in ("__init__.py", "mcp_server.py"):
+        with open(os.path.join(tmp, "md_cg", _pkg_file), "w",
+                  encoding="utf-8"):
+            pass
     # 合法值 ⇒ 放行（反向腿·防把功能修死）
     assert _require_env_dir(tmp, "BRAIN_PYTHONPATH") == tmp
     assert _require_env_interpreter(sys.executable) == sys.executable

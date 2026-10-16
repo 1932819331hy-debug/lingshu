@@ -54,9 +54,9 @@
 上面的 `_ENV_ALLOW_NAMES` / `_ENV_ALLOW_PREFIXES` **管不到它们**：白名单只决定
 「往子进程 env 里放什么」。故「白名单拦住了 `BRAIN_*` 不进子进程」**不能**说明这
 三个变量安全。处置：显式参数优先；env 兜底时 `BRAIN_PYTHON` / `BRAIN_PYTHONPATH`
-做 fail-closed 校验（绝对路径＋存在性，见 `_require_env_interpreter` /
-`_require_env_dir`）。可达性（如实）：前提是已能设置本进程环境变量 ⇒ 属**提权/
-持久化放大器**，非默认可达 RCE。
+做 fail-closed 校验（绝对路径＋存在性＋**解释器形状/脑包结构**，见
+`_require_env_interpreter` / `_require_env_dir`；#748 收窄）。可达性（如实）：
+前提是已能设置本进程环境变量 ⇒ 属**提权/持久化放大器**，非默认可达 RCE。
 
 用法（隔离示例；测试件见 `tests/test_brain_store.py`）：
 
@@ -83,6 +83,7 @@ import json
 import math
 import os
 import queue
+import re
 import subprocess
 import sys
 import threading
@@ -196,14 +197,62 @@ def _env_is_allowed(name: str) -> bool:
 #: 属数据根（脑侧可自建），只做声明不做存在性校验。
 _ENV_PARENT_CONFIG = ("BRAIN_PYTHON", "BRAIN_PYTHONPATH", "BRAIN_ROOT")
 
+#: 部署方可选的**受信根**声明面（`os.pathsep` 多根）。设置后，两个 env 兜底值的
+#: 归一化路径必须落在其中某个根之下，否则 fail-closed。未设置 ⇒ 退到形状校验。
+_BRAIN_PYTHON_ROOTS_ENV = "LINGSHU_BRAIN_PYTHON_ROOTS"
+_BRAIN_PYTHONPATH_ROOTS_ENV = "LINGSHU_BRAIN_PYTHONPATH_ROOTS"
+
+#: 可接受的解释器**文件名形状**（`BRAIN_PYTHON` 兜底值）。
+_PY_EXE_RE = re.compile(r"^python(\d+(\.\d+)?)?(\.exe)?$", re.IGNORECASE)
+
+
+def _require_under_trusted_roots(value: str, roots_env: str, var: str) -> str:
+    """受信根校验（#748 可选面）。
+
+    `roots_env` 非空时，`value` 的归一化路径须落在其中某个根之下，否则
+    fail-closed；未设置 ⇒ 直接放行（退到形状/结构校验）。归一化 =
+    `os.path.normcase(os.path.realpath(...))`（两侧同口径比较）。
+
+    残留面（如实）：能设置本进程 env 者同样能设置该受信根变量 ⇒ 本面整体属
+    **提权/持久化放大器**（与 main 既有定性一致），非默认可达 RCE；受信根是给
+    「部署方想钉死位置」用的旋钮。
+    """
+    declared = os.environ.get(roots_env)
+    if not declared:
+        return value
+    real = os.path.normcase(os.path.realpath(value))
+    for root in declared.split(os.pathsep):
+        if not root:
+            continue
+        root_real = os.path.normcase(os.path.realpath(root))
+        if real == root_real or real.startswith(root_real.rstrip("\\/") + os.sep):
+            return value
+    raise ValueError(
+        "%s 的值不在受信根内：%r（%s 已声明受信根；#748 fail-closed）"
+        % (var, value, roots_env))
+
 
 def _require_env_interpreter(value: str) -> str:
-    """`BRAIN_PYTHON` 兜底值校验（#652①，fail-closed）。
+    """`BRAIN_PYTHON` 兜底值校验（#652①，fail-closed；#748 收窄）。
 
     该值决定**被拉起的可执行程序**，故要求绝对路径且是已存在的文件——
     相对路径会按本进程 cwd 解析（cwd 可受外部影响），是比绝对路径更弱的面。
     显式参数 `python=`（含 CLI `--brain-python`）不经本校验：那是调用方的显式
     配置面，允许裸命令名（由 PATH 解析）。
+
+    #748 在上述两条之后追加两道（只收窄 env 兜底面）：
+
+    1. **解释器形状**：basename 须命中 `_PY_EXE_RE`（`python` / `python3` /
+       `python3.12` / `python.exe` / `python312.exe` …）。「存在性」不是白名单：
+       攻击者的毒目录本身存在、毒 `.cmd` 本身存在 ⇒ 旧口径放行任意可执行
+       （`.cmd` / `.bat` / 任意名），实测仍跑到攻击者的 `md_cg/mcp_server.py`
+       （#748：RCE 半成立）。
+    2. **受信根**（可选面）：`LINGSHU_BRAIN_PYTHON_ROOTS` 非空时，归一化路径须
+       落在其中某个根之下，否则 fail-closed。
+
+    残留面（如实）：能设置本进程 env 者同样能设置受信根变量 ⇒ 本面整体属
+    **提权/持久化放大器**（与 main 既有定性一致），非默认可达 RCE。形状校验挡住
+    的是「任意可执行（如 `.cmd`）」这一档，不改变上述定性。
     """
     if not os.path.isabs(value):
         raise ValueError(
@@ -214,15 +263,33 @@ def _require_env_interpreter(value: str) -> str:
         raise ValueError(
             "BRAIN_PYTHON 指向的不是已存在的文件：%r（#652① fail-closed）"
             % (value,))
-    return value
+    if not _PY_EXE_RE.match(os.path.basename(value)):
+        raise ValueError(
+            "BRAIN_PYTHON 指向的不是解释器（解释器形状不符，须形如 python / "
+            "python3 / python3.12 / python.exe）：%r（#748 fail-closed）"
+            % (value,))
+    return _require_under_trusted_roots(value, _BRAIN_PYTHON_ROOTS_ENV,
+                                        "BRAIN_PYTHON")
 
 
 def _require_env_dir(value: str, var: str) -> str:
-    """`BRAIN_PYTHONPATH` 兜底值校验（#652①，fail-closed）。
+    """`BRAIN_PYTHONPATH` 兜底值校验（#652①，fail-closed；#748 收窄）。
 
     该值经 `_brain_env` 写进子进程 `PYTHONPATH`，CPython 启动期即按它解析模块
     （含自动导入 `sitecustomize`）⇒ 等于「子进程启动期执行哪个目录的代码」。
     故要求绝对路径且是已存在的目录。显式参数 `pythonpath=` 不经本校验。
+
+    #748 追加两道（只收窄 env 兜底面）：
+
+    1. **脑包结构**：目录下须解析出 `md_cg/__init__.py` 与
+       `md_cg/mcp_server.py`。同样地「存在性」不是白名单——攻击者的毒目录本身
+       就是一个存在的目录（#748）。
+    2. **受信根**（可选面）：`LINGSHU_BRAIN_PYTHONPATH_ROOTS` 非空时，归一化
+       路径须落在其中某个根之下，否则 fail-closed。
+
+    残留面（如实）：能设置本进程 env 者同样能设置受信根变量 ⇒ 本面整体属
+    **提权/持久化放大器**（与 main 既有定性一致），非默认可达 RCE；结构校验挡住
+    的是「任意存在的目录」这一档，不改变上述定性。
     """
     if not os.path.isabs(value):
         raise ValueError(
@@ -231,7 +298,12 @@ def _require_env_dir(value: str, var: str) -> str:
     if not os.path.isdir(value):
         raise ValueError(
             "%s 指向的不是已存在的目录：%r（#652① fail-closed）" % (var, value))
-    return value
+    if not (os.path.isfile(os.path.join(value, "md_cg", "__init__.py"))
+            and os.path.isfile(os.path.join(value, "md_cg", "mcp_server.py"))):
+        raise ValueError(
+            "%s 指向的目录下未解析出 md_cg 脑包（须含 md_cg/__init__.py 与 "
+            "md_cg/mcp_server.py）：%r（#748 fail-closed）" % (var, value))
+    return _require_under_trusted_roots(value, _BRAIN_PYTHONPATH_ROOTS_ENV, var)
 
 
 class BrainError(RuntimeError):
@@ -284,8 +356,8 @@ class MCPClient:
                 not math.isfinite(request_timeout) or request_timeout <= 0):
             raise ValueError("request_timeout 必须是正的有限秒数或 None")
         # #652①：显式参数优先；env 兜底值**不可信**（父进程 env 决定被执行的
-        # 程序与模块）⇒ fail-closed 校验（绝对路径＋存在性）。见模块 docstring
-        # 「父进程配置面」。
+        # 程序与模块）⇒ fail-closed 校验（绝对路径＋存在性＋形状/结构，
+        # #748）。见模块 docstring「父进程配置面」。
         if not python:
             env_python = os.environ.get("BRAIN_PYTHON")
             python = (_require_env_interpreter(env_python) if env_python
