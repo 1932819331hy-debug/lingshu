@@ -1158,6 +1158,29 @@ class LayeredStore:
     IMMUTABLE_LAYERS = {MemoryLayer.ANCHOR, MemoryLayer.STRUCTURE,
                         MemoryLayer.SELF}  # v1.16 扮演论：SELF 层=自我锚点（扮演依据）不可遗忘
 
+    #: #768：`engine_meta` 治理键集合——**单一真源**（键集此前只存在于
+    #: `SpacetimeMemoryEngine.ENGINE_META_GUARDED_KEYS`，而写入口 `set_meta` /
+    #: `merge_meta` 在本类上 ⇒ 闸与集合分处两层，各写一份必漂移）。
+    #: 引擎侧 `SpacetimeMemoryEngine.ENGINE_META_GUARDED_KEYS` 改为**引用本属性**
+    #: （别名，不是复制），`tests/test_issue768_engine_meta_governance_guard.py`
+    #: 以恒等断言钉死两者同一（`is` 与 `==` 双查）。
+    #:
+    #: 键的判据来源：`#479`（`self_model_snapshot`，身份/信任持久面）＋
+    #: `#671`（其余四键：启动期被回读的治理载荷——`verifier_config` /
+    #: `attention_weights` / `context_max` / `structure_writer_schema`）。
+    #: `SELF_MODEL_META_KEY` 是引擎侧的同名字面量（`"self_model_snapshot"`），
+    #: 本集合按字面量列出以免本类依赖后定义的类型；两者一致性由上述守卫钉死。
+    #:
+    #: 与 `ENGINE_META_NONGOVERNANCE_KEYS`（`_schema_version` / `_last_decay_at`）
+    #: **互斥**：非治理键无治理载荷，写面照旧放行（红线：不一刀切）。
+    ENGINE_META_GUARDED_KEYS = frozenset({
+        "self_model_snapshot",       # 身份/信任持久快照（#479）
+        "verifier_config",           # 验证/去重配置（#671）
+        "attention_weights",         # 注意力偏好权重（#671）
+        "context_max",               # 情境层 FIFO 上限（#671）
+        "structure_writer_schema",   # 结构写入器开关（#671）
+    })
+
     #: 盲区（`blindspots.status`）合法状态白名单（#222）。
     #: 判据来源：仓内 `add_blindspot`（落 `"open"`）/`resolve_blindspot`（落 `"resolved"`）
     #: ＋ 公开 issue #222「建议修复 2：对 status 做白名单（`open`/`resolved`/…）」。
@@ -1798,9 +1821,59 @@ class LayeredStore:
         c.execute("SELECT key, value FROM engine_meta")
         return dict(c.fetchall())
 
+    def _assert_meta_key_writable(self, key: str) -> None:
+        """#768：`engine_meta` 治理键的写闸（角色判据，fail-closed）。
+
+        为什么需要：`engine_meta` 是**库级**表，其中 5 个治理键在启动期被回读
+        （`ENGINE_META_GUARDED_KEYS`），改写它们等于改写身份/信任快照、验证阈值、
+        注意力偏好、情境层上限与结构写入器开关。而 `set_meta` / `merge_meta`
+        旧实现既无 key 白名单、也无角色闸 ⇒ 任何非 PRIMARY 实例（无需密钥）都能
+        持久化改写，且重启后原样生效（#768 复现实测）。
+
+        判据＝**实例角色**：`role != Role.PRIMARY` ⇒ `PermissionError`。
+        为什么不用设计者密钥闸（`import_all` 的 D-007 口径）：`set_context_cap`
+        等门面方法是**常规公开 API**（仓内 `tests/test_issue246_*` / `_259_*` /
+        `_493_*` / `_655_*` 都以默认 PRIMARY 引擎调它），改成要密钥会打断既有
+        正常用法；而「谁能写共享/治理面」的仓内单一真源本就是 `Role`
+        （`SHARED_LAYERS` 写闸、`add_node`、`_assert_edge_role` 同一口径），
+        `StructureWriter.__init__` 已是同款先例。
+
+        作用面边界（如实标注）：
+        ① **只对治理键**：`_last_decay_at` / `_schema_version` 等非治理键照旧放行；
+        ② 判据是**实例角色属性**，同进程内伪造角色（#779）不在本闸作用面——
+           该面属威胁模型边界，由 `#156` / `D-007` 承载；
+        ③ SUB 与 PRIMARY **共库**时 SUB 不得配置治理面（设计如此：治理面由父
+           节点主控）；
+        ④ **按库归属分档（收窄，防打断既有合法用法）**：本闸只作用于**跨进程
+           持久**的库。`db_path=":memory:"` 的库由本实例独占（`_memory_dsn` 按
+           实例 uuid 唯一化，见 `__init__`）且进程退出即消失 ⇒ `#768` 的危害链
+           「SUB 改写 → **重启后** PRIMARY 回读被篡改值」在该形态下**不成立**，
+           故 SUB 配置自有内存库的上限/元数据照旧放行。收窄的实测依据：仓内
+           `tests/test_issue259_context_fifo_insertion_order_guard.py` 的 B 组
+           以 `Role.SUB` + `:memory:` 调 `set_context_cap(5)`（配置**自有**库的
+           FIFO 上限），是一处既有合法用法，一刀切会把它打成红。
+           **未覆盖面（如实标注）**：显式传入共享缓存 DSN
+           （`file:...?mode=memory&cache=shared`）时两个实例可同进程共库，该形态
+           按「文件库」处理（拦），但同进程面本就在本闸作用面之外（见 ②）；
+           文件库上「SUB 自有库」与「SUB 与 PRIMARY 共库」在本闸内**不作区分**
+           （仓内无库级归属标记，判据不可得）——该细分属设计者裁面。
+        """
+        if (key in self.ENGINE_META_GUARDED_KEYS and self.role != Role.PRIMARY
+                and getattr(self, "_memory_dsn", None) is None):
+            raise PermissionError(
+                f"role={self.role.value} 无权写 engine_meta 治理键（{key}）——"
+                f"治理键由父节点主控（#768）"
+            )
+
     @_transactional
     def set_meta(self, key: str, value: str) -> None:
-        """写引擎元数据（upsert）。"""
+        """写引擎元数据（upsert）。
+
+        #768：治理键（`ENGINE_META_GUARDED_KEYS`）写入前过角色闸——非 PRIMARY
+        实例写治理键 ⇒ `PermissionError`（判据与边界见
+        `_assert_meta_key_writable` docstring）。非治理键照旧放行。
+        """
+        self._assert_meta_key_writable(key)
         with self._lock:
             c = self.conn.cursor()
             c.execute("INSERT OR REPLACE INTO engine_meta (key, value) VALUES (?, ?)",
@@ -1818,7 +1891,12 @@ class LayeredStore:
         最新已提交态，且其间无其他写者可插入——这是「不另加版本号也能免丢更新」的
         根据（读-改-写窗口被事务与写锁闭合）。
         返回被替换的旧值（键不存在则 None），供调用方判定/留痕。
+
+        #768：与 `set_meta` 同一把闸——治理键在**调用 `value_fn` 之前**过角色闸
+        （非 PRIMARY ⇒ `PermissionError`），否则「读改写」会在被拒的路径上先跑
+        一遍取值回调（可能带副作用）。
         """
+        self._assert_meta_key_writable(key)
         with self._lock:
             c = self.conn.cursor()
             c.execute("SELECT value FROM engine_meta WHERE key = ?", (key,))
@@ -6608,13 +6686,12 @@ class SpacetimeMemoryEngine:
     #: `ENGINE_META_NONGOVERNANCE_KEYS`（见下），由
     #: `tests/test_issue671_engine_meta_guarded_keys_guard.py` 的 G5 扫描源码闭合：
     #: 将来新增一个启动回读键而忘了分类 ⇒ 守卫红。
-    ENGINE_META_GUARDED_KEYS = frozenset({
-        SELF_MODEL_META_KEY,
-        "verifier_config",
-        "attention_weights",
-        "context_max",
-        "structure_writer_schema",
-    })
+    #:
+    #: #768（本笔 · 单一真源）：集合**上提到 `LayeredStore.ENGINE_META_GUARDED_KEYS`**
+    #: ——写入口 `set_meta` / `merge_meta` 在 store 层，闸与键集分处两层时各写一份必
+    #: 漂移。本属性改为**别名引用**（不是复制），恒等性由
+    #: `tests/test_issue768_engine_meta_governance_guard.py` 的 `is` / `==` 双查钉死。
+    ENGINE_META_GUARDED_KEYS = LayeredStore.ENGINE_META_GUARDED_KEYS
 
     #: #671：源码内**全部** `engine_meta` 读点出现的键（机械闭合腿的分类全集）。
     #: 判据来源：`git grep -n 'get_meta(' lingshu/` ＋ `engine_meta WHERE key=` 的
@@ -6960,7 +7037,14 @@ class SpacetimeMemoryEngine:
         #655：盘面坏值（非有限/超大）经 `_to_int_or` 回落 `DEFAULT_CONTEXT_MAX`
         （fail-closed）——旧写法在此抛 `OverflowError`，且该值会被 `set_meta`
         写进盘面，使**下次构造**也失败。判据来源：公开 issue #655。
+
+        #768：**改内存值之前**过治理键角色闸——非 PRIMARY 实例在**跨进程持久**
+        的库上 ⇒ `PermissionError`，内存与盘面都不动（内存库按库归属分档放行，
+        见 `_assert_meta_key_writable`）。为什么闸位必须在赋值之前：旧形态若
+        先改 `self._context_max` 再在落库处抛，内存已改而盘面未写 ⇒ 静默分叉
+        （与 `#191` 的 `update_self` 同款病：调用方看到异常，运行态却已变）。
         """
+        self.store._assert_meta_key_writable("context_max")
         self._context_max = _to_int_or(max_size, self.DEFAULT_CONTEXT_MAX)
         self.store.set_meta("context_max", str(self._context_max))
         self.store.enforce_context_cap(self._context_max)
@@ -10092,10 +10176,18 @@ class SpacetimeMemoryEngine:
 
         注入的 set_weight 必须只改内存，不能执行外部 I/O。
         role='reflect' 沿用调用方复核/终裁责任。
+
+        #768：本方法**自开一句 `INSERT OR REPLACE INTO engine_meta`**，不经
+        `set_meta` ⇒ 只堵 `set_meta`/`merge_meta` 拦不住它（这正是「逐键补必再
+        漏」的实例）。故在 INSERT 之前过治理键角色闸：非 PRIMARY 实例在**跨进程
+        持久**的库上 ⇒ `PermissionError`，内存权重与 `engine_meta` 都不动（闸位
+        在 `policy.set_weight` 之前，连内存副本都不改；内存库按库归属分档放行，
+        见 `LayeredStore._assert_meta_key_writable`）。
         """
         policy = self._attention_policy
         if not policy or key not in policy.preference_weights:
             return False
+        self.store._assert_meta_key_writable("attention_weights")
         with self.store._lock:
             if self.store.conn.in_transaction:
                 raise RuntimeError("配置调整需要独立事务；请先结束调用方事务")
