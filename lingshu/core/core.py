@@ -11535,6 +11535,28 @@ class SpacetimeMemoryEngine:
         **不**拒绝覆盖（保住灾备恢复语义；与 #659 取舍逐字一致）。F2 的「行在、标签被抹」
         由 ① 一并收口。新增返回键 `protected_tags_kept` / `protected_rows_overwritten`
         供观测（与 #652②/#721 的「新增上报键」同例）。
+
+        #378（**回灌面**，外部报告人 @hawkongz 2026-10-12 追加评论）：写侧
+        `add_perception` / `add_node` / `tag_node` 的 `tags` 列已过 `_dumps_tags` 的
+        代理码点判据（含 U+D800–U+DFFF ⇒ `ValueError`），而**回灌面**此前绕过该判据：
+        备份里 tags 列是**转义后的 ASCII 文本**（存量行形态即字面量 `\ud83d`），经本
+        方法 `json.loads` 回来仍是含真代理码点的 str ⇒ 毒行**重新造出**，实测无异常、
+        `integrity_ok=true`、列内含转义代理、库仍可继续写入（**零信号**）。该毒行随后
+        会让 `longterm_gate.write_snapshot` 的「已存在分支」UPDATE 抛
+        `UnicodeEncodeError` ⇒ 该行三列全未变（写入失效）。
+        修法：落库前**整批**判 `nodes` 行的 `tags` 列——经 `_json_tags` 归一后过
+        `_dumps_tags` 的**同一判据**（单一真源，不另造第二套扫描）；带代理码点 ⇒
+        `ValueError`（点名行 id）、fail-closed、零落库。
+        取向＝**拒收**而非「清洗后收」，理由三条（详见闸位注释）：①`_dumps_tags` 明写
+        「不做静默替换（替换会把污染源洗白）」；②与本方法既有整批判闸（#586/#478/#771）
+        同形；③合法备份零影响（本端实测往返逐位不变）。
+        边界（如实标注）：①只判 `nodes.tags`；`state_attributes` /
+        `semantic_coordinates` / `spatial_coordinates` 的回灌面同样绕过（#494 只加了
+        写侧闸），**不在本件范围**（另立件）；②`edges` / `entities` 等表的同类列未判
+        （报告人自陈未测）；③缺 `tags` 键的行不抢（仍走 #652② 的 `missing_columns`）；
+        ④非法 JSON / 非 list 形态的 `tags` 值不抢（`_json_tags` 容错口径）；⑤**不**迁移
+        本库既有存量毒行（`_dumps_tags` 边界①不变）；⑥含毒行的老备份回灌**整批失败**
+        （与 #586/#478/#771 的「整批拒」取舍逐字一致，不提供自动清洗）。
         """
         with open(input_path, "r", encoding="utf-8") as f:
             data = json.load(f)
@@ -11650,6 +11672,60 @@ class SpacetimeMemoryEngine:
                 "#588/#594 类型闸（与 #331 同口径，fail-closed，零落库）"
                 % (bad_content[0]["content_type"], len(bad_content),
                    bad_content[0]["id"]))
+        # #378（**回灌面**）：写侧 `add_perception` / `add_node` / `tag_node` 的
+        # tags 列已过 `_dumps_tags` 的代理码点判据（含 U+D800–U+DFFF ⇒ ValueError，
+        # fail-closed）⇒ 公开写侧不再产出毒行。但**回灌面**此前是绕过的：
+        # `export_all` 落盘的 tags 列是**转义后的 ASCII 文本**（`_dumps_tags`
+        # 旧默认/存量行形态即字面量 `\ud83d`），备份里这类行经本方法 `json.loads`
+        # 回来仍是**含真代理码点的 str**，再经 `_dumps_tags` 写回（或按 #721 归一）
+        # ⇒ 毒行**重新造出**，而写侧闸一次都没经过：实测无异常、`integrity_ok=true`、
+        # 列内含转义代理、且库仍可继续写入（**零信号**）。
+        # 这条之所以要堵：`export_all → import_all` 是仓内**自带的灾备/迁移路径**，
+        # 若回灌面被视作「存量面」而豁免，则 `_dumps_tags` 边界①「不迁移存量转义行」
+        # 隐含的前提「存量行只存在于本库、不可经备份传播」被这条路径推翻——毒行可
+        # 在库之间无限往返；且该毒行会让后续**正常写入路径**在该行上失效（
+        # `write_snapshot` 已存在分支的 UPDATE 抛 `UnicodeEncodeError`，三列全未变）。
+        # 修法（**取向＝拒收**，与写侧同口径、**单一真源不另造第二套校验**）：
+        # 落库前**整批**判——备份 `nodes` 行中凡**带 `tags` 键**且其值（经
+        # `_json_tags` 归一为 list：JSON 文本 / 真 list / None 三形态）含代理码点
+        # ⇒ `ValueError`（文案点名行 id 与首条拒绝理由）、fail-closed、零落库。
+        # 判据**复用** `_dumps_tags` 本体（只借其拒绝判据、丢弃其返回值），不在此
+        # 处手写第二份 `0xD800 <= ord(ch) <= 0xDFFF` 扫描。
+        # 为什么取「拒收」而非「清洗后收」（如实标注取舍）：
+        #   ① `_dumps_tags` 判据明写「**不**做静默替换（替换会把污染源洗白、掩盖
+        #      上游解码错误）」——回灌时剔除/替换代理等于在同一列上开一个洗白口，
+        #      与唯一真源的口径直接冲突；
+        #   ② 本方法既有的整批判闸（#586 共享层行 / #478 双列层闸 / #771 ②③ 换层
+        #      与 content 类型闸）**一律**取「先判后写、整批拒、零落库」⇒ 本闸与
+        #      之同形，不引入第四种处置口径；
+        #   ③ 合法备份零影响：判据只在备份行**确实**带代理码点时触发（本端实测
+        #      合法往返逐位不变），故灾备路径的正常用法不被收窄。
+        # 代价（如实标注）：真有一份**含毒行**的老备份时，回灌会**整批失败**而非
+        # 「恢复其余行」——与 #586/#478/#771 的取舍逐字一致（要恢复须先清洗该备份；
+        # 仓内**不**提供自动清洗，因为清洗＝洗白）。**不**迁移本库既有存量毒行
+        # （`_dumps_tags` 边界①不变，那是另一条面）。
+        # 边界（如实标注）：①只判 `nodes` 表的 `tags` 列；`state_attributes` /
+        # `semantic_coordinates` / `spatial_coordinates` 三列的回灌面同样绕过
+        # （#494 只加了写侧闸），**不在本件范围**（另立件）；②`edges` / `entities`
+        # 等其它表的同类列未判（报告人自陈未测，另议）；③只判「带 `tags` 键」的行
+        # ——缺 `tags` 键的行仍按 #652② 落 NULL 并计入 `missing_columns`（不抢该面）；
+        # ④非法 JSON 文本 / 非 list 形态的 `tags` 值仍按既有路径原样落库
+        # （`_json_tags` 的容错口径，本闸不扩到「tags 形状」面）。
+        bad_tags = []
+        for r in data.get("nodes", []):
+            if "tags" not in r:
+                continue
+            try:
+                _dumps_tags(_json_tags(r.get("tags")))
+            except ValueError as exc:
+                bad_tags.append({"id": r.get("id"), "reason": str(exc)})
+        if bad_tags:
+            raise ValueError(
+                "#378 回灌面拒绝含 UTF-16 代理码点的 tags 行（共 %d 行，例 id=%r；"
+                "理由：%s）：毒标签无法 UTF-8 编码，回灌后该行会让后续正常写入"
+                "（如 write_snapshot 已存在分支）静默失效，并随备份继续传播"
+                "（fail-closed，零落库）"
+                % (len(bad_tags), bad_tags[0]["id"], bad_tags[0]["reason"]))
         counts = {}
         skipped = []
         discarded = {}
