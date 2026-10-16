@@ -456,17 +456,32 @@ def test_w9_python_lingshu_prefixes_converged_and_parent_env_validated():
         "BRAIN_PYTHON 不存在路径未被拒（#652①）"
     assert _rejects(_require_env_dir, missing, "BRAIN_PYTHONPATH"), \
         "BRAIN_PYTHONPATH 不存在路径未被拒（#652①）"
-    # 夹具适配（#748）：新契约要求「该目录下能解析出 md_cg 脑包」⇒ 让夹具值
-    # 满足它。**断言形态与意图（合法值 ⇒ 放行）一字不改**，只改夹具值。
+    # 夹具适配（#748）：新契约要求「该目录下能解析出 md_cg 脑包」**且**「env 兜底
+    # 面须声明受信根」（#748 默认 fail-closed）⇒ 让夹具值满足两者。
+    # **断言形态与意图（合法值 ⇒ 放行）一字不改**，只改夹具值与环境声明。
     # 注意：结构只建在 tmp 上，`missing`（= tmp/nope）必须仍然不存在。
     os.makedirs(os.path.join(tmp, "md_cg"), exist_ok=True)
     for _pkg_file in ("__init__.py", "mcp_server.py"):
         with open(os.path.join(tmp, "md_cg", _pkg_file), "w",
                   encoding="utf-8"):
             pass
-    # 合法值 ⇒ 放行（反向腿·防把功能修死）
-    assert _require_env_dir(tmp, "BRAIN_PYTHONPATH") == tmp
-    assert _require_env_interpreter(sys.executable) == sys.executable
+    # 合法值 ＋ 受信根覆盖 ⇒ 放行（反向腿·防把功能修死）
+    from lingshu.world import brain_store as _bs  # noqa: PLC0415
+    saved_roots = {}
+    for _root_env in (_bs._BRAIN_PYTHON_ROOTS_ENV,
+                      _bs._BRAIN_PYTHONPATH_ROOTS_ENV):
+        saved_roots[_root_env] = os.environ.get(_root_env)
+        os.environ[_root_env] = os.pathsep.join(
+            [tmp, os.path.dirname(sys.executable)])
+    try:
+        assert _require_env_dir(tmp, "BRAIN_PYTHONPATH") == tmp
+        assert _require_env_interpreter(sys.executable) == sys.executable
+    finally:
+        for _root_env, _v in saved_roots.items():
+            if _v is None:
+                os.environ.pop(_root_env, None)
+            else:
+                os.environ[_root_env] = _v
 
     # 腿 5（端到端接线·防「校验函数在、但 __init__ 没调它」）：
     # MCPClient 在 env 兜底路径上必须真的走到校验——相对路径的 BRAIN_PYTHON

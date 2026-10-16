@@ -54,9 +54,13 @@
 上面的 `_ENV_ALLOW_NAMES` / `_ENV_ALLOW_PREFIXES` **管不到它们**：白名单只决定
 「往子进程 env 里放什么」。故「白名单拦住了 `BRAIN_*` 不进子进程」**不能**说明这
 三个变量安全。处置：显式参数优先；env 兜底时 `BRAIN_PYTHON` / `BRAIN_PYTHONPATH`
-做 fail-closed 校验（绝对路径＋存在性＋**解释器形状/脑包结构**，见
-`_require_env_interpreter` / `_require_env_dir`；#748 收窄）。可达性（如实）：
-前提是已能设置本进程环境变量 ⇒ 属**提权/持久化放大器**，非默认可达 RCE。
+做 fail-closed 校验（绝对路径＋存在性＋**解释器形状/脑包结构**＋**受信根**，见
+`_require_env_interpreter` / `_require_env_dir`；#748 收窄）。**受信根默认必填**：
+未声明 `LINGSHU_BRAIN_PYTHON_ROOTS` / `LINGSHU_BRAIN_PYTHONPATH_ROOTS` 时，
+env 兜底面一律**拒**（一段继承/残留的 `BRAIN_PYTHONPATH` 不再静默决定被执行的
+模块）——要用 env 面就先显式声明受信根。可达性（如实）：前提是已能设置本进程
+环境变量 ⇒ 对「已能设置 env 的攻击者」而言仍属**提权/持久化放大器**，非默认可达
+RCE；受信根收的是**默认配置**这一档，不是「env 面＝安全边界」。
 
 用法（隔离示例；测试件见 `tests/test_brain_store.py`）：
 
@@ -193,12 +197,15 @@ def _env_is_allowed(name: str) -> bool:
 #: 可达性（如实）：前提是已能设置本进程环境变量；具备该能力者本已可影响本进程
 #: 启动（如 `PYTHONPATH`），故本面属**提权/持久化放大器**，非默认可达 RCE。
 #: 处置：`BRAIN_PYTHON` / `BRAIN_PYTHONPATH` 走**显式参数优先**，env 兜底时做
-#: fail-closed 校验（见 `_require_env_interpreter` / `_require_env_dir`）；`BRAIN_ROOT`
-#: 属数据根（脑侧可自建），只做声明不做存在性校验。
+#: fail-closed 校验（见 `_require_env_interpreter` / `_require_env_dir`；**受信根
+#: 默认必填**——未声明即拒）；`BRAIN_ROOT` 属数据根（脑侧可自建），只做声明不做
+#: 存在性校验。
 _ENV_PARENT_CONFIG = ("BRAIN_PYTHON", "BRAIN_PYTHONPATH", "BRAIN_ROOT")
 
-#: 部署方可选的**受信根**声明面（`os.pathsep` 多根）。设置后，两个 env 兜底值的
-#: 归一化路径必须落在其中某个根之下，否则 fail-closed。未设置 ⇒ 退到形状校验。
+#: 部署方声明的**受信根**面（`os.pathsep` 多根）。**默认必填**（#748）：env 兜底
+#: 值未声明受信根即拒——否则「存在且含 md_cg 的目录」就够格，而造这样一个目录
+#: 零成本（攻击者侧），报告里的 payload 原样仍成立。声明后，值的归一化路径必须
+#: 落在其中某个根之下，否则 fail-closed。
 _BRAIN_PYTHON_ROOTS_ENV = "LINGSHU_BRAIN_PYTHON_ROOTS"
 _BRAIN_PYTHONPATH_ROOTS_ENV = "LINGSHU_BRAIN_PYTHONPATH_ROOTS"
 
@@ -206,19 +213,30 @@ _BRAIN_PYTHONPATH_ROOTS_ENV = "LINGSHU_BRAIN_PYTHONPATH_ROOTS"
 _PY_EXE_RE = re.compile(r"^python(\d+(\.\d+)?)?(\.exe)?$", re.IGNORECASE)
 
 
-def _require_under_trusted_roots(value: str, roots_env: str, var: str) -> str:
-    """受信根校验（#748 可选面）。
+def _require_under_trusted_roots(value: str, roots_env: str, var: str,
+                                 required: bool = False) -> str:
+    """受信根校验（#748）。
 
-    `roots_env` 非空时，`value` 的归一化路径须落在其中某个根之下，否则
-    fail-closed；未设置 ⇒ 直接放行（退到形状/结构校验）。归一化 =
-    `os.path.normcase(os.path.realpath(...))`（两侧同口径比较）。
+    `required=True`（env 兜底面的默认处置）：`roots_env` **未声明 ⇒ 拒**——
+    env 给出的执行面（解释器 / 模块搜索目录）在**默认配置下不被采信**，
+    部署方要么走显式参数 `python=` / `pythonpath=`（推荐路径），要么显式声明
+    受信根把 env 面打开。`required=False` 只做「声明了就必须落在根内」。
 
-    残留面（如实）：能设置本进程 env 者同样能设置该受信根变量 ⇒ 本面整体属
-    **提权/持久化放大器**（与 main 既有定性一致），非默认可达 RCE；受信根是给
-    「部署方想钉死位置」用的旋钮。
+    声明了 `roots_env` 时：`value` 的归一化路径须落在其中某个根之下，否则
+    fail-closed。归一化 = `os.path.normcase(os.path.realpath(...))`（两侧同口径）。
+
+    残留面（如实，**本件不消除**）：能设置本进程 env 者同样能设置该受信根变量
+    ⇒ 对「已能设置 env 的攻击者」而言本面仍属**提权/持久化放大器**（与 main
+    既有定性一致），非默认可达 RCE。本件收的是**默认配置**这一档：一段从父环境
+    继承/残留的 `BRAIN_PYTHONPATH` 不再静默决定被执行的模块。
     """
     declared = os.environ.get(roots_env)
     if not declared:
+        if required:
+            raise ValueError(
+                "%s 来自 env，但未声明受信根 %s ⇒ 默认不采信 env 给出的执行面"
+                "（#748 fail-closed）。请改用显式参数（`python=` / `pythonpath=`），"
+                "或把该目录加入 %s 后再试：%r" % (var, roots_env, roots_env, value))
         return value
     real = os.path.normcase(os.path.realpath(value))
     for root in declared.split(os.pathsep):
@@ -247,12 +265,15 @@ def _require_env_interpreter(value: str) -> str:
        攻击者的毒目录本身存在、毒 `.cmd` 本身存在 ⇒ 旧口径放行任意可执行
        （`.cmd` / `.bat` / 任意名），实测仍跑到攻击者的 `md_cg/mcp_server.py`
        （#748：RCE 半成立）。
-    2. **受信根**（可选面）：`LINGSHU_BRAIN_PYTHON_ROOTS` 非空时，归一化路径须
-       落在其中某个根之下，否则 fail-closed。
+    2. **受信根**（**默认 fail-closed**）：env 兜底面**必须**声明
+       `LINGSHU_BRAIN_PYTHON_ROOTS`，且归一化路径须落在其中某个根之下，
+       否则拒。未声明受信根 ⇒ 不采信 env 给出的解释器（改用显式参数 `python=`，
+       或声明受信根后再试）。
 
-    残留面（如实）：能设置本进程 env 者同样能设置受信根变量 ⇒ 本面整体属
-    **提权/持久化放大器**（与 main 既有定性一致），非默认可达 RCE。形状校验挡住
-    的是「任意可执行（如 `.cmd`）」这一档，不改变上述定性。
+    残留面（如实）：能设置本进程 env 者同样能设置受信根变量 ⇒ 对「已能设置 env
+    的攻击者」而言本面仍属**提权/持久化放大器**（与 main 既有定性一致），非默认
+    可达 RCE。形状校验挡住的是「任意可执行（如 `.cmd`）」这一档；受信根把默认
+    配置收成 fail-closed（一段继承/残留的 `BRAIN_PYTHON` 不再静默决定被执行的程序）。
     """
     if not os.path.isabs(value):
         raise ValueError(
@@ -269,7 +290,7 @@ def _require_env_interpreter(value: str) -> str:
             "python3 / python3.12 / python.exe）：%r（#748 fail-closed）"
             % (value,))
     return _require_under_trusted_roots(value, _BRAIN_PYTHON_ROOTS_ENV,
-                                        "BRAIN_PYTHON")
+                                        "BRAIN_PYTHON", required=True)
 
 
 def _require_env_dir(value: str, var: str) -> str:
@@ -284,12 +305,15 @@ def _require_env_dir(value: str, var: str) -> str:
     1. **脑包结构**：目录下须解析出 `md_cg/__init__.py` 与
        `md_cg/mcp_server.py`。同样地「存在性」不是白名单——攻击者的毒目录本身
        就是一个存在的目录（#748）。
-    2. **受信根**（可选面）：`LINGSHU_BRAIN_PYTHONPATH_ROOTS` 非空时，归一化
-       路径须落在其中某个根之下，否则 fail-closed。
+    2. **受信根**（**默认 fail-closed**）：env 兜底面**必须**声明
+       `LINGSHU_BRAIN_PYTHONPATH_ROOTS`，且归一化路径须落在其中某个根之下，
+       否则拒。未声明受信根 ⇒ 不采信 env 给出的模块搜索目录（改用显式参数
+       `pythonpath=`，或声明受信根后再试）。
 
-    残留面（如实）：能设置本进程 env 者同样能设置受信根变量 ⇒ 本面整体属
-    **提权/持久化放大器**（与 main 既有定性一致），非默认可达 RCE；结构校验挡住
-    的是「任意存在的目录」这一档，不改变上述定性。
+    残留面（如实）：能设置本进程 env 者同样能设置受信根变量 ⇒ 对「已能设置 env
+    的攻击者」而言本面仍属**提权/持久化放大器**（与 main 既有定性一致），非默认
+    可达 RCE；结构校验挡住的是「任意存在的目录」这一档，受信根把默认配置收成
+    fail-closed。
     """
     if not os.path.isabs(value):
         raise ValueError(
@@ -303,7 +327,8 @@ def _require_env_dir(value: str, var: str) -> str:
         raise ValueError(
             "%s 指向的目录下未解析出 md_cg 脑包（须含 md_cg/__init__.py 与 "
             "md_cg/mcp_server.py）：%r（#748 fail-closed）" % (var, value))
-    return _require_under_trusted_roots(value, _BRAIN_PYTHONPATH_ROOTS_ENV, var)
+    return _require_under_trusted_roots(value, _BRAIN_PYTHONPATH_ROOTS_ENV, var,
+                                        required=True)
 
 
 class BrainError(RuntimeError):

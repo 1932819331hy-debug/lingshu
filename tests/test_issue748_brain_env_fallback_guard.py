@@ -2,30 +2,34 @@
 """test_issue748_brain_env_fallback_guard · #748 `BRAIN_PYTHON` / `BRAIN_PYTHONPATH`
 env 兜底取值收窄守卫
 ============================================================================
-缺陷（#748 · 判定「部分成立」：RCE 半成立、凭据外带半不成立）：
+缺陷（#748 · 判定「成立」）：
   `MCPClient.__init__` 的 env 回落面（`BRAIN_PYTHON` / `BRAIN_PYTHONPATH`）只经
   `_require_env_interpreter` / `_require_env_dir` 校验，而两者旧口径**只查
   「绝对路径＋存在性」**。攻击者的毒目录本身就是一个存在的目录、毒 `.cmd` 本身
   就是一个存在的文件 ⇒ **存在性不是白名单**：实测仍跑到攻击者的
-  `md_cg/mcp_server.py`。凭据半**不成立**：`AEIS_DESIGNER_KEY` 已被 `_brain_env`
-  的 `_ENV_ALLOW_NAMES` 白名单挡在子进程之外。
+  `md_cg/mcp_server.py`。关于「凭据外带半不成立」的复核更正见实现 docstring：
+  `_brain_env` 的白名单管的是「往子进程 env 里放什么」，管不到「父进程
+  `os.environ` 里有什么」；毒模块一旦被执行，读父进程 env 是另一条独立路径。
 
 修法（只收窄 env 兜底面；显式参数面与 env 回落本身都不动）：
   ① `_require_env_interpreter`：追加**解释器文件名形状**校验（`_PY_EXE_RE`：
      `python` / `python3` / `python3.12` / `python.exe` / `python312.exe`）
-     ＋ 可选**受信根**校验（`LINGSHU_BRAIN_PYTHON_ROOTS`，`os.pathsep` 多根）；
+     ＋ **受信根**校验（`LINGSHU_BRAIN_PYTHON_ROOTS`，`os.pathsep` 多根；
+     **默认必填**：未声明即拒）；
   ② `_require_env_dir`：追加**脑包结构**校验（目录下须解析出 `md_cg/__init__.py`
-     与 `md_cg/mcp_server.py`）＋ 可选受信根校验
-     （`LINGSHU_BRAIN_PYTHONPATH_ROOTS`）。
+     与 `md_cg/mcp_server.py`）＋ **受信根**校验
+     （`LINGSHU_BRAIN_PYTHONPATH_ROOTS`，同样默认必填）。
 
 断言组
 ------
-G1 毒目录（结构合法）：①未声明受信根 ⇒ 放行（有意的便利面，防把功能修死）；
+G1 受信根是**默认必填**面：①未声明受信根 ⇒ **拒**（结构合法也不够格）；
+   ①′声明受信根且覆盖 ⇒ 放行（防把功能修死）；①″`BRAIN_PYTHON` 同款；
    ②声明受信根为**另一个**目录 ⇒ 拒；③**兄弟目录前缀**（root=`…/root`、值=
    `…/rootEvil`）⇒ 拒（边界按分隔符切，不是裸字符串前缀）。
 G2 非脑包目录（空临时目录）⇒ 拒（旧口径放行 ⇒ 变异即红）。
-G3 任意可执行：`evil.cmd` / `evil.exe` ⇒ 拒（旧口径放行 ⇒ 变异即红）；
-   `sys.executable` 与形状合法名（`python3.12`）⇒ 放行（防过修）。
+G3 任意可执行：`evil.cmd` / `evil.exe` / `pythonw.exe` / `mypython.exe` ⇒ 拒
+   （旧口径放行 ⇒ 变异即红）；`sys.executable` 与形状合法名（`python3.12`）在
+   受信根覆盖下 ⇒ 放行（防过修）。
 G4 端到端接线：`BRAIN_PYTHONPATH=<空临时目录>` 且不传 `pythonpath=` ⇒
    `MCPClient(...)` 在**起子进程之前**抛 `ValueError` 且文案点名
    `BRAIN_PYTHONPATH`（防「校验函数在、`__init__` 没调」）。
@@ -38,12 +42,14 @@ G6 反向腿：受信根**已设置且值在其中** ⇒ 放行；受信根指�
 变异哨兵（逐处必红；由本仓 #748 交付流程用脚本改源后复跑本件，读数见报告）
   · M1 去掉 `_require_env_dir` 的结构校验 ⇒ G2 红；
   · M2 去掉 `_require_env_interpreter` 的形状校验 ⇒ G3 红；
-  · M3 去掉受信根校验 ⇒ G1②/G6 红。
+  · M3 去掉受信根校验（含「默认必填」）⇒ G1①/①″/②/G6 红。
 
 边界（如实）
-  · 残留面：能设置本进程 env 者同样能设置受信根变量 ⇒ 该面整体属**提权/持久化
-    放大器**（与 main 既有定性一致），非默认可达 RCE；形状/结构校验挡住的是
-    「任意可执行 / 任意存在的目录」这一档，不改变上述定性。
+  · 残留面：能设置本进程 env 者同样能设置受信根变量 ⇒ 对「已能设置 env 的攻击者」
+    而言该面仍属**提权/持久化放大器**（与 main 既有定性一致），非默认可达 RCE。
+    形状/结构校验挡住「任意可执行 / 任意存在的目录」这一档；受信根默认必填收的是
+    **默认配置**这一档——一段继承/残留的 `BRAIN_PYTHONPATH` 不再静默决定被执行的
+    模块。**本件不声称 env 面成为安全边界。**
   · 本件不真起脑端子进程：G4 断言「校验先于 Popen」，G5 用哨兵替换 Popen。
   · 受信根比较用 `os.path.normcase(os.path.realpath(...))`（两侧同口径），
     与实现同款归一化。
@@ -119,14 +125,42 @@ def _exploding_popen(*_args, **_kwargs):
 
 
 # ---------------------------------------------------------------------------
-# G1 毒目录：结构合法时，受信根是唯一裁决面
+# G1 受信根是**默认必填**面：未声明即拒，声明且覆盖才放行
 # ---------------------------------------------------------------------------
 
 
-def test_g1a_toxic_dir_passes_when_no_trusted_root_declared(tmp_path):
-    """G1①：未声明受信根 ⇒ 结构合法即放行（**有意的便利面**，防把功能修死）。"""
+def test_g1a_env_dir_rejected_when_no_trusted_root_declared(tmp_path):
+    """G1①：**未声明受信根 ⇒ 拒**（#748 默认 fail-closed）。
+
+    这一段是本件与「只加形状/结构校验」的分界：结构合法**不足以**让 env 兜底面
+    被采信——否则任何「存在且含 md_cg 的目录」都够格，而造这样一个目录零成本。
+    要用 env 面，部署方须显式声明受信根（见 G1①′）。
+    """
     toxic = _make_brain_pkg(tmp_path / "toxic")
+    raised = _raised(_require_env_dir, toxic, "BRAIN_PYTHONPATH")
+    assert raised is not None, \
+        "未声明受信根时 env 兜底面仍被采信（#748 默认非 fail-closed）"
+    assert isinstance(raised, ValueError), "应为 ValueError：%r" % (raised,)
+    assert "BRAIN_PYTHONPATH" in str(raised), "文案未点名该变量：%r" % (raised,)
+    assert _BRAIN_PYTHONPATH_ROOTS_ENV in str(raised), \
+        "文案未指出「声明受信根」这条出路：%r" % (raised,)
+
+
+def test_g1a2_env_dir_passes_when_declared_root_covers_it(tmp_path, monkeypatch):
+    """G1①′：**显式声明受信根且值在其中 ⇒ 放行**（防把功能修死）。"""
+    toxic = _make_brain_pkg(tmp_path / "toxic")
+    monkeypatch.setenv(_BRAIN_PYTHONPATH_ROOTS_ENV, str(tmp_path))
     assert _require_env_dir(toxic, "BRAIN_PYTHONPATH") == toxic
+
+
+def test_g1a3_env_interpreter_rejected_when_no_trusted_root_declared(tmp_path):
+    """G1①″：`BRAIN_PYTHON` 同款——形状合法但未声明受信根 ⇒ 仍拒。"""
+    exe = _touch(tmp_path, "python3.12")
+    raised = _raised(_require_env_interpreter, exe)
+    assert raised is not None, \
+        "未声明受信根时 env 解释器仍被采信（#748 默认非 fail-closed）"
+    assert _BRAIN_PYTHON_ROOTS_ENV in str(raised), \
+        "文案未指出「声明受信根」这条出路：%r" % (raised,)
 
 
 def test_g1b_toxic_dir_rejected_outside_trusted_root(tmp_path, monkeypatch):
@@ -154,14 +188,19 @@ def test_g1c_sibling_prefix_is_not_inside_root(tmp_path, monkeypatch):
 
 
 # ---------------------------------------------------------------------------
-# G2 非脑包目录
+# G2 非脑包目录（**受信根已声明**，让结构校验成为唯一裁决面 ⇒ 不被根闸掩盖）
 # ---------------------------------------------------------------------------
 
 
-def test_g2_non_brain_package_dir_rejected(tmp_path):
-    """G2：空目录（旧口径放行）⇒ 新契约拒，文案点名变量与 md_cg 脑包。"""
+def test_g2_non_brain_package_dir_rejected(tmp_path, monkeypatch):
+    """G2：空目录（旧口径放行）⇒ 新契约拒，文案点名变量与 md_cg 脑包。
+
+    受信根**已声明并覆盖**该目录 ⇒ 只剩结构校验这一道裁决面（否则根闸会先拒，
+    结构校验的判别力被掩盖 ⇒ 抽掉它也不红）。
+    """
     empty = tmp_path / "empty"
     empty.mkdir()
+    monkeypatch.setenv(_BRAIN_PYTHONPATH_ROOTS_ENV, str(tmp_path))
     raised = _raised(_require_env_dir, str(empty), "BRAIN_PYTHONPATH")
     assert raised is not None, "非脑包目录未被拒（#748；旧口径放行 ⇒ 变异即红）"
     assert isinstance(raised, ValueError), "应为 ValueError：%r" % (raised,)
@@ -169,25 +208,27 @@ def test_g2_non_brain_package_dir_rejected(tmp_path):
     assert "md_cg" in str(raised), "文案未说明脑包结构缺失：%r" % (raised,)
 
 
-def test_g2b_partial_structure_rejected(tmp_path):
+def test_g2b_partial_structure_rejected(tmp_path, monkeypatch):
     """G2 补：只有 `md_cg/__init__.py`（缺 mcp_server.py）⇒ 仍拒（防只查一半）。"""
     partial = tmp_path / "partial"
     os.makedirs(os.path.join(str(partial), "md_cg"))
     _touch(os.path.join(str(partial), "md_cg"), "__init__.py")
+    monkeypatch.setenv(_BRAIN_PYTHONPATH_ROOTS_ENV, str(tmp_path))
     assert _raised(_require_env_dir, str(partial), "BRAIN_PYTHONPATH") is not None, \
         "缺 md_cg/mcp_server.py 仍被放行（#748）"
 
 
 # ---------------------------------------------------------------------------
-# G3 任意可执行 vs 解释器形状
+# G3 任意可执行 vs 解释器形状（**受信根已声明**，同理让形状校验成为唯一裁决面）
 # ---------------------------------------------------------------------------
 
 
 @pytest.mark.parametrize("name", ["evil.cmd", "evil.exe", "pythonw.exe",
                                  "mypython.exe"])
-def test_g3a_arbitrary_executable_rejected(tmp_path, name):
+def test_g3a_arbitrary_executable_rejected(tmp_path, name, monkeypatch):
     """G3：任意可执行（存在即放行的旧口径）⇒ 新契约拒。"""
     exe = _touch(tmp_path, name)
+    monkeypatch.setenv(_BRAIN_PYTHON_ROOTS_ENV, str(tmp_path))
     raised = _raised(_require_env_interpreter, exe)
     assert raised is not None, \
         "%s 未被拒（#748：存在性不是白名单；旧口径放行 ⇒ 变异即红）" % (name,)
@@ -197,13 +238,19 @@ def test_g3a_arbitrary_executable_rejected(tmp_path, name):
 
 
 @pytest.mark.parametrize("name", ["python3.12", "python3", "python.exe"])
-def test_g3b_python_shaped_names_pass(tmp_path, name):
-    """G3 反向腿：形状合法名 ⇒ 放行（防过修）。"""
+def test_g3b_python_shaped_names_pass(tmp_path, name, monkeypatch):
+    """G3 反向腿：形状合法名 ＋ 受信根覆盖 ⇒ 放行（防过修）。"""
     exe = _touch(tmp_path, name)
+    monkeypatch.setenv(_BRAIN_PYTHON_ROOTS_ENV, str(tmp_path))
     assert _require_env_interpreter(exe) == exe
 
 
-def test_g3c_sys_executable_passes():
+def test_g3c_sys_executable_passes(monkeypatch):
+    """G3 反向腿：`sys.executable` ＋ 受信根覆盖 ⇒ 放行（既有守卫依赖此点）。"""
+    monkeypatch.setenv(_BRAIN_PYTHON_ROOTS_ENV,
+                       os.path.dirname(sys.executable))
+    assert _require_env_interpreter(sys.executable) == sys.executable
+
     """G3 反向腿：`sys.executable` ⇒ 放行（既有守卫依赖此点）。"""
     assert _require_env_interpreter(sys.executable) == sys.executable
 
