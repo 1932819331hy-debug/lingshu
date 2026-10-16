@@ -571,6 +571,31 @@ class STNode:
     semantic_coordinates: Dict = field(default_factory=dict)   # v1.7：符号/语义投影（D-003）
     state_attributes: Dict = field(default_factory=dict)       # v1.7：形容词（图像时间变化）
     entity_id: Optional[str] = None                            # v1.7：名词（实体挂接）
+    # ── `entity_id` 语义声明（公开 issue #766 定性收口 · 维护者端裁定 2026-10-17）──
+    # **本字段是「名词挂接 / 标注」，不是数据隔离边界。**
+    #
+    # 面内定位：与 `spatial_coordinates`（视觉坐标）、`state_attributes`（形容词）
+    # 并列的 v1.7「名词」面——记录「这条记忆挂在哪个实体名下」，供展示与挂接。
+    #
+    # 检索面**零消费**（实证，基线 origin/main 逐符号核过）：
+    #   · `SpacetimeMemoryEngine.recall` 的候选集与终排无 `entity_id` 条件；
+    #   · `LayeredStore.search_content`（LIKE 路径）的 SQL WHERE 只由 `layer IN (…)`
+    #     与 LIKE 片段构成；
+    #   · `FTSIndex.candidates`（FTS 路径）同样无该列；
+    #   · `lingshu/core/retrieval.py` 内本字段引用数为 **0**。
+    # ⇒ 异实体（含**另起进程**的实例）可经 `recall` / `search_content` 原样取回
+    #   ——这是**设计现状**，不是缺陷（判据：本仓不把库级 / 实例级字段当安全边界）。
+    #
+    # 读侧唯一的消费点都在**展示面**（均非过滤 / 鉴权）：`render_semantic_cube_3d`
+    # 的轨迹过滤、`query_by_semantics` 的实体名加分。
+    #
+    # 同款口径先例：本文件 `Role` docstring 的信任边界声明（角色是实例属性、
+    # 不构成安全边界）＋ 仓内既有明文「本层的角色 / 会话过滤是消费作用域，
+    # **不是身份认证边界**」。
+    #
+    # ⇒ 若日后要把它**升格**为隔离边界，属**设计取向变更**（不是「补一个漏掉的闸」）：
+    #   还缺一格前置——**调用方实体从哪里来**（引擎构造器只有 `identity` / `role`，
+    #   `nodes` 表无属主 / 实例列）。取向与落点见 `docs/architecture.md` §六 6.4。
 
     def to_row(self) -> tuple:
         """节点序列化为 SQLite 行元组（列序=nodes 表 schema）。
