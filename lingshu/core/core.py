@@ -3357,6 +3357,21 @@ class LayeredStore:
         边界（削掉的判别力，如实标注）：首次进入时间模式（无 `_last_decay_at`
         记录）时按**一个周期**计 dt，而非 0——避免「刚部署/刚重启首轮不衰减」；
         取此口径与 `start_auto_decay` 的周期语义一致。
+
+        #176 追评（时钟回拨把游标写回更小的 `now`）：旧实现无条件
+        `set_meta(key, str(now))`——回拨那一轮 `dt` 虽被钳成 0（不反向增信），
+        **游标却倒退了**；时钟恢复后下一轮 `now - last` 把回拨区间**再算一遍**
+        ⇒ 一次 1 小时回拨让恢复后多遗忘约 1 小时（情境层记忆被提前删除、
+        知识层 confidence 额外回落，无日志）。修法（issue 建议 1，最小）：
+        写回**单调不降**的游标 `max(last_f, now)`（无游标时仍写 `now`）——
+        回拨轮游标留在原处、`dt` 仍钳 0，恢复轮 `dt = now - last_f` 只计
+        真实流逝。判据来源：公开 issue #176 追评（`max(now, last_f)`）＋
+        本端独立复跑读数（对照 `T0→T0+60→T0+120` 与回拨 `T0→T0-3540→T0+120`
+        在相同真实流逝下 importance 相等）。
+        边界（削掉的判别力，如实标注）：本件**只**让游标不倒退，**不**改
+        `dt` 的钳零语义（回拨区间不计入衰减，也不反向增信）；issue 建议 2
+        （进程内周期调度改用 `time.monotonic()`）不在本件范围——本函数是
+        「墙钟记账」面，`monotonic` 属调度面，属另一个语义变更。
         """
         if now is None:
             return self._DECAY_PERIOD_SECONDS
@@ -3368,7 +3383,10 @@ class LayeredStore:
         dt = self._DECAY_PERIOD_SECONDS if last_f is None else (now - last_f)
         if dt < 0:
             dt = 0.0          # 时钟回拨：不前进（不反向增信）
-        self.set_meta(self._LAST_DECAY_META_KEY, str(now))
+        # #176 追评：游标**单调不降**——回拨时不得把更小的 `now` 写回，否则时钟
+        # 恢复后 `now - last` 会把回拨区间重复计入（情境层记忆被提前删除）。
+        self.set_meta(self._LAST_DECAY_META_KEY,
+                      str(now if last_f is None else max(last_f, now)))
         return dt
 
     def _decay_value(self, x: float, factor: float, dt: float) -> float:
