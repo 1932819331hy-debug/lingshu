@@ -22,10 +22,11 @@
     anomaly 留痕不删）
 
 WAL（append-only 单调）：{seq, ts, tick, kind ∈ episode|growth|confirm|revert|verify}。
-`seq` 在**单个 WAL 文件内**严格单调——`__init__` 打开已存在文件时读末条 `seq`
-接着编号（见 #248）。回放一致性：顺序重放 episode 事件重建的世界图与当前 graph()
-逐节点逐边一致（WAL = 世界图演化的可逆投影；被 REVERT 的假设在快照消失但
-revert 事件留痕）。
+`seq` 在**单个 WAL 文件内**严格单调——`__init__` 打开已存在文件时读**最后一条
+可用记录**（可解析、是 dict、`seq` 是整数）的 seq 接着编号（见 #248 / #464；
+崩溃残行与超长/非对象末行不再使续号回落 0）。回放一致性：顺序重放 episode
+事件重建的世界图与当前 graph() 逐节点逐边一致（WAL = 世界图演化的可逆投影；
+被 REVERT 的假设在快照消失但 revert 事件留痕）。
 
 设计稿：docs/世界模型推演循环显式化_设计稿_v0.1.md（该文档不在本仓，属上游/私域件）
 （含 Nature co-design 八特性 checklist 审计与 v0.1 诚实边界）
@@ -49,6 +50,11 @@ try:
     from .scene_simulator import SceneSimulator
 except ImportError:
     from .scene_simulator import SceneSimulator
+
+
+# WAL 续号反向扫描的块大小（#464）：只读尾部一块即可覆盖绝大多数文件；
+# 找不到可用记录时**继续向前分块回溯**（不整文件读入 ⇒ 超大 WAL 不引入 O(size) 读）。
+_WAL_SCAN_CHUNK = 65536
 
 
 # ==================== 确定性几何（拓扑生长外推 · 零 rng）====================
@@ -184,31 +190,66 @@ class SimulationLoop:
         self._flush_count = 0
 
     def _resume_seq_from_wal(self, wal_path: Optional[str]) -> int:
-        """打开已存在 WAL 文件时读**末条**记录的 seq 并接着编号（#248）。
+        """打开已存在 WAL 文件时读**最后一条可用记录**的 seq 并接着编号。
 
-        只在构造时读一次（不每条读全文件，避免 O(n²)）；文件不存在/空/末行损坏
-        时回 0（fail-safe：不因外部坏档拒绝构造）。**确定性**：只依赖文件内容，
-        故「同配置两次运行、各自独立新文件」时都从 0 开始（WAL 逐字节一致性质不受影响）。
+        #248：构造期只读一次（不每条读全文件，避免 O(n²)）。
+        #464：取值来源从「尾部 64KB 块的**最后一行**」改为「**最后一条可用记录**」
+        ——「可用」＝该行可 `json.loads`、解析结果是 `dict`、`seq` 是整数。
+        三种现实形态据此各自处置：
+          · **崩溃残行**（上次进程追加末条时中断 ⇒ 末行是半截 JSON）⇒ 该行不可
+            解析，跳过它、回退到上一条可用记录接着编号（旧实现直接回 0，同一
+            文件内 seq 重复）；
+          · **超长末条**（单条 > 64KB ⇒ 反向首块只覆盖到该行的一半）⇒ 首块内找
+            不到可用记录时**继续向前分块回溯**（块大小 `_WAL_SCAN_CHUNK`；不整
+            文件读入 ⇒ 超大 WAL 不引入 O(size) 读）；
+          · **非对象末行**（末行是合法 JSON 但不是对象，如 `[]`）⇒ `isinstance`
+            类型校验直接跳过该行（旧实现在此处 `last.get(...)` 抛 `AttributeError`，
+            而它不在捕获列表里 ⇒ 构造期崩溃）。
+        `seq` 的类型校验同时消掉了该 `AttributeError`/`TypeError` 分支，故**不**
+        加宽捕获（仍收窄为 `(OSError, ValueError, TypeError)`，不用宽
+        `except Exception`，#170 口径）。
+
+        返回 `0` 的语义是「**整个文件里没有任何一条可用记录**」（文件不存在 /
+        空文件 / 所有行都不可用）——fail-safe：不因外部坏档拒绝构造。
+        **确定性**：只依赖文件内容，故「同配置两次运行、各自独立新文件」时都从
+        0 开始（WAL 逐字节一致性质不受影响）。
         """
         if not wal_path or not os.path.exists(wal_path):
             return 0
         try:
             with open(wal_path, "rb") as f:
                 f.seek(0, os.SEEK_END)
-                size = f.tell()
-                # 从尾部反向读一个块，取最后一条完整行（避免整文件读入）
-                chunk = min(65536, size)
-                f.seek(size - chunk)
-                tail = f.read().decode("utf-8", errors="ignore")
-            lines = [ln for ln in tail.splitlines() if ln.strip()]
-            if not lines:
-                return 0
-            last = json.loads(lines[-1])
-            return int(last.get("seq", -1)) + 1
+                pos = f.tell()
+                buf = b""            # 跨块不完整行的尾部片段（与更早的块拼接）
+                while pos > 0:
+                    chunk = min(_WAL_SCAN_CHUNK, pos)
+                    pos -= chunk
+                    f.seek(pos)
+                    buf = f.read(chunk) + buf
+                    lines = buf.split(b"\n")
+                    # pos > 0 时 lines[0] 是被块边界截断的不完整行（其前半段在
+                    # 更早的块里）⇒ 本轮不参与判定，只留作下轮拼接。
+                    scan = lines[1:] if pos > 0 else lines
+                    for raw in reversed(scan):     # 从最新一行反向找可用记录
+                        s = raw.strip()
+                        if not s:
+                            continue
+                        try:
+                            parsed = json.loads(s.decode("utf-8",
+                                                         errors="ignore"))
+                        except ValueError:
+                            continue               # 残行/半截 JSON ⇒ 跳过
+                        if not isinstance(parsed, dict):
+                            continue               # 非对象末行 ⇒ 跳过（#464 C）
+                        seq = parsed.get("seq")
+                        if isinstance(seq, int) and not isinstance(seq, bool):
+                            return seq + 1
+                    buf = lines[0] if pos > 0 else b""
+            return 0
         except (OSError, ValueError, TypeError):
-            # 刻意静默（fail-safe）：读坏档不得拒绝构造，回 0 让新 WAL 从头编号。
-            # 收窄为 (OSError 文件 IO / ValueError=json 解析与 int 转换 /
-            # TypeError 末条非 dict) —— 不用宽 `except Exception`（#170 口径）。
+            # 刻意静默（fail-safe）：读坏档不得拒绝构造，回 0（整个文件无可用记录）。
+            # 收窄为 (OSError 文件 IO / ValueError=json 解析 / TypeError=类型异常)
+            # —— 不用宽 `except Exception`（#170 口径）。
             return 0
 
     def _alias_of(self, eid: str) -> str:
@@ -219,6 +260,22 @@ class SimulationLoop:
 
     # ---------- WAL ----------
 
+    def _wal_ends_with_newline(self) -> bool:
+        """文件末尾是否以换行结尾（空文件/读不到视为 True，即不必补）。
+
+        #464：`_wal` 用 `open(..., "a")` 追加，不检查末字节 ⇒ 上次进程留下的
+        崩溃残行（不以 `\n` 结尾）会把新记录**粘在残行上**，该记录整行不可解析
+        （审计轨迹丢一条）。追加前先探末字节即可。
+        """
+        try:
+            if os.path.getsize(self.wal_path) == 0:
+                return True
+            with open(self.wal_path, "rb") as f:
+                f.seek(-1, os.SEEK_END)
+                return f.read(1) == b"\n"
+        except OSError:
+            return True
+
     def _wal(self, kind: str, payload: Dict) -> None:
         rec = {"seq": self._seq, "ts": round(self._clock(), 3),
                "tick": self.wm.tick, "kind": kind, "payload": payload}
@@ -228,6 +285,12 @@ class SimulationLoop:
             os.makedirs(os.path.dirname(os.path.abspath(self.wal_path)),
                         exist_ok=True)
             with open(self.wal_path, "a", encoding="utf-8") as f:
+                # #464：残行粘连面——末尾不以换行结尾（上次进程写了一半）时先补
+                # 一个换行，使新记录独立成行。正常路径（末尾本就有换行）不写任何
+                # 额外字节 ⇒ 逐字节不变；文本模式保持默认换行转换（与既有 WAL
+                # 的 `\r\n` 一致），不改编码/换行口径。
+                if not self._wal_ends_with_newline():
+                    f.write("\n")
                 f.write(json.dumps(rec, ensure_ascii=False) + "\n")
 
     # ---------- 感知（可注入遮蔽：模型看不到的实体=盲区）----------
