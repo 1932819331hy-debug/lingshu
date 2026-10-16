@@ -23,6 +23,8 @@ import shutil
 import sys
 import tempfile
 
+import pytest
+
 REPO = os.path.dirname(os.path.dirname(os.path.abspath(__file__)))
 sys.path.insert(0, REPO)
 
@@ -228,5 +230,14 @@ if __name__ == "__main__":
 
 
 def test_brain_store_m1_m2_loop():
-    """M1/M2 最小闭环的 pytest 入口（缺前置 MDCG_BRAIN_PYTHONPATH 时 main() 以 SKIP 退出 0）。"""
+    """M1/M2 最小闭环的 pytest 入口；缺前置 MDCG_BRAIN_PYTHONPATH 时**显式 SKIP**。
+
+    为什么不再直接 `assert main() == 0`：`main()` 在缺前置时打印 SKIP 并 `return 0`
+    （脚本式腿的契约，见文件头 `:12`），而 pytest 腿把「没跑」与「真跑通过」都算
+    `passed` ⇒ **假绿**：脑端不可达时门禁全绿、看不出这条根本没测。故本入口自判
+    前置：缺则 `pytest.skip`（SKIP 与 passed 在报告里可分辨），有则仍走 `main()`。
+    """
+    if not os.environ.get("MDCG_BRAIN_PYTHONPATH"):
+        pytest.skip("未设 MDCG_BRAIN_PYTHONPATH（脑包目录）——脑端端到端未执行，"
+                    "非通过；脚本式腿仍有同款 SKIP")
     assert main() == 0
