@@ -9,8 +9,10 @@ ssh-agent）/ `KUBECONFIG`（直通集群）/ `DOCKER_HOST` / `NETRC` / `*_PROXY
 `AWS_ACCESS_KEY_ID` / `DATABASE_URL` 等。
 
 修法（判据）：改为「**默认丢弃 + 白名单透传**」——只透传 `_ENV_ALLOW_EXACT`
-（具名，进程运行基座）与 `_ENV_ALLOW_PREFIXES`（仅 `LC_`）命中的键，其余继承键
-一律丢弃。`PYTHONUTF8`/`PYTHONIOENCODING` 强制注入、`extra` 覆盖语义不变。
+（具名，进程运行基座）与 `_ENV_ALLOW_PREFIXES`（#495 起**为空**——原仅余 `LC_`，
+该宽前缀会连带放行 `LC_TOKEN` / `LC_PASSWORD` 这类凭据形状名，13 个区域名已改
+具名）命中的键，其余继承键一律丢弃。`PYTHONUTF8`/`PYTHONIOENCODING` 强制注入、
+`extra` 覆盖语义不变。
 
 本守卫三面：
   G1 凭据/能力形状键**一个都不透传**（含旧词表漏掉的一整类）；
@@ -54,6 +56,8 @@ _CREDENTIAL_KEYS = [
     "PIP_INDEX_URL", "PIP_EXTRA_INDEX_URL", "HTTP_PROXY", "HTTPS_PROXY",
     "NO_PROXY", "ALL_PROXY", "GIT_ASKPASS", "GITHUB_TOKEN", "GH_TOKEN",
     "MDCG_TOKEN", "MDCG_VERIFY_KEY",
+    # #495：`LC_` 宽前缀曾把这四个凭据形状名整体放行（前缀已清空）
+    "LC_PASSWORD", "LC_TOKEN", "LC_SECRET", "LC_API_KEY",
 ]
 
 #: 白名单·进程运行基座键（**必须透传**）——被测脚本要能跑起来。
@@ -123,8 +127,16 @@ def test_682_g2_whitelist_has_no_credential_shape_names():
                     "PROXY", "AUTH", "NETRC", "DSN", "URL", "URI"):
             assert bad not in up, (
                 "#682：白名单具名含凭据形状词 %r（键 %r）" % (bad, name))
-    assert _MOD._ENV_ALLOW_PREFIXES == ("LC_",), (
-        "#682：白名单前缀应收敛为仅 LC_，实得 %r" % (_MOD._ENV_ALLOW_PREFIXES,))
+    # #495：前缀白名单已清空（原仅余 `LC_`，会连带放行 `LC_TOKEN`/`LC_PASSWORD`
+    # 这类凭据形状名——正是本用例想防的那一类）；13 个区域名改具名放行。
+    assert _MOD._ENV_ALLOW_PREFIXES == (), (
+        "#495：白名单前缀应清空（`LC_` 宽前缀会放行凭据形状名），实得 %r"
+        % (_MOD._ENV_ALLOW_PREFIXES,))
+    for name in ("LC_PASSWORD", "LC_TOKEN", "LC_API_KEY", "LC_ANY"):
+        assert _MOD._env_is_allowed(name) is False, \
+            "%s 不该被放行（#495）" % name
+    for name in ("LC_ALL", "LC_CTYPE", "LC_MESSAGES"):
+        assert _MOD._env_is_allowed(name) is True, name
 
 
 # ── G3 强制注入与 extra 覆盖语义不变（既有契约） ───────────────────────────

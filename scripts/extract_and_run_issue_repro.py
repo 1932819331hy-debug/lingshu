@@ -237,10 +237,19 @@ _ENV_ALLOW_EXACT = frozenset({
     "PYTHONDONTWRITEBYTECODE", "PYTHONUNBUFFERED", "PYTHONWARNINGS",
     "PYTHONFAULTHANDLER", "PYTHONHASHSEED", "PYTHONNOUSERSITE",
     "PYTHONSAFEPATH", "PYTHONDEVMODE",
+    # 区域/编码面（#495，复核 #680 §一.3 残留）：原 `("LC_",)` 宽前缀顺带放行
+    # 任意 `LC_*` 名，含凭据形状的 `LC_TOKEN` / `LC_PASSWORD`——与上面「不含任何
+    # 凭据或能力形状名」的声明相悖。按脑侧 #227 续 / #652③ 同一手法收敛为
+    # POSIX + glibc 的 13 个区域名具名（非标准 `LC_*` 名本无区域语义）。
+    "LC_ALL", "LC_COLLATE", "LC_CTYPE", "LC_MESSAGES", "LC_MONETARY",
+    "LC_NUMERIC", "LC_TIME",
+    "LC_PAPER", "LC_NAME", "LC_ADDRESS", "LC_TELEPHONE", "LC_MEASUREMENT",
+    "LC_IDENTIFICATION",
 })
 
-#: 白名单·前缀（#682）：仅区域/编码面 `LC_*`——无凭据形状名、无启动期执行面。
-_ENV_ALLOW_PREFIXES = ("LC_",)
+#: 白名单·前缀（#682）：**为空**（#495）——原仅余 `LC_`，该前缀会顺带放行
+#: `LC_TOKEN` / `LC_PASSWORD` 这类凭据形状名，13 个区域名已改具名（见上）。
+_ENV_ALLOW_PREFIXES = ()
 
 
 DEFAULT_TIMEOUT = 600

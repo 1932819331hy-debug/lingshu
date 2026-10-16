@@ -198,6 +198,9 @@ def test_g5_subprocess_env_excludes_credentials(monkeypatch):
         "FOO_TOKEN": "t",
         "BAR_SECRET": "s",
         "BAZ_PASSWORD": "p",
+        # #495：`LC_` 宽前缀曾把这两个凭据形状名整体放行（前缀已清空）
+        "LC_TOKEN": "lt",
+        "LC_PASSWORD": "lp",
     }
     for k, v in planted.items():
         monkeypatch.setenv(k, v)
@@ -223,9 +226,15 @@ def test_g5c_env_is_whitelist_not_blacklist(monkeypatch):
         "非白名单的无关变量被透传 ⇒ 判据是黑名单（#488）"
     assert "IGCCSVC_DB" not in env, \
         "无凭据形状词的凭据名被透传 ⇒ 黑名单 fail-open（#488）"
-    assert rb._ENV_ALLOW_PREFIXES == ("LC_",), rb._ENV_ALLOW_PREFIXES
+    # #495：前缀白名单已清空（原仅余 `LC_`，会连带放行 `LC_TOKEN`/`LC_PASSWORD`
+    # 这类凭据形状名）；区域名改具名放行。
+    assert rb._ENV_ALLOW_PREFIXES == (), rb._ENV_ALLOW_PREFIXES
     assert not any(p.upper().startswith(("AEIS", "HIVE", "MDCG"))
                    for p in rb._ENV_ALLOW_PREFIXES)
+    for name in ("LC_PASSWORD", "LC_TOKEN", "LC_API_KEY"):
+        assert rb._env_is_allowed(name) is False, "%s 不该被放行（#495）" % name
+    for name in ("LC_ALL", "LC_CTYPE", "LC_MESSAGES"):
+        assert rb._env_is_allowed(name) is True, name
 
 
 def test_g5b_subprocess_env_keeps_explicit_extras(monkeypatch):

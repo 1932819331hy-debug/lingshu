@@ -13,8 +13,9 @@
 
 修法：**白名单放行**（fail-closed）替代黑名单剔除——只继承
 `_ENV_ALLOW_NAMES`（进程运行基座：PATH/PYTHON 具名/临时目录/区域… ＋ 具名部署
-配置项 `HIVE_JOBS_DIR`/`HIVE_EXE`/`LINGSHU_KB`/`LINGSHU_DB`）与
-`_ENV_ALLOW_PREFIXES`（**仅** `LC_`）；继承 `MDCG_*` 仍剔除（防在役库被无意命中）。
+配置项 `HIVE_JOBS_DIR`/`HIVE_EXE`/`LINGSHU_KB`/`LINGSHU_DB`）；继承 `MDCG_*`
+仍剔除（防在役库被无意命中）。`_ENV_ALLOW_PREFIXES` **现为空**（#495：`LC_`
+宽前缀是同一失效模式第三次命中，13 个区域名已改具名——见 W10）。
 凭据若确需传入，必须经 `extra_env` **显式**声明。选白名单而非「黑名单拦
 `*_KEY/*_TOKEN/...`」的理由：黑名单对凭据面天然 fail-open——新出现的凭据名只要不撞
 模式就照旧泄露（本例 `IGCCSVC_DB`、`YOUR_STEP_API_KEY` 已证）；白名单是「不声明就不给」。
@@ -28,7 +29,16 @@
 #652 **续**（本轮再扩展，同一手法）：`PYTHON` / `LINGSHU_` 两条前缀亦过宽——
 `PYTHONSTARTUP` / `PYTHONHOME` 等解释器**启动期劫持**名被连带放行，`LINGSHU_` 连带
 放行**身侧**逃生口 `LINGSHU_ALLOW_CWD_IMPORTS`（`lingshu/_pathguard.py`，脑侧零读取
-点）。收敛为具名（见 `_ENV_ALLOW_NAMES`），`_ENV_ALLOW_PREFIXES` 仅余 `LC_`。
+点）。收敛为具名（见 `_ENV_ALLOW_NAMES`），`_ENV_ALLOW_PREFIXES` 一度仅余 `LC_`。
+
+#495 **续**（本轮第三次，同一手法；来源＝复核 issue #680 §一.3 的残留项）：
+最后一条宽前缀 `LC_` 是**同一失效模式第三次命中**——它连带放行 `LC_PASSWORD` /
+`LC_TOKEN` / `LC_API_KEY` 这类**凭据形状名**，与上文「`*_TOKEN` / `*_PASSWORD`
+不再随继承环境交给脑侧子进程」的声明**直接相悖**。收敛为 POSIX + glibc 的 13 个
+区域名具名（`LC_ALL` / `LC_COLLATE` / `LC_CTYPE` / `LC_MESSAGES` / `LC_MONETARY` /
+`LC_NUMERIC` / `LC_TIME` / `LC_PAPER` / `LC_NAME` / `LC_ADDRESS` / `LC_TELEPHONE` /
+`LC_MEASUREMENT` / `LC_IDENTIFICATION`）⇒ `_ENV_ALLOW_PREFIXES` **清空**。
+判定证据见 W10。
 同件 ①：`BRAIN_PYTHON` / `BRAIN_PYTHONPATH` / `BRAIN_ROOT` 是**父进程配置面**
 （`MCPClient.__init__` 在 `_brain_env` **之前**读），白名单管不到 ⇒ env 兜底值加
 fail-closed 校验。判定证据见 W9。
@@ -53,6 +63,9 @@ fail-closed 校验。判定证据见 W9。
      与部署方继承的 CPython 配置名仍透传；`BRAIN_PYTHON`/`BRAIN_PYTHONPATH` 的
      env 兜底值走 fail-closed 校验（相对路径/不存在 ⇒ `ValueError`），
      显式参数不受此限（反向腿·防把功能修死）。
+  W10 **#495·`LC_` 前缀收敛（第三条，同一手法）**：凭据形状的 `LC_PASSWORD` /
+     `LC_TOKEN` / `LC_API_KEY` 不再透传；13 个标准区域名仍透传（反向腿·防把区域
+     功能修死）；`_ENV_ALLOW_PREFIXES` 清空（前缀白名单为零 = 无旁路）。
 
 运行（lingshu 仓根）：python -X utf8 tests/test_issue227_brain_env_credentials.py
                     / python -X utf8 -m pytest tests/test_issue227_brain_env_credentials.py
@@ -206,7 +219,15 @@ def test_w4_required_items_survive():
     for name in ("LINGSHU_KB", "LINGSHU_DB", "PYTHONPATH", "PYTHONUTF8",
                  "PYTHONIOENCODING"):
         assert name in _ENV_ALLOW_NAMES, name
-    assert _ENV_ALLOW_PREFIXES == ("LC_",), _ENV_ALLOW_PREFIXES
+    assert _ENV_ALLOW_PREFIXES == (), _ENV_ALLOW_PREFIXES
+    # #495：`LC_` 宽前缀亦已清空——它会把 `LC_TOKEN` / `LC_PASSWORD` 这类
+    # 凭据形状名一并放行（与上面「`*_TOKEN`/`*_PASSWORD` 不再透传」的声明相悖）；
+    # 13 个区域名改入 `_ENV_ALLOW_NAMES` 具名（反向腿见下）。
+    for name in ("LC_PASSWORD", "LC_TOKEN", "LC_API_KEY", "LC_ANY"):
+        assert _env_is_allowed(name) is False, "%s 不该被放行（#495）" % name
+    for name in ("LC_ALL", "LC_CTYPE", "LC_MESSAGES", "LC_NUMERIC",
+                 "LC_TIME", "LC_COLLATE", "LC_MONETARY"):
+        assert name in _ENV_ALLOW_NAMES, name
     assert not any(p.startswith("MDCG") for p in _ENV_ALLOW_PREFIXES), \
         "MDCG_ 不得进前缀白名单（继承的 MDCG_* 仍须剔除）"
 
@@ -376,8 +397,8 @@ def test_w9_python_lingshu_prefixes_converged_and_parent_env_validated():
     ① 父进程配置面：`BRAIN_PYTHON` / `BRAIN_PYTHONPATH` 在 `MCPClient.__init__` 里、
     **`_brain_env` 之前**被读，白名单管不到 ⇒ env 兜底值要求绝对路径＋存在性。
     """
-    # 腿 1：三条宽前缀只剩 `LC_`
-    assert _ENV_ALLOW_PREFIXES == ("LC_",), _ENV_ALLOW_PREFIXES
+    # 腿 1：四条宽前缀全部清空（`HIVE_` / `PYTHON` / `LINGSHU_` / `LC_`）
+    assert _ENV_ALLOW_PREFIXES == (), _ENV_ALLOW_PREFIXES
     for name in _PYTHON_LAUNCH_NAMES + _LINGSHU_BODY_ONLY_NAMES:
         assert _env_is_allowed(name) is False, "%s 不该被放行（#652③）" % name
     # 腿 2：注入假哨兵 ⇒ `_brain_env` 直读里一个都不出现
@@ -465,6 +486,52 @@ _PASS: list = []
 _FAIL: list = []
 
 
+def test_w10_lc_prefix_converged_named_only():
+    """W10 **#495·`LC_` 前缀收敛**（第三条，同一手法；来源＝复核 #680 §一.3）：
+    凭据形状的 `LC_*` 名不再透传；13 个标准区域名仍透传；前缀白名单清空。
+
+    为什么另立：W4/W9 原有两条断言（`_env_is_allowed("LC_ALL") is True`、
+    `_ENV_ALLOW_PREFIXES == ("LC_",)`）钉的是**收敛前的形态**——本笔把前缀清空后
+    它们必红。本笔不改那两条的**判据意图**（区域面须仍透传），只改其形态口径：
+    区域名由「前缀命中」改为「具名命中」，并新增「凭据形状的 `LC_*` 必须 False」
+    这一条 —— 那正是 #495 指出的缺口（旧口径下 `LC_PASSWORD` 为 True）。
+    """
+    # 腿 1：前缀白名单为空（无前缀旁路）
+    assert _ENV_ALLOW_PREFIXES == (), _ENV_ALLOW_PREFIXES
+    # 腿 2：凭据形状的 LC_* 一律 False（缺陷形态下为 True）
+    for name in ("LC_PASSWORD", "LC_PASSWD", "LC_TOKEN", "LC_SECRET",
+                 "LC_CREDENTIAL", "LC_API_KEY", "LC_ANY"):
+        assert _env_is_allowed(name) is False, \
+            "%s 不该被放行（#495：LC_ 宽前缀会连带放行凭据形状名）" % name
+    # 腿 3（反向腿·防把区域功能修死）：13 个标准区域名具名在册且判 True
+    for name in ("LC_ALL", "LC_COLLATE", "LC_CTYPE", "LC_MESSAGES",
+                 "LC_MONETARY", "LC_NUMERIC", "LC_TIME", "LC_PAPER",
+                 "LC_NAME", "LC_ADDRESS", "LC_TELEPHONE", "LC_MEASUREMENT",
+                 "LC_IDENTIFICATION"):
+        assert name in _ENV_ALLOW_NAMES, name
+        assert _env_is_allowed(name) is True, name
+    # 腿 4：`_brain_env` 直读——注入 LC_ 凭据哨兵 ⇒ 不进子进程 env
+    saved = {}
+    try:
+        for name in ("LC_PASSWORD", "LC_TOKEN"):
+            saved[name] = os.environ.get(name)
+            os.environ[name] = "/iso/sentinel-" + name.lower()
+        os.environ["LC_ALL"] = "C.UTF-8"
+        env = _brain_env("/iso/root", "/iso/brain-pkg")
+    finally:
+        for name, v in saved.items():
+            if v is None:
+                os.environ.pop(name, None)
+            else:
+                os.environ[name] = v
+        os.environ.pop("LC_ALL", None)
+    assert "LC_PASSWORD" not in env, "LC_PASSWORD 仍透传（#495）"
+    assert "LC_TOKEN" not in env, "LC_TOKEN 仍透传（#495）"
+    assert env.get("LC_ALL") == "C.UTF-8", "LC_ALL 应仍透传（反向腿）"
+    leaked = [k for k in _credential_leaks(env)]
+    assert leaked == [], "子进程 env 仍带凭据形状名：%r" % (leaked,)
+
+
 def main() -> int:
     tests = [
         test_w1_env_is_allowed_shape_table,
@@ -476,6 +543,7 @@ def main() -> int:
         test_w7_predicate_has_teeth,
         test_w8_hive_prefix_converged_named_only,
         test_w9_python_lingshu_prefixes_converged_and_parent_env_validated,
+        test_w10_lc_prefix_converged_named_only,
     ]
     for t in tests:
         try:

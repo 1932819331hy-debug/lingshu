@@ -41,10 +41,19 @@ _ENV_ALLOW_NAMES = frozenset({
     # 主机自省
     "NUMBER_OF_PROCESSORS", "PROCESSOR_ARCHITECTURE", "PROCESSOR_IDENTIFIER",
     "PROCESSOR_LEVEL", "PROCESSOR_REVISION", "OS",
+    # 区域/编码面（#495，复核 #680 §一.3 残留）：原 `("LC_",)` 宽前缀顺带放行
+    # 任意 `LC_*` 名，含凭据形状的 `LC_TOKEN` / `LC_PASSWORD` ⇒ 与
+    # `brain_store._ENV_ALLOW_NAMES`（#227 续 / #652③）同款，收敛为 POSIX +
+    # glibc 的 13 个区域名具名。非标准 `LC_*` 名本无区域语义。
+    "LC_ALL", "LC_COLLATE", "LC_CTYPE", "LC_MESSAGES", "LC_MONETARY",
+    "LC_NUMERIC", "LC_TIME",
+    "LC_PAPER", "LC_NAME", "LC_ADDRESS", "LC_TELEPHONE", "LC_MEASUREMENT",
+    "LC_IDENTIFICATION",
 })
 
-#: 子进程 env **白名单·前缀**：仅区域/编码面（无凭据形状名、无启动期执行面）。
-_ENV_ALLOW_PREFIXES = ("LC_",)
+#: 子进程 env **白名单·前缀**：**为空**（#495）——原仅余 `LC_`，该前缀会顺带
+#: 放行 `LC_TOKEN` / `LC_PASSWORD` 这类凭据形状名，13 个区域名已改具名（见上）。
+_ENV_ALLOW_PREFIXES = ()
 
 
 def _env_is_allowed(name: str) -> bool:

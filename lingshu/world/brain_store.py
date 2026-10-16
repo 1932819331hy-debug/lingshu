@@ -32,7 +32,9 @@
   （见 `_ENV_ALLOW_NAMES` / `_ENV_ALLOW_PREFIXES`），其余继承变量一律**不透传**——
   `AEIS_DESIGNER_KEY` / `*_API_KEY` / `*_TOKEN` / `*_SECRET` / `*_PASSWORD` 等
   凭据**不再随继承环境交给脑侧子进程**（旧法「只剔 `MDCG_*`」是黑名单，对凭据面
-  fail-open）。继承的 `MDCG_*` 仍被剔除（防在役库被无意命中）；凭据若确需传入，
+  fail-open）。**该断言现已无旁路**：原先仅余的 `LC_*` 宽前缀会顺带放行
+  `LC_TOKEN` / `LC_PASSWORD` 这类凭据形状名（#495，复核 #680 §一.3），已按同一
+  手法收敛为 13 个区域名具名（见 `_ENV_ALLOW_NAMES`）⇒ 前缀白名单为空。继承的 `MDCG_*` 仍被剔除（防在役库被无意命中）；凭据若确需传入，
   必须经 `extra_env` **显式**声明（有意为之、可审计）。**`HIVE_` 前缀不再放行**
   （#227 续）：脑侧子进程（`python -X utf8 -m md_cg.mcp_server`）只在
   `cg(op=ccg, action=units)` 工具面上经 `md_cg/units.py` 具名读 `HIVE_JOBS_DIR` /
@@ -149,6 +151,15 @@ _ENV_ALLOW_NAMES = frozenset({
     "PYTHONFAULTHANDLER", "PYTHONHASHSEED", "PYTHONNOUSERSITE",
     "PYTHONSAFEPATH", "PYTHONDEVMODE",
     "LINGSHU_KB", "LINGSHU_DB",
+    # #495（复核 #680 §一.3 残留）：原 `("LC_",)` 是**宽前缀**，顺带放行任意
+    # `LC_*` 名——含凭据形状的 `LC_TOKEN` / `LC_PASSWORD`，即上文「`*_TOKEN` /
+    # `*_PASSWORD` 不再透传」对 LC_ 族**不成立**。按 #227 续 / #652③ 同一手法
+    # 第三次收敛为**具名**：POSIX + glibc 的 13 个区域名（`LC_` 前缀面随之清空）。
+    # 非标准 `LC_*` 名本无区域语义，确需者走 `extra_env` 显式声明。
+    "LC_ALL", "LC_COLLATE", "LC_CTYPE", "LC_MESSAGES", "LC_MONETARY",
+    "LC_NUMERIC", "LC_TIME",
+    "LC_PAPER", "LC_NAME", "LC_ADDRESS", "LC_TELEPHONE", "LC_MEASUREMENT",
+    "LC_IDENTIFICATION",
 })
 
 #: 子进程 env **白名单·前缀**（部署方显式配置面）。刻意**不含 `MDCG_`**——继承的
@@ -158,9 +169,11 @@ _ENV_ALLOW_NAMES = frozenset({
 #: `_ENV_ALLOW_NAMES` **具名**放行。**不含 `PYTHON` / `LINGSHU_`**（#652③ 续收敛）：
 #: 同为「前缀过宽」——`PYTHON` 连带放行 `PYTHONSTARTUP` / `PYTHONHOME` 等解释器
 #: 启动劫持名，`LINGSHU_` 连带放行身侧逃生口 `LINGSHU_ALLOW_CWD_IMPORTS`；两条
-#: 前缀已按 #227 续的同一手法改**具名**（见上）。仅余 `LC_*`：区域/编码面，
-#: 无凭据形状名、无启动期执行面。
-_ENV_ALLOW_PREFIXES = ("LC_",)
+#: 前缀已按 #227 续的同一手法改**具名**（见上）。**`LC_` 亦已清空**（#495）：
+#: 同一「前缀过宽」失效模式第三次命中——前缀面把 `LC_TOKEN` / `LC_PASSWORD`
+#: 这类凭据形状名一并放行，故 13 个区域名改入 `_ENV_ALLOW_NAMES` 具名。
+#: 结论：**前缀白名单为空**——「不声明就不给」现在是完整的（无前缀旁路）。
+_ENV_ALLOW_PREFIXES = ()
 
 
 def _env_is_allowed(name: str) -> bool:
