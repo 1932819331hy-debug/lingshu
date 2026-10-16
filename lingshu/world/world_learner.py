@@ -109,11 +109,22 @@ class WorldLearner:
         return {"status": "ok", "tick": self.tick, "observed": len(obs)}
 
     def run(self, n: int = 1) -> Dict:
-        """物理世界演化 n tick + 观测（数据采集）。"""
-        for _ in range(max(0, int(n))):
+        """物理世界演化 n tick + 观测（数据采集）。
+
+        `ticks` = **本轮真实推进的 tick 数**（`self.tick` 增量）——与
+        `seven_layer_loop.run` 的 #233(A) 口径一致（判据＝《PR 审核细则 v0.1》
+        §三.4 判据外置：字段语义须由断言钉住）。旧码主体已 `max(0, int(n))`
+        钳零步，却仍返回 `"ticks": int(n)`，故 `run(-5)` 同一个返回 dict 里
+        `ticks=-5` 而 `tick=0`（声称推进 -5、实际 0 迭代，自相矛盾）——issue #728
+        漏网的独立基类站点。此处让返回值如实反映实际推进数，`n < 0` 归零步
+        （**显式降级且如实报 0**，不改写调用方传入的 n）。
+        """
+        n0 = max(0, int(n))
+        start = self.tick
+        for _ in range(n0):
             self.world.step(n=1)
             self.observe()
-        return {"status": "ok", "ticks": int(n), "tick": self.tick}
+        return {"status": "ok", "ticks": self.tick - start, "tick": self.tick}
 
     # ================= 自监督特征（从观测序列估计） =================
 

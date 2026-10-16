@@ -683,12 +683,22 @@ class SevenLayerLoop:
         `ticks=-5` 却已推进 1 个 tick（自相矛盾，且与 docstring「运行 n tick」
         不符）。判据＝《PR 审核细则 v0.1》§三.4 判据外置：字段语义须由断言
         钉住（`ticks` == 实际推进数）。
+
+        issue #725（B）：上面那次只修了主体循环，**bootstrap 分支未动**——
+        `if not self.explorer.history:` 无条件执行「全带宽感知 + 跑 window tick」，
+        故 `run(0)`/`run(-5)` 仍偷跑世界 `window` tick + `window+1` 帧观测，而同一
+        返回 dict 报 `ticks=0`/`loop_tick=0`（副作用与返回值自相矛盾）。现把自举
+        收进 `n0 > 0`：自举的用途是给**本轮要跑的闭环**备认知种子（`step()` 的
+        L7 决策与 L4 预测需要 explorer 已有观测），`n0 == 0` 时闭环一次都不跑
+        ⇒ 不需要种子，也就不该改世界状态/观测史。`ticks` 语义未变（仍是闭环
+        tick 增量，自举段不推进 `self.tick`）。
         """
-        if not self.explorer.history:
+        n0 = max(0, int(n))
+        if n0 > 0 and not self.explorer.history:
             self.explorer.observe()
             self.explorer.run(n=self.explorer.window)
         start = self.tick
-        for _ in range(max(0, int(n))):
+        for _ in range(n0):
             self.step()
         return {"status": "ok", "ticks": self.tick - start, "loop_tick": self.tick,
                 "overall_hit_rate": self._overall_hit_rate()}

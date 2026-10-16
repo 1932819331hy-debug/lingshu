@@ -339,6 +339,18 @@ def ingest_scene(agent, scene_desc, store=None, tag: str = "spatial",
     - spatial_coordinates = {"x":.., "y":.., "z":..}（3D 锚点，米）
     - state_attributes = {"state": "happy"}（状态 → 呈现变化）
     返回写入的节点 id 列表。
+
+    坐标解析口径（issue #727）：个数错（`ValueError`）与**非有限值**（NaN/±inf）
+    一律**写库前拒绝该行**（`continue`，该实体不入库），与既有「个数错」口径
+    逐字一致——**不是**写库后再清洗。为什么选写库前拒绝：
+      · 正文 `场景实体 …位于 (x,y,z)` 与 `spatial_coordinates` 是**同一份**观测的
+        两个投影，写库后清洗只能改坐标列 ⇒ 正文与坐标列当场自相矛盾；
+      · 非有限坐标不是"可用但需修正"的读数，而是**不可用证据**（#402/#418-F3
+        口径：NaN/±Inf 一律不算可用证据），故不落库、不留半成品节点；
+      · 与个数错同口径 ⇒ 同一段输入不会因两种坏法得到两种语义（一种静默跳过、
+        一种静默改值）。
+    拒绝是**可判读**的：返回的 `written` 长度即实际写入节点数，调用方与输入行数
+    一比即可发现被拒行（本模块既有口径，不新增返回体字段）。
     """
     if store is None:
         store = getattr(agent, "store", None)
@@ -363,6 +375,13 @@ def ingest_scene(agent, scene_desc, store=None, tag: str = "spatial",
                 pos = tuple(float(v) for v in parts[2].split(","))
                 x, y, z = pos
             except ValueError:
+                continue
+            # issue #727：非有限坐标（NaN/±inf）写库前拒绝——旧码只防「个数错」，
+            # NaN 被原样写进 spatial_coordinates，下游 `apply_relations` 的
+            # `math.hypot(nan, ·)` 使 `dx >= 0` 恒 False ⇒ 约束静默失判（实体位置
+            # 永不修正、无告警）。口径与上方 `except ValueError: continue` 逐字一致
+            # （该行不入库；`written` 长度即实际写入数，调用方可判读）。
+            if not all(math.isfinite(v) for v in pos):
                 continue
             entities.append(SceneEntity(parts[0], parts[1], pos,
                             state=parts[3] if len(parts) > 3 else "neutral",

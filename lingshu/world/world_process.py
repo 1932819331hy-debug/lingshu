@@ -167,12 +167,21 @@ def motion_events(history: Sequence[Dict], eid: str, *,
     停止的采样对不更新参考方向；恢复运动后与停止前的运动方向比较。
     事件挂在后一个采样的 tick 上；缺帧处没有采样，因此不产生事件。
     速度按真实 dt 归一化：4 tick 间隔里漂移 0.4 与逐 tick 移动 0.4 不等价。
+
+    dt <= 0 的采样对**不判事件**（相邻两帧同 tick / tick 回退都没有时间间隔，
+    速度在数学上无定义）：既不判停止也不判转向，参考方向也不更新——该采样对
+    不构成运动证据。此处**显式拒绝**该采样对，不用 `max(dt, eps)` 之类把物理量
+    静默改成"看起来合理"的值。口径与 `motion.py::_estimate_detail` 的
+    `if dt <= 0: continue` 逐字一致（同仓既有的位移对口径）。`track_samples`
+    仍如实返回 dt=0 / dt<0 的采样读数（那是真实观测的 tick 差，不是待删的坏点）。
     """
     th = thresholds or ProcessThresholds()
     samples = track_samples(history, eid)
     events: List[Dict] = []
     last_dir: Optional[Tuple[float, float]] = None
     for prev, cur in zip(samples, samples[1:]):
+        if cur["dt"] <= 0:
+            continue
         dx = cur["pos"][0] - prev["pos"][0]
         dz = cur["pos"][2] - prev["pos"][2]
         moved = math.hypot(dx, dz)
