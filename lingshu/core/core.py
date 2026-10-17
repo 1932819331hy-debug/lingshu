@@ -11121,6 +11121,59 @@ class SpacetimeMemoryEngine:
                           "confidence", "layer", "tags", "semantic_coordinates",
                           "state_attributes", "entity_id")
 
+    def _export_pending_promotions(self) -> List[Dict]:
+        """SUB 侧「待晋升副本」**单列分组**导出（#165 路 B 第 5 条 · 上行主方向）。
+
+        章程：上行（SUB → PRIMARY）是本通道的**主方向**。SUB 侧带
+        `SUB_PENDING_SYNC_TAG`（`pending_sync`）/ `external_anchor` 标签的副本落在
+        **本地知识层**（`_write_structure_record` / `register_external_anchor` 的 SUB
+        腿），而旧实现只导出共享层 ⇒ SUB 载荷恒 0 条，这些副本永远到不了父节点
+        （issue #165 标题主诉「SUB 上『待父节点同步』的终裁记录与外部锚点永远到不了
+        结构层」）。本组把它们**单列分组**导出。
+
+        为什么**不**混进 `sync_payload`：接收端 `apply_shared_sync` 只收共享层条目，
+        本地层条目一律 `rejected`（章程：本地层实例独立）⇒ 混进去会被整批拒收，等于
+        白推。故 `sync_payload` 的既有语义（**只含共享层**）**一字不动**，本组另立
+        顶层键。
+
+        分组口径：按**触发标签**分组（`pending_sync` 在前、`external_anchor` 在后，
+        组内按 `id` 升序 ⇒ 输出确定）。同一条副本同时带两个标签时**两组都出现**
+        （不是二选一——两组语义不同：一个是「待父节点同步」的通用标记，一个是
+        「外部校准输入」的来源标记）；每条以 `pending_group` 键标明来自哪一组，
+        **按 `id` 去重是消费侧的事**（本组如实保留两组的完整视图）。
+
+        边界（**未做**，如实声明）：本组**只有导出腿**——消费侧（PRIMARY 收到后走
+        `propose → verify → adjudicate` 三段式）**尚未接线**，属独立落地项；本件不替
+        它造第二条写入路径。载荷条目**不带**内容摘要哈希（#165 路 B 第 3 条
+        **暂缓落地**，见 `apply_shared_sync` docstring）。
+        """
+        cols = ", ".join(self.SHARED_SYNC_FIELDS)
+        shared = sorted(layer.value for layer in self.store.SHARED_LAYERS)
+        placeholders = ",".join("?" for _ in shared)
+        out: List[Dict] = []
+        for tag in (self.store.SUB_PENDING_SYNC_TAG, "external_anchor"):
+            c = self.store.conn.cursor()
+            # 标签列是 JSON 文本 ⇒ 按**带引号的整词**匹配（`"pending_sync"`），
+            # 不会把 `pending_sync_extra` 这类前缀相同的标签误收（B3 的判别力）。
+            c.execute(f"SELECT {cols} FROM nodes"
+                      f" WHERE layer NOT IN ({placeholders}) AND tags LIKE ?"
+                      f" ORDER BY id",
+                      shared + ['%"' + tag + '"%'])
+            for r in c.fetchall():
+                item = dict(zip(self.SHARED_SYNC_FIELDS, r))
+                item["spatial_coordinates"] = json.loads(
+                    item["spatial_coordinates"] or "{}")
+                item["semantic_coordinates"] = json.loads(
+                    item["semantic_coordinates"] or "{}")
+                item["state_attributes"] = json.loads(
+                    item["state_attributes"] or "{}")
+                item["condition_space"] = json.loads(
+                    item["condition_space"] or "{}")
+                item["tags"] = json.loads(item["tags"] or "[]")
+                item["pending_group"] = tag
+                out.append(item)
+        return out
+
     def prepare_shared_sync(self) -> Dict:
         """D-005 蜂群分层同步：导出**共享层**（锚点层 + 结构层）载荷供跨实例同步。
 
@@ -11136,14 +11189,40 @@ class SpacetimeMemoryEngine:
            无 `layer`/`confidence`/`condition_space`/`tags`/`state_attributes` ⇒
            接收端无法原样重建节点。现按 `SHARED_SYNC_FIELDS` 导出**全字段**
            （含完整 content），接收端 `apply_shared_sync` 可无损重建。
+
+        ★**#165 裁定路 B（本件只落 §4 + §5a）**：
+        ③ **§4 来源实例标识**——顶层加 `source_instance` 键，取本实例的
+           `self.self_model.identity`（★如实标注：裁定原文写「取 `self.identity`」，
+           但本引擎**没有** `identity` 属性——`identity` 是
+           `SpacetimeMemoryEngine.__init__` 的形参，唯一落点是 `self.self_model.identity`；
+           本线按唯一真源取值）。**无值时写显式 `None`**：键**必须在场**——
+           缺席是歧义源（消费侧分不清「旧版载荷」与「新版但没填」），`None` 才是
+           可机器判读的「我们知道这里没填」。
+        ④ **§5a 上行待晋升副本**——顶层加 `pending_promotions` 键
+           （见 `_export_pending_promotions`）。`sync_payload` 的语义（只含共享层）
+           **一字不动**。
+        ⚠**未落地（如实标注 · 与裁定帖有出入）**：路 B 第 1 条（新增 id 一律经
+        `propose → verify → adjudicate_promotion`、SQL 侧按 id 只 `INSERT OR IGNORE`）、
+        第 2 条（`overwrite=True` 必须过设计者密钥闸、无密钥 ⇒ `rejected`）、
+        第 3 条（载荷每条带内容摘要哈希、缺哈希即拒）**全部暂缓**——编排侧 2026-10-17
+        裁定：这三条与在-main 的既有守卫正面冲突（`tests/test_issue463_shared_sync_identity_guard.py`
+        的 C/D 组要求无密钥 `overwrite=True` 即 `applied`；`tests/test_issue771_778_import_atomicity_guard.py::test_g6c`
+        要求新 id 条目无密钥即 `applied`；两件守卫属对外面/设计者面，改它们须先回帖
+        征询），且本件自己的 P3/P6 也要求「首次 apply 即落库」。故本接收端**仍是共享层
+        的第三条写路径**（伪造载荷仍可直写共享层）——**这一面未收口**。
         判据来源：`LayeredStore` 类头 docstring（共享层/本地层划分）＋
-        `LayeredStore.SHARED_LAYERS`（core.py 内同款语义集）＋ 公开 issue #165。
+        `LayeredStore.SHARED_LAYERS`（core.py 内同款语义集）＋ 公开 issue #165
+        ＋ 本端 2026-10-16 对 #165 的裁定帖（`<!-- RULING-165 -->`）路 B 第 4/5 条。
         边界（削掉的判别力/未做项）：①只导出共享层——知识/情境/自我层**不进**
-           载荷（章程称其「实例独立」，导出属越界）；既有测试无一依赖旧载荷里的
+           `sync_payload`（章程称其「实例独立」，导出属越界）；既有测试无一依赖旧载荷里的
            knowledge 条目（grep `prepare_shared_sync|sync_payload` 在 `tests/` 0 命中）。
         ②接收端 `apply_shared_sync` 为**尽力而为**实现，未接入任何自动同步编排
            （无后台调度/网络传输）——「通道尚未建成」的其余部分**未做**，如实声明。
         ③本件**不动** `add_perception` 的 M5 去重吞第二次终裁记录（属另一件）。
+        ④`pending_promotions` **只有导出腿**，消费侧**尚未接线**（见其 docstring）。
+        ⑤载荷**不带边**、不带 `created_at` / `access_count`（issue 点名项）：裁定帖
+           「存疑」节把它列为**未定死**的设计细节（边的导出会连带 `source_evidence`
+           与验证态，面比节点大）⇒ 本件**未做**，如实声明。
         """
         c = self.store.conn.cursor()
         shared = sorted(layer.value for layer in self.store.SHARED_LAYERS)
@@ -11164,6 +11243,10 @@ class SpacetimeMemoryEngine:
             item["tags"] = json.loads(item["tags"] or "[]")
             payload.append(item)
         return {"sync_payload": payload,
+                # ★#165 路 B §5a：SUB 侧待晋升副本（单列分组；PRIMARY ⇒ 空表）
+                "pending_promotions": self._export_pending_promotions(),
+                # ★#165 路 B §4：来源实例标识（**键必在场**；无值 ⇒ 显式 None）
+                "source_instance": getattr(self.self_model, "identity", None),
                 "local_buffer_count": len(self._local_visual_buffer),
                 "layers": shared,
                 "note": "原始视觉数据不进共享层（盲区60/61）；仅共享层（锚点/结构）跨实例同步"}
@@ -11407,6 +11490,24 @@ class SpacetimeMemoryEngine:
         的覆盖语义、冲突上报形状、`identical` 判据（#463/#615）逐字不变。判据来源：
         公开 issue #771 ④（「捕获范围改为逐条失败收集…并在整批提交前做类型预校验，
         避免半截落库」）＋ `add_node` 的 #588/#594 content 类型闸（单一真源）。
+
+        ★**#165 裁定路 B §4（本件落地面）· 落库留痕**：本方法在**真的发生落库**时
+        （`applied` 非空）向 `action_logs` 追加一行
+        （`action_type='shared_sync_applied'`，见 `_audit_shared_sync_apply`），
+        使「这条是谁推上来的 / 推了几条 / 是不是覆盖」可查——旧实现零留痕（本线
+        实测 `shared_sync*` 行数 0）。**纯旁路**：不新增/不改任何返回键，不改任何
+        既有判定语义；全 `identical` 的幂等重放（零落库）**不**新增审计行。
+        ⚠**未落地（如实标注 · 与裁定帖有出入）**：路 B 第 1 条（新增 id 一律经
+        `propose → verify → adjudicate_promotion`、按 id 只 `INSERT OR IGNORE`）、
+        第 2 条（`overwrite=True` 须过设计者密钥闸、无密钥 ⇒ `rejected`）、
+        第 3 条（载荷每条带内容摘要哈希、缺哈希即拒）**全部暂缓**——编排侧
+        2026-10-17 裁定：与在-main 的既有守卫正面冲突
+        （`tests/test_issue463_shared_sync_identity_guard.py` C/D 组要求无密钥
+        `overwrite=True` 即 `applied`；`tests/test_issue771_778_import_atomicity_guard.py::test_g6c`
+        要求新 id 条目无密钥即 `applied`；两件属对外面/设计者面，改它们须先回帖征询），
+        且本件自己的 P3/P6 也要求「首次 apply 即落库」。⇒ **本接收端仍是共享层的
+        第三条写路径，伪造载荷仍可直写共享层——这一面未收口**（本线实测：
+        伪造新 id 锚点条目 `applied=['forged_new_anchor_147A']`、落库 `('anchor', ...)`）。
         """
         items = payload.get("sync_payload") if isinstance(payload, dict) else payload
         if items is None:
@@ -11495,9 +11596,50 @@ class SpacetimeMemoryEngine:
                     failed.append({"id": nid, "reason": "PermissionError: %s" % exc})
                     continue
                 applied.append(nid)
+            # ★#165 路 B §4（本件落地面）：**发生落库才留痕**（零落库 ⇒ 零审计，
+            # 见下方 A3：幂等重放全是 `identical`、不进这里 ⇒ 不产生噪声行）。
+            # 纯旁路：不改任何返回键、不改任何既有语义（判定结果已在上面算完）。
+            if applied:
+                self._audit_shared_sync_apply(
+                    source_instance=(payload.get("source_instance")
+                                     if isinstance(payload, dict) else None),
+                    applied=applied, overwrite=overwrite)
         return {"applied": applied, "identical": identical,
                 "conflicts": conflicts, "rejected": rejected, "failed": failed,
                 "overwritten": overwrite}
+
+    def _audit_shared_sync_apply(self, source_instance, applied: List[str],
+                                 overwrite: bool) -> None:
+        """共享层同步**落库**的 `action_logs` 留痕（#165 路 B §4 · 单一落点）。
+
+        口径：与 `set_escalation_enabled` 同族——同步通道是**治理写入**（写的是
+        不可遗忘、不可删的共享层），故「这条是谁推上来的、推了几条、是不是覆盖」
+        必须可查（旧实现零留痕：本线实测 `SELECT COUNT(*) FROM action_logs
+        WHERE action_type LIKE 'shared_sync%'` ⇒ 0）。
+
+        字段面：`summary` 记条数；`node_ids` 记本次落库的 id 列表；
+        `outcome` 记 `source_instance`（来源实例标识，**自述**）/ `applied_count` /
+        `overwrite`。来源标识取载荷顶层 `source_instance`（`prepare_shared_sync`
+        的导出键）；载荷**不带**该键（旧版载荷 / 直接传 list）⇒ 记显式 `None`
+        （「我们知道这里没填」，不是缺席）。
+
+        边界（如实标注）：①来源是**实例自述**、**不是**身份认证——来源可信属路 C
+        （签名/凭据）面，**未落地**；②审计是**旁路**，其失败不得改判调用方的
+        判定结果（故此处捕获并 `warnings.warn` 上报，不向外抛）；③本方法**只**在
+        真的发生落库时被调用（`applied` 非空）⇒ 全 `identical` 的幂等重放
+        **不**新增审计行。
+        """
+        try:
+            self.store.log_action(
+                "shared_sync_applied",
+                "共享层同步落库：%d 条（overwrite=%s）" % (len(applied),
+                                                           bool(overwrite)),
+                node_ids=list(applied),
+                outcome={"source_instance": source_instance,
+                         "applied_count": len(applied),
+                         "overwrite": bool(overwrite)})
+        except Exception as exc:          # 审计旁路：不得改判调用方结果
+            warnings.warn("shared_sync_audit_failed: %s" % exc)
 
     # ==================== v1.6 语义空间与备份（M11/M13 · REV1） ====================
 
