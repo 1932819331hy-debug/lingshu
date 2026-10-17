@@ -10826,6 +10826,13 @@ class SpacetimeMemoryEngine:
         keep/orphan）⇒ O(E)；判据与返回体逐字不变（`orphan_edges` /
         `orphan_edges_sample` / `integrity_ok` 的语义与顺序均不动）。
 
+        #789（BOM 备份读不进）：备份文件读取改 `encoding="utf-8-sig"`——旧实现
+        `encoding="utf-8"` 把带 UTF-8 BOM 的备份（Windows 记事本 / PowerShell `>`
+        重定向的常见产物；#412 族语料同源）读出首字符 `\ufeff`，`json.load` 当场抛
+        `JSONDecodeError: Unexpected UTF-8 BOM` ⇒ **整次导入零落库**。`utf-8-sig`
+        对无 BOM 文件逐字节等价（#600 已证的同族口径），BOM 在场时剥掉。
+        判据来源：issue #789 ＋ #437/#600 同族先例（BOM 使读取面把合法件当坏件）。
+
         返回值指标口径（**勿与 `verify_integrity()` 的 `orphan_edges` 混用**）：
         `dangling_rows` 是**按「违规行」去重**的计数——导入后跑 `PRAGMA
         foreign_key_check`，该指令对**每一条**被违反的外键约束各回一行；同一行若
@@ -10839,7 +10846,8 @@ class SpacetimeMemoryEngine:
         另注：`dangling_rows` 覆盖**全部**声明外键的表，本方法 `orphan_edges` 与
         `verify_integrity()` 的 `orphan_edges` 都只统计 `edges` 表。
         """
-        with open(input_path, "r", encoding="utf-8") as f:
+        # #789：utf-8-sig 对无 BOM 备份逐字节等价、BOM 在场时剥掉（见 docstring）。
+        with open(input_path, "r", encoding="utf-8-sig") as f:
             data = json.load(f)
         # ① 不可变层覆盖闸（先判后写，fail-closed）。
         # #478：闸判据从「备份声明层」扩为**双列**——声明层或库内旧行 layer 任一属
