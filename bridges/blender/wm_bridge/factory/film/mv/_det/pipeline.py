@@ -481,8 +481,17 @@ def build_all(brief: dict, out: str, size=None, max_shots=None, do_gif=True,
         artifacts["video"] = os.path.join(out, "mv.avi")
         log("      mv.avi %d bytes  %s" % (avi.get("bytes", -1), avi.get("readback", "")))
         if do_gif:
-            encode.write_gif(frames, os.path.join(out, "mv.gif"), fps, size)
-            artifacts["preview_gif"] = os.path.join(out, "mv.gif")
+            #: ★ 用**抽帧预览**而不是把全片塞进 GIF：576 帧 @960×540 全存实测 **180 MB**
+            #: （GIF 是 8 位调色板 + LZW，全片体积极差），而预览只需看"动起来对不对"。
+            #: 抽帧 1/4、宽 640 ⇒ 约 5~8 MB，且与母版同一渲染源（不是另画一版）。
+            try:
+                from . import preview as _pv
+                _g = _pv.make_preview(out, stride=4, width=640)
+                artifacts["preview_gif"] = _g["path"]
+                log("      mv_preview.gif %d bytes（抽帧 1/4 · 宽 640 · %d 帧）"
+                    % (_g["bytes"], _g["frames"]))
+            except Exception as _e:                                # noqa: BLE001
+                log("      [warn] 预览 GIF 失败（如实登记，不影响母版）：%s" % _e)
     artifacts["audio"] = a["wav"]["path"]
     srt = os.path.join(out, "mv.srt")
     timeline.write_srt(text, srt)
