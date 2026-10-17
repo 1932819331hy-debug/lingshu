@@ -195,3 +195,43 @@ def test_214_promotion_is_idempotent_no_repeated_promotion(tmp_path):
                (later.layer.value, later.importance, later.tags)))
     finally:
         eng.close()
+
+
+
+def test_214_promotion_runs_before_decay_so_below_threshold_qualified_context_is_rescued(tmp_path):
+    """F 组（硬判据 · 位置）：`promote` 必须在 `decay_cycle` **之前**跑。
+
+    场景（#214 裁定帖给「取衰减之前」的那条理由所防的形态）：情境节点**进周期时**
+    importance 已在删除线（`decay_cycle` 的 `min_confidence`，默认 0.1）**之下**
+    （历史库遗留 / 异常输入），但内容经门控评估**够格**。
+
+      · promote 在 decay **之前** ⇒ 先被救走（提升为知识层 ⇒ 同轮 decay 不再删它）；
+      · promote 在 decay **之后** ⇒ 同轮 decay 先删掉它（**删除不可逆**）⇒ promote 永远看不到它。
+
+    判据来源：issue #214 裁定（路 A）「接进 `run_maintenance_cycle`，**位置取衰减之前**」。
+    编排侧实测（两条腿）：位置在**之前** ⇒ 节点仍在库、`layer=knowledge`、
+    `tags` 含 `promoted`；把 promote 挪到**之后** ⇒ 该节点**已被删除**。
+    """
+    eng = SpacetimeMemoryEngine(str(tmp_path / "ctx214f.db"))
+    try:
+        for i in range(3):
+            eng.self_model.update_trust_state(0.9, i)
+        for s in REFERENCE:
+            eng.add_perception(s, importance=0.5, skip_dedup=True)
+        # ★importance 刻意取 0.05：已在删除线（0.1）之下 ⇒ 只有「先提升」才救得回来
+        node = eng.add_context(CONTEXT_CONTENT, importance=0.05)
+        ev = eng._ensure_gate().evaluate(CONTEXT_CONTENT, "promote", node.tags, node.id)
+        assert ev["layer"] in ("knowledge", "long_term"), (
+            "F 组前置：本条内容经门控评估本来就够格（实测 layer=%s imp=%s）"
+            % (ev["layer"], ev["importance"]))
+        eng.run_maintenance_cycle()
+        after = eng.store.get_node(node.id)
+        assert after is not None, (
+            "#214：够格情境记忆即便进周期时已在删除线之下，也必须**先被提升**救走——"
+            "promote 若排在 decay 之后，同轮 decay 会先把它删掉（删除不可逆）")
+        assert after.layer.value in ("knowledge", "long_term"), (
+            "#214：结局须落在知识层/长期层；实测 layer=%s" % after.layer.value)
+        assert "promoted" in (after.tags or []), (
+            "#214：提升须留 promoted 标签；实测 tags=%s" % (after.tags,))
+    finally:
+        eng.close()
