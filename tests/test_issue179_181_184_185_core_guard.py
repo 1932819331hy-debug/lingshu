@@ -341,7 +341,15 @@ def test_d5_legacy_null_edge_row_does_not_break_decay():
 
 def test_d6_setters_normalize_non_finite_delta():
     """D6[#185]：`update_node_importance` / `update_node_confidence` /
-    `verify_edge` 的非有限入参一律归一，不得落 NULL/原样存 inf。"""
+    `verify_edge` 的非有限入参一律归一，不得落 NULL/原样存 inf。
+
+    #790 口径同步（2026-10-17）：`verify_edge` 的 `new_confidence` 非有限值已从
+    「归一到 0.0」升级为 `_require_finite` **拒收**（`ValueError`，先判后写）——
+    修前 NaN 被静默写成凭空的 0.0 并盖章 `verified=1`。本用例的 verify_edge 段随
+    之改为断言拒收（`ValueError` 且边行零改动——NULL 依旧落不了库，#185 的原
+    判据「不落 NULL」以更强形态保持）；`update_node_importance` /
+    `update_node_confidence` 仍走 #185 归一口径（不在 #790 收口面，逐字不动）。
+    """
     e = SpacetimeMemoryEngine(":memory:")
     try:
         k = e.add_perception("k", skip_dedup=True)
@@ -361,12 +369,18 @@ def test_d6_setters_normalize_non_finite_delta():
         a = e.add_perception("a2", skip_dedup=True)
         b = e.add_perception("b2", skip_dedup=True)
         ed = e.add_edge(a.id, b.id, confidence=0.9)
-        e.store.verify_edge(ed.id, new_confidence=NAN)
+        try:
+            e.store.verify_edge(ed.id, new_confidence=NAN)
+            raise AssertionError(
+                "#790：verify_edge(new_confidence=NaN) 被接受（修前行为：静默归 "
+                "0.0 并盖章 verified=1，调用方无信号）")
+        except ValueError:
+            pass
         val, typ = e.store.conn.execute(
             "SELECT confidence, typeof(confidence) FROM edges WHERE id=?",
             (ed.id,)).fetchone()
-        assert typ != "null" and val is not None, \
-            "#185：verify_edge(new_confidence=NaN) 落 NULL"
+        assert typ != "null" and val == 0.9, (
+            "#790：拒收后边行被改动（先判后写破了）：%r/%s" % (val, typ))
     finally:
         e.close()
 

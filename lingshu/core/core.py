@@ -2365,9 +2365,27 @@ class LayeredStore:
     def verify_edge(self, edge_id: str, new_confidence: float = None):
         """验证单元复核后标记边为已验证
 
-        #185：`new_confidence` 经 `_finite_clamp` 归一（非有限 → 0.0、有限值钳到
-        [0,1]）——旧实现原样落库，NaN 存成 NULL 后 `decay_cycle` 的
-        `cred_step(None, f)` 抛 TypeError、整轮衰减中断。
+        #185：`new_confidence` 经 `_finite_clamp` 归一（有限值钳到 [0,1]）——旧实现
+        原样落库，NaN 存成 NULL 后 `decay_cycle` 的 `cred_step(None, f)` 抛
+        TypeError、整轮衰减中断。
+
+        #790（本件，收口 #185 留下的「静默归一」面）：`new_confidence` 的非有限值
+        （NaN/±inf）改经 `_require_finite` **fail-closed 拒收**（`ValueError`），
+        不再被 `_finite_clamp` 静默归到 0.0。修前实测（main @ 5c530ff）：
+        `verify_edge(id, new_confidence=NaN/inf/-inf)` 一律**照常成功**——边被
+        标 `verified=1`、`confidence` 被写成凭空的 0.0，调用方拿不到任何「复核值
+        是坏值」的信号（这与「复核」语义相反：复核入口把垃圾读数盖成合法值并
+        盖章）。取 `_require_finite`（#206 同款闸）而非新写 `math.isfinite` 判断，
+        保持数值入参闸单一真源；拒收发生在**任何写语句之前**（先判后写），
+        `verified` / `confidence` / `last_verified` 均不被改动。
+        边界（如实标注）：①**有限越界值**（如 42.0 / -1.0）仍走 `_finite_clamp`
+        钳到 [0,1]（#185 既有口径，本件不动）；② `new_confidence is None`
+        （只标 verified、不改进制度）的既有分支不受影响；③坏值拒绝不落
+        `action_logs`——本方法无审计配套（与 #206 的 `update_trust_state` 同口径，
+        拒绝即回滚、零写入）。
+        判据来源：公开 issue #790（「`verify_edge` 的 `new_confidence` 参数应加
+        `math.isfinite` 校验，NaN/±inf ⇒ `ValueError`」）＋ #206 `_require_finite`
+        先例（数值入参闸从「归一」到「拒绝」的同一升级路径）。
 
         #234：非 PRIMARY 不得 verify 任一端为共享层的边（旧实现无角色检查）——
         SUB 可自行把结构层间的边置为 `verified=1`、`confidence=1.0`。
@@ -2381,6 +2399,9 @@ class LayeredStore:
             c = self.conn.cursor()
             now = time.time()
             if new_confidence is not None:
+                # #790：非有限值先拒（fail-closed，任何写语句之前抛出）；
+                # 有限值再走 #185 的 [0,1] 钳制（值域归一口径不动）。
+                new_confidence = _require_finite("new_confidence", new_confidence)
                 new_confidence = _finite_clamp(new_confidence, 0.0, 1.0)
                 c.execute('''
                     UPDATE edges SET verified=1, last_verified=?, confidence=?
@@ -6325,7 +6346,8 @@ class SpacetimeMemoryEngine:
         return edge
 
     def verify_edge(self, edge_id: str, new_confidence: float = None):
-        """验证单元复核后调用"""
+        """验证单元复核后调用（转发 store 层；#790：`new_confidence` 非有限值
+        （NaN/±inf）在 store 层被 `_require_finite` 拒收，`ValueError` 原样上抛）。"""
         self.store.verify_edge(edge_id, new_confidence)
 
     # ==================== 时空联想查询 ====================
