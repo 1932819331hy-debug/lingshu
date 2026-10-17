@@ -35,15 +35,27 @@
      `cwd_entries_now == 0` / `removed_count ≥ 1` / `cwd_excluded_count ≥ 1`），
      **行为断言零转红**。
 
-精确范围声明（**解析期拒绝 cwd/空串 `sys.path` 面**）：
+精确范围声明（**解析期拒绝「启动期快照内」的 cwd/空串 `sys.path` 面**）：
   - 覆盖：一切经 `sys.path` 的裸名导入（含标准库、含包内子模块）——解析结果落在
-    cwd / 空串条目内即**跳过该条目**，改在**净化路径**（`clean_search_path()` =
-    `sys.path` 去掉 `''` / `.` / 归一后等于 cwd 的条目）上继续解析。
-  - 只拒 `''` 与「等于当前工作目录」的条目；`PYTHONPATH` 的**非 cwd 条目** /
-    显式配置根 `LINGSHU_COMPONENT_ROOT` / site-packages / `.zip` / egg /
-    命名空间包条目**不动**（`_is_cwd_entry` 返回 None 的条目不参与拒绝面）。
-  - ★**`PYTHONPATH` 归一后等于 cwd 的条目，不论来源都落入拒绝面**。裁定帖
-    「两项一并裁定」第 1 条：`sys.path` 条目**无来源标记**，实现层无法区分
+    **启动期快照内**的 cwd / 空串条目内即**跳过该条目**，改在**净化路径**
+    （`clean_search_path()` = 快照内剔除 cwd/空串面 ＋ 快照之后新增的条目）上继续解析。
+  - 只拒 `''` 与「归一后等于**启动期** cwd」的条目（**且须在快照内**）；
+    `PYTHONPATH` 的**非 cwd 条目** / 显式配置根 `LINGSHU_COMPONENT_ROOT` /
+    site-packages / `.zip` / egg / 命名空间包条目**不动**
+    （`_is_cwd_entry` 返回 None 的条目不参与拒绝面）。
+  - ★**拒绝面冻结为启动期快照**（本件 150A 收口 · #273 裁定帖理由 2）：
+    `import lingshu`（装 finder）那一刻 `sys.path` 的**完整快照**被冻结，拒绝面
+    只含**快照内**的 cwd / 空串条目那若干次出现；宿主在 import **之后**新增的条目
+    （含 `sys.path.insert(0, <仓根绝对路径>)` 这类**运行期新增的 cwd 面条目**）
+    **全部保留**。理由：基线（`3f1e944`）的删除面是「import 时把**当时**的 cwd
+    面条目物理删除（一次）」——scrub 之后新增的条目**不受影响**；`47f364b` 的
+    「每次解析动态重判当前 `sys.path`」使拒绝面成为删除面的**真超集**（S(t) ⊋ S₀），
+    把 `tests/` 下 `sys.path.insert(0, REPO_ROOT)` ＋ `from tools import ...`
+    （`tools` 是仓根**顶层包**）一并拒掉 ⇒ 10 件收集 ERROR。收口后二者**逐条等价**。
+  - 快照**缺失**（捕获失败）⇒ 退回保守形态（按值剔除当前全部 cwd / 空串条目），
+    行为不弱于现状。
+  - ★**`PYTHONPATH` 归一后等于 cwd 的条目，不论来源都落入拒绝面**（须在快照内）。
+    裁定帖「两项一并裁定」第 1 条：`sys.path` 条目**无来源标记**，实现层无法区分
     「解释器隐式插入的 cwd」与「部署方显式 `PYTHONPATH=<cwd>`」——`_is_cwd_entry`
     只拿到路径值。故本模块**不再**声称「`PYTHONPATH` 条目一律不动」；如实声明为：
     **显式 `PYTHONPATH=<cwd>` 与本层保护互斥，二者只能取一**。
@@ -51,8 +63,12 @@
     `install_route_finder()` 安全、不报错。
 
 仍**不覆盖**（如实）：
-  - 进程已被**预置投毒**：`sys.modules` 预置、进程内 `sys.path.insert`、
-    `sys.modules` 别名冒充（私域别名面，设计所需）；
+  - 进程已被**预置投毒**：`sys.modules` 预置、`sys.modules` 别名冒充（私域别名面，
+    设计所需）；
+  - ★**`import lingshu` 之后**由宿主新增的 cwd / 空串 `sys.path` 条目**不再被拒**
+    ——这是与基线删除面等价的**刻意取舍**（安全面只许等价、不许放宽，也**不许**
+    扩到超集）：`import lingshu` 之后才 `sys.path.insert(0, <cwd>)` 再导入 cwd 同名
+    模块，本层不拦。代价面明确记录于此；
   - **逃生口** `LINGSHU_ALLOW_CWD_IMPORTS=1` 被显式打开（见下；路 B 下其语义为
     **不装 finder**，等于放弃本层）；
   - `python <script>.py` 且**脚本目录 != cwd** 时，脚本目录条目**不落入拒绝面**
@@ -65,7 +81,8 @@
 
 **持续在位**（裁定帖代价②）：finder 装在 `sys.meta_path` 上**持续生效**，故
 `import lingshu` **之后**才发生的导入（含函数内延迟导入）同样落入拒绝面——
-cwd 条目在 import 后被重新插入 `sys.path` 亦被覆盖（此面旧实现不覆盖）。
+但拒绝面本身冻结在启动期快照（见上）：**快照内**的 cwd 条目持续被拒，
+import **之后**新增的 cwd 条目不再被拒（与基线删除面等价）。
 
 逃生口：`LINGSHU_ALLOW_CWD_IMPORTS` ∈ {1,true,yes,on}（大小写无关）⇒
 **不装 finder**（`scrub()` 记录状态 + 发 `CwdImportsAllowed` 告警；
@@ -117,6 +134,36 @@ _SNAPSHOT_DONE = False
 _STARTUP_CWD = None          # 启动时刻的 cwd（归一；供分类，不外泄）
 _STARTUP_SCRIPT_DIR = None   # 启动时刻的脚本目录（原始路径，供分类）
 _CONTROLLED_ENTRIES = ()     # 启动时刻判定的受控面条目（绝对、非 cwd、非脚本目录、非相对）
+
+
+# ---- 启动期 `sys.path` 快照（#273 裁定 · 拒绝面 ⊋ 删除面的收口 · 本件 150A）----
+# 基线（`3f1e944`）的**删除面**＝「`import lingshu` 时把**当时** `sys.path` 里的
+# cwd / 空串条目**物理删除**（一次）」；删除之后宿主新增的条目（含同值 cwd 条目）
+# **不受影响**。`47f364b` 的 finder 改为「每次解析动态重判当前 `sys.path`」⇒
+# 拒绝面 = S(t) ⊋ S₀，超出的正是「运行期新增的 cwd 面条目」——`tests/` 下多件
+# `sys.path.insert(0, REPO_ROOT)` ＋ `from tools import ...`（`tools` 是仓根**顶层
+# 包**、只存在于仓根）因此被误拒（跨件顺序依赖：件序上只要先有件 `import lingshu`
+# ⇒ finder 在位 ⇒ 后续件的顶层包导入即被拒）。
+#
+# 收口口径（本件）：拒绝面**冻结为启动期快照**——
+#   · `_PATH_SNAPSHOT`＝装 finder 那一刻（`import lingshu`）`sys.path` 的**完整
+#     列表**（值与顺序）；
+#   · `_PATH_SNAPSHOT_CWD`＝其中判为 cwd / 空串面的 `[(entry, kind), ...]`，
+#     **启动期一次判定并冻结**（不吃判定时 cwd——与 `_STARTUP_CWD` 同源口径）；
+#   · `_PATH_SNAPSHOT_CWD_COUNTS`＝上述条目的**值→出现次数**（多重集）。
+# 净化路径只剔除「快照内 cwd 面条目」那**若干次出现**；快照之后新增的条目
+# （按**多重集差**：当前某值出现次数超出快照计数的那部分）**全部保留**。
+# ⇒ 拒绝面与删除面**逐条等价**（#273 裁定帖理由 2）；安全面只许等价、不许放宽
+# （**不是**「净化路径找不到就回退返回原始 spec」——那等于取消拒绝面）。
+#
+# 实测依据（本件 150A 探针 · `wt150A @ 47f364b` · `pytest tests/ --collect-only`）：
+# `import lingshu` 那一刻快照含仓根绝对路径 3 次；逐模块收集时 pytest 再插
+# ⇒ `import tools` 时当前计数 6～40 次 ⇒ 多重集差非空 ⇒ 净化路径仍含仓根
+# ⇒ `import tools` 成功。而 `-c` / `-m` 形态无新增 ⇒ 差为空 ⇒ 快照内 cwd 条目
+# 全被剔除 ⇒ F1/F2 的「毒 cwd 文件未被执行」判据原样保住。
+_PATH_SNAPSHOT = ()              # 装 finder 那一刻的 `sys.path` 完整快照（值+顺序）
+_PATH_SNAPSHOT_CWD = ()          # 快照中判为 cwd / 空串面的 [(entry, kind), ...]
+_PATH_SNAPSHOT_CWD_COUNTS = {}   # 上述条目的 值→出现次数（多重集；值均为 str）
 
 
 # ---- 启动期「解释器注入的启动面」快照（issue #421）--------------------------
@@ -212,9 +259,11 @@ def _is_cwd_entry(entry):
 
 
 def _cwd_entries() -> list:
-    """当前 `sys.path` 里的 cwd / 空串条目 `[(entry, kind), ...]`（判定时口径）。
+    """当前 `sys.path` 里的 cwd / 空串条目 `[(entry, kind), ...]`（**判定时**口径）。
 
     与 `_is_cwd_entry` **同一来源**（#273 裁定 §1.4：避免两份口径漂移）。
+    ★本函数是「条目**此刻仍在** `sys.path` 里」的观测口径（`cwd_entries_now` 用它），
+    **不是**拒绝面口径——拒绝面见 `_cwd_snapshot_entries()`（启动期快照冻结）。
     """
     try:
         cur = list(_sys.path)
@@ -228,16 +277,79 @@ def _cwd_entries() -> list:
     return out
 
 
-def clean_search_path() -> tuple:
-    """**净化路径**：`sys.path` 去掉 cwd / 空串条目（finder 在其上继续解析）。
+def _capture_path_snapshot() -> None:
+    """冻结装 finder 那一刻的 `sys.path` 完整快照（值与顺序）；幂等。
 
-    #273 裁定 §1.4：本函数与拒绝面同源（同一 `_is_cwd_entry` 判定），不另写一套。
+    ★这是**拒绝面的唯一口径来源**：`import lingshu`（装 finder）时一次判定，
+    此后无论宿主如何增删/重排 `sys.path`，**快照内**的 cwd / 空串条目集合不变
+    （与 `_STARTUP_CWD` / `_capture_controlled_surface()` 同款「启动期冻结」语义）。
+
+    kind 用**捕获时**的 cwd 判定（即启动期 cwd）——宿主之后 `os.chdir()` 不会
+    改写快照内条目的 kind（否则拒绝面会随判定时 cwd 漂移，正是本件要收掉的缺陷）。
+    """
+    global _PATH_SNAPSHOT, _PATH_SNAPSHOT_CWD, _PATH_SNAPSHOT_CWD_COUNTS
+    if _PATH_SNAPSHOT:
+        return
+    _PATH_SNAPSHOT = tuple(_sys.path)
+    items = []
+    counts = {}
+    for e in _PATH_SNAPSHOT:
+        kind = _is_cwd_entry(e)
+        if kind is None:
+            continue
+        items.append((e, kind))
+        counts[e] = counts.get(e, 0) + 1
+    _PATH_SNAPSHOT_CWD = tuple(items)
+    _PATH_SNAPSHOT_CWD_COUNTS = counts
+
+
+def _cwd_snapshot_entries() -> list:
+    """**启动期快照内**的 cwd / 空串条目 `[(entry, kind), ...]`（**拒绝面**口径）。
+
+    与 `_cwd_entries()` 的差别只在时间轴：本函数返回的是**冻结快照**——
+    宿主在 `import lingshu` **之后**插入的 cwd / 空串条目**不计入**（那些条目
+    与基线删除面下的新增条目同待遇：不受影响）。
+    """
+    _capture_path_snapshot()
+    return list(_PATH_SNAPSHOT_CWD)
+
+
+def clean_search_path() -> tuple:
+    """**净化路径**：`sys.path` 剔除「**启动期快照内**的 cwd / 空串条目」后的结果。
+
+    #273 裁定 §1.4：本函数与拒绝面同源（同一 `_is_cwd_entry` 判定），不另写一套；
+    本件（150A）再收一层：**拒绝面冻结为启动期快照**，与基线删除面逐条等价——
+
+      ① 快照**内**的 cwd / 空串条目（`_PATH_SNAPSHOT_CWD_COUNTS` 里的那若干次
+         出现）⇒ **剔除**（F1 `-c` 的 `''`、F2 `-m` 的启动 cwd 绝对路径、pytest
+         启动期插入的 rootdir 均在此列）；
+      ② 当前 `sys.path` 里**超出快照计数**的条目（多重集差）⇒ **保留**——这正是
+         基线删除面下「scrub 之后宿主新增的条目」（例如测试件
+         `sys.path.insert(0, REPO_ROOT)` ＋ `from tools import ...`）；
+      ③ 非 cwd / 空串面的条目 ⇒ 一律保留（与现状一致）。
+
+    多重集差（而非「前段逐位置对齐」）是刻意的：pytest 会把 rootdir **反复前插**
+    （实测同一值出现 3 → 6 → 40 次），位置对齐在宿主重排/前插时必然失配 ⇒ 会退回
+    「按值剔除当前全部 cwd 条目」＝本件要修的缺陷形态。按值计数差对重排免疫。
+
+    快照捕获失败（`_PATH_SNAPSHOT` 为空）⇒ 退回保守形态（按值剔除当前全部
+    cwd / 空串条目）——行为不弱于现状。
     """
     try:
         cur = list(_sys.path)
     except Exception:  # pragma: no cover - sys.path 异常
         return ()
-    return tuple(e for e in cur if _is_cwd_entry(e) is None)
+    if not _PATH_SNAPSHOT:
+        # 快照缺失 ⇒ 保守形态（按值剔除当前全部 cwd / 空串条目；不弱于现状）。
+        return tuple(e for e in cur if _is_cwd_entry(e) is None)
+    budget = dict(_PATH_SNAPSHOT_CWD_COUNTS)
+    out = []
+    for e in cur:
+        if isinstance(e, str) and budget.get(e, 0) > 0:
+            budget[e] -= 1       # 该次出现属「快照内的 cwd 面条目」⇒ 剔除
+            continue
+        out.append(e)            # 快照之后新增 / 非 cwd 面条目 ⇒ 保留
+    return tuple(out)
 
 
 def _emit_escape_warning(n_kept: int):
@@ -338,8 +450,13 @@ class _CwdRouteFinder:
     def find_spec(self, fullname, path=None, target=None):
         if path is not None:
             return None                      # 子模块随父包 __path__（裁定帖 §1.3）
-        if not _cwd_entries():
-            return None                      # 无 cwd/空串条目 ⇒ 零干预（宿主状态干净）
+        # 拒绝面＝**启动期快照内**的 cwd / 空串条目（本件 150A 收口）。快照为空
+        # （捕获失败）⇒ 退回保守形态：当前无 cwd/空串条目才零干预。
+        if not _PATH_SNAPSHOT:
+            if not _cwd_entries():
+                return None
+        elif not _PATH_SNAPSHOT_CWD:
+            return None                      # 快照内无 cwd/空串条目 ⇒ 拒绝面为空
         pf = _std_path_finder()
         if pf is None:
             return None
@@ -379,6 +496,9 @@ def install_route_finder():
         _ESCAPE = True
         return None
 
+    # ★快照钉在「装 finder 那一刻」（＝`import lingshu` 时；幂等，模块 import 时已捕获）。
+    _capture_path_snapshot()
+
     if _ROUTE_FINDER is None:
         _ROUTE_FINDER = _CwdRouteFinder()
     try:
@@ -398,23 +518,28 @@ def is_route_finder_installed() -> bool:
 
 
 def refused_cwd_entry_count() -> int:
-    """**被 finder 拒绝解析**的 cwd / 空串条目数（当前瞬时口径）。
+    """**被 finder 拒绝解析**的 cwd / 空串条目数（**启动期快照**口径）。
 
-    逃生口关（finder 在位）⇒ = 当前 `sys.path` 里的 cwd 类条目数（≥1）；
+    逃生口关（finder 在位）⇒ = 装 finder 那一刻 `sys.path` 里判为 cwd / 空串面的
+    条目数（≥1，若快照内有的话）；**不含** `import lingshu` 之后新增的 cwd 面条目
+    （那些条目与基线删除面下的新增条目同待遇：不受影响）。
     逃生口开（不装 finder）⇒ **0**（无拒绝动作）。
-    与 `cwd_entries_now`（条目是否**仍在** `sys.path`）语义不同、不可相加。
+    与 `cwd_entries_now`（条目**仍在** `sys.path` 的**判定时**计数）语义不同、不可相加。
     """
     if not is_route_finder_installed():
         return 0
-    return len(_cwd_entries())
+    return len(_cwd_snapshot_entries())
 
 
 def refused_cwd_kinds() -> list:
-    """被拒解析的 cwd 类条目「种类」（`''` / `'.'` / `cwd`；**不含绝对路径**）。"""
+    """被拒解析的 cwd 类条目「种类」（`''` / `'.'` / `cwd`；**不含绝对路径**）。
+
+    与 `refused_cwd_entry_count()` 同口径（启动期快照内的 cwd 面条目）。
+    """
     if not is_route_finder_installed():
         return []
     out = []
-    for _, kind in _cwd_entries():
+    for _, kind in _cwd_snapshot_entries():
         if kind not in out:
             out.append(kind)
     return out
@@ -615,3 +740,7 @@ _IMPORT_REMOVED = scrub()
 # issue #288 · D-2：在**启动期**一次性冻结受控面快照——此后无论 cwd 如何变化，
 # 受控面判定不变。
 _capture_controlled_surface()
+# #273 裁定 · 本件 150A：在**装 finder 那一刻**（＝本模块 import 时，紧随
+# `lingshu/__init__.py` 的 `install_route_finder()`）冻结 `sys.path` 完整快照，
+# 把拒绝面钉死为「快照内的 cwd / 空串条目」——与基线删除面逐条等价（见模块头）。
+_capture_path_snapshot()
