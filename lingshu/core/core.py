@@ -13649,11 +13649,38 @@ class SpacetimeMemoryEngine:
         return stats
 
     def run_maintenance_cycle(self, decay_factor: float = 0.02) -> Dict:
-        """P1-4 睡眠巩固：衰减 + 巩固 + 归纳（一次维护周期）"""
+        """P1-4 睡眠巩固：提升 + 衰减 + 巩固 + 归纳（一次维护周期）
+
+        #214（路 A · 接进维护周期）：本方法新增第一步
+        `promote_context_memories`——「短期先进情境层 → 睡眠巩固时再评估提升 → 不够格的自然遗忘」
+        这一三段式（`longterm_gate` 文件头与 `promote_context_memories` docstring 同款）
+        的第二步，此前在仓内**零生产调用方**——故「该提升的在同一批周期里
+        被删掉」。现把它接进维护周期，位置取**衰减之前**。
+
+        判据来源：公开 issue #214 的裁定（路 A）——「接进
+        `run_maintenance_cycle`，位置取衰减之前」与「不接进自动衰减线程」
+        （`start_auto_decay` 的线程体仍只调 `decay_cycle()`，本件未动）。
+
+        边界（如实标注 · 保守推理而非决定性读数）：裁定帖实测两种位置（decay 前 /
+        decay 后）在本例读数**相同**（都在 200 轮内提升成功，因够格节点在被删之前
+        先被救走）；取「之前」的理由是**保守推理**——若某节点进周期时
+        importance 已在删除线之下（历史库遗留 / 异常输入），衰减在**同一轮**就把它
+        删掉，删除不可逆，promote 放在之后便永远看不到它。**该推理未做独立实测。**
+
+        边界（成本）：每轮多一趟情境层遍历 + 逐候选评估，上界 = 情境层 FIFO
+        上限（默认 200 条）；`LongTermMemoryGate._known_grams` 已按**库签名**缓存全库
+        gram 表（#389 / #770②）⇒ 成本**不随全库正文量增长**。裁定帖把「按节点做
+        差集」列为**可选优化、非本件前置条件** ⇒ 本件不做。
+
+        不适用条件：需要「巩固只在显式调用时发生」的可控性时（裁定帖路 B）
+        ——本方法一旦被调用即自动提升，不再可选。
+        """
+        promoted = self.promote_context_memories()
         self.decay_cycle(decay_factor)
         cstats = self.consolidate_cycle()
         induced = self.induce_concepts()
-        return {"decay": decay_factor, "consolidation": cstats, "induced_concepts": len(induced)}
+        return {"promote": len(promoted), "decay": decay_factor,
+                "consolidation": cstats, "induced_concepts": len(induced)}
 
     # ==================== 衰减与维护 ====================
 
