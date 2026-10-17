@@ -16,6 +16,10 @@ spacetime_memory_core · 智能论 v3.2 协议实例核心引擎
 # issue #156 v2：**最早落点**——在本文件任何裸名 import（含下方 `import json`）
 # 之前消除 cwd/空串 sys.path 解析面。包导入时 `lingshu/__init__.py` 已执行同一
 # 护栏（幂等，本行再调用一次为防御纵深，并使「最早落点」在本文件可自证）。
+# ★机制澄清（#273 路 B）：这里是「**解析期拒绝**」而非「从 `sys.path` 删除条目」——
+#   cwd/空串条目**仍在 `sys.path` 里**（`scrub()` 已不改写宿主 `sys.path`），只是被
+#   `_pathguard` 装在 `sys.meta_path` 上的 finder 在解析时跳过 ⇒ 对**解析结果**而言
+#   等价于「该面被消除」，对**宿主状态**而言则零侵入。
 # 见 lingshu/_pathguard.py（含精确范围声明与逃生口 LINGSHU_ALLOW_CWD_IMPORTS）。
 from .. import _pathguard as _ling_pathguard  # noqa: F401  (import 即执行，勿删)
 
@@ -46,7 +50,8 @@ except ImportError:  # 直跑 fallback（裸名互导）
 
 # 组件发现面收口（issue #156）：白名单组件的裸名导入不再经 cwd/空串 sys.path 条目解析。
 # v2 精确范围：① 本包 import 期由 _pathguard 消除 cwd/空串 sys.path 解析（覆盖**一切**
-# 经 sys.path 的裸名导入，含标准库——上一版只封白名单组件名，json.py 等仍被劫持）；
+# 经 sys.path 的裸名导入，含标准库——上一版只封白名单组件名，json.py 等仍被劫持）
+# ——「消除」取**解析期拒绝**义（#273 路 B）：条目不被删除，宿主 `sys.path` 零改写；
 # ② 白名单组件另由本守卫收口（含排除脚本目录）；③ 仍不覆盖：进程已被预置投毒
 # （sys.modules 预置 / 进程内 sys.path.insert）、逃生口 LINGSHU_ALLOW_CWD_IMPORTS 被
 # 显式打开的情形。
@@ -81,7 +86,10 @@ def verify_designer(designer_key) -> bool:
       os.environ ⇒「模型/自动化永远无法读取」对同进程不成立。
     本批（#156 v2）的精确范围＝**消除 cwd/空串 `sys.path` 解析**——覆盖一切经
     `sys.path` 的裸名导入（含标准库），并另由组件守卫收口白名单 15 名（含排除
-    脚本目录）。仍**不覆盖**：进程已被预置投毒（`sys.modules` 预置 / 进程内
+    脚本目录）。★机制（#273 路 B 起）＝**解析期拒绝**，不是删除条目：cwd/空串
+    条目**仍在 `sys.path` 里**（`scrub()` 不再改写宿主 `sys.path`），由 `_pathguard`
+    装在 `sys.meta_path` 的 finder 在解析时跳过并抛 `ModuleNotFoundError`。
+    仍**不覆盖**：进程已被预置投毒（`sys.modules` 预置 / 进程内
     `sys.path.insert` / 别名冒充）、逃生口 `LINGSHU_ALLOW_CWD_IMPORTS` 被显式
     打开的情形。同进程可信性属**设计级**事项，待 D-007 后续裁定。"""
     expected = os.environ.get("AEIS_DESIGNER_KEY")
