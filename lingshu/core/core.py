@@ -8525,6 +8525,26 @@ class SpacetimeMemoryEngine:
             "export 落点越界（%s）：须在 %s 任一白名单根内"
             % (out_path, roots))
 
+    def _guard_export_source_path(self, out_path: str):
+        """导出可覆盖旧备份，但不可覆盖本连接的数据库及事务辅助文件。"""
+        target = os.path.normcase(os.path.realpath(out_path))
+        # 使用连接报告的实际文件集合，而非只查初始化时的 db_path。
+        # 内存库的 file 为空；通过 ATTACH 增加的库也是正在使用的真源。
+        for _, _, database_path in self.store.conn.execute("PRAGMA database_list"):
+            if not database_path:
+                continue
+            for suffix in ("", "-wal", "-shm", "-journal"):
+                source = database_path + suffix
+                aliases_source = target == os.path.normcase(os.path.realpath(source))
+                if not aliases_source:
+                    try:
+                        # realpath 不合并硬链接；轨迹直写会经硬链接截断真源。
+                        aliases_source = os.path.samefile(out_path, source)
+                    except FileNotFoundError:
+                        pass
+                if aliases_source:
+                    raise ValueError("export 目标不可覆盖正在使用的 SQLite 数据库或辅助文件")
+
     WORLD3D_OUT_ROOT_ENV = "LINGSHU_WORLD3D_OUT_ROOT"
 
     @classmethod
@@ -11819,7 +11839,13 @@ class SpacetimeMemoryEngine:
         边界（如实标注）：`overwrote_existing` 是**判定—替换之间**的一次
         `os.path.exists` 读数，只要求「上报」，**不**提供排他创建/并发排他
         （判定与 `os.replace` 之间存在竞态窗口；本件不引入先查后建语义）。
+        源库保护：当前连接的 SQLite 数据库及 WAL/SHM/journal 不可作为导出目标，
+        即使位于配置的白名单根内也拒绝；普通备份覆盖语义不变。
         """
+        # 旧备份仍可覆盖（#698）；源库及 WAL/SHM/journal 即使落在白名单根内也须拒绝。
+        output_path = self._confine_export_out_path(output_path)
+        target_path = os.path.realpath(output_path)
+        self._guard_export_source_path(target_path)
         c = self.store.conn.cursor()
         # #383：整趟导出必须**共用一个读快照**。旧实现逐表各发一条
         # `SELECT * FROM <t>`，Python sqlite3 对 SELECT 不隐式开事务 ⇒ 每条语句
@@ -11882,9 +11908,6 @@ class SpacetimeMemoryEngine:
         # 边界（如实标注）：只搬**权限位**，不搬属主/属组（`chown` 需特权，未做）；
         # 目标不存在时行为与改前逐字一致（umask 默认）；不引入目录 fsync（#330
         # 面边界不变）；返回值 `path` 仍是**调用方给的**路径（对外契约不变）。
-        # #746：落点根闸（越界 fail-closed）。
-        output_path = self._confine_export_out_path(output_path)
-        target_path = os.path.realpath(output_path)
         tmp_path = "%s.tmp-%s" % (target_path, uuid.uuid4().hex[:8])
         # #698：覆盖已存在目标 ⇒ 显式上报（不改覆盖语义，只让「静默」消失）。
         # 读数取在 `os.replace` **之前**——replace 之后目标必在，届时再查恒为 True。
@@ -13170,6 +13193,8 @@ class SpacetimeMemoryEngine:
         边界（如实标注）：该键是「判定—写入」之间的一次 `os.path.exists` 读数，
         只要求「上报」，**不**提供排他创建（存在竞态窗口）；也不改本方法
         `open(..., "w")` 的直写原语（#330 面，本件未动）。
+        当前连接的 SQLite 数据库及 WAL/SHM/journal 不可作为输出路径；
+        源库保护同 `export_all`，普通轨迹文件仍可覆盖。
         """
         if cycle_id:
             nodes = self.store.get_nodes_by_tag(f"cycle:{cycle_id}", limit=20)
@@ -13209,6 +13234,7 @@ class SpacetimeMemoryEngine:
             # #746：与 `export_all` 同款白名单根闸（越界 fail-closed）。本方法
             # 此前不过根闸（#698 只把「静默覆盖」改为显式上报，未及根判定）。
             output_path = self._confine_export_out_path(output_path)
+            self._guard_export_source_path(output_path)
             # #698：覆盖已存在目标 ⇒ 显式上报。读数取在写入**之前**（写后目标必在）。
             # 只进返回值、不进文件：落盘内容形状与 #57 契约逐字不变。
             overwrote_existing = os.path.exists(output_path)
