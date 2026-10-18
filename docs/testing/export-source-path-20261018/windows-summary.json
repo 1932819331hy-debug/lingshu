@@ -17,20 +17,20 @@
       "readings": [
         {
           "entry": "all",
-          "before_header": "b'SQLite format 3\\x00'",
+          "before_header_hex": "53514c69746520666f726d6174203300",
           "returned_success": false,
           "error": "ValueError: export 目标不可覆盖正在使用的 SQLite 数据库或辅助文件",
-          "after_header": "b'SQLite format 3\\x00'",
+          "after_header_hex": "53514c69746520666f726d6174203300",
           "integrity": "ok",
           "fact_survived": true,
           "reopen_error": null
         },
         {
           "entry": "trajectory",
-          "before_header": "b'SQLite format 3\\x00'",
+          "before_header_hex": "53514c69746520666f726d6174203300",
           "returned_success": false,
           "error": "ValueError: export 目标不可覆盖正在使用的 SQLite 数据库或辅助文件",
-          "after_header": "b'SQLite format 3\\x00'",
+          "after_header_hex": "53514c69746520666f726d6174203300",
           "integrity": "ok",
           "fact_survived": true,
           "reopen_error": null
@@ -79,20 +79,22 @@
       "readings": [
         {
           "entry": "all",
-          "before_header": "b'SQLite format 3\\x00'",
+          "before_header_hex": "53514c69746520666f726d6174203300",
           "returned_success": false,
-          "error": "PermissionError: [WinError 5] 拒绝访问。: 'E:\\\\lingshu\\\\outputs\\\\p0-fixes-20261018\\\\export-replay-windows-final\\\\export-source-rcpialfv\\\\readings-all.db.tmp-f5a6b8e6' -> 'E:\\\\lingshu\\\\outputs\\\\p0-fixes-20261018\\\\export-replay-windows-final\\\\export-source-rcpialfv\\\\readings-all.db'",
-          "after_header": "b'SQLite format 3\\x00'",
+          "error": "PermissionError: 拒绝访问。",
+          "errno": 13,
+          "winerror": 5,
+          "after_header_hex": "53514c69746520666f726d6174203300",
           "integrity": "ok",
           "fact_survived": true,
           "reopen_error": null
         },
         {
           "entry": "trajectory",
-          "before_header": "b'SQLite format 3\\x00'",
+          "before_header_hex": "53514c69746520666f726d6174203300",
           "returned_success": true,
           "error": null,
-          "after_header": "b'{\\r\\n  \"cycles\": ['",
+          "after_header_hex": "7b0d0a2020226379636c6573223a205b",
           "reopen_error": "DatabaseError: file is not a database",
           "fact_survived": false
         }

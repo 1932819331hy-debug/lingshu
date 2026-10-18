@@ -45,7 +45,7 @@ for method in ("all", "trajectory"):
     engine = SpacetimeMemoryEngine(str(path))
     node = engine.add_perception("synthetic durable fact", skip_dedup=True)
     engine.store.conn.execute("PRAGMA wal_checkpoint(TRUNCATE)")
-    record = {"entry": method, "before_header": repr(path.read_bytes()[:16])}
+    record = {"entry": method, "before_header_hex": path.read_bytes()[:16].hex()}
     try:
         if method == "all":
             engine.export_all(str(path))
@@ -55,12 +55,17 @@ for method in ("all", "trajectory"):
         record["error"] = None
     except Exception as exc:
         record["returned_success"] = False
-        record["error"] = type(exc).__name__ + ": " + str(exc)
+        # Keep the real error codes/message, without publishing local filenames.
+        detail = exc.strerror if isinstance(exc, OSError) else str(exc)
+        record["error"] = type(exc).__name__ + ": " + str(detail)
+        if isinstance(exc, OSError):
+            record["errno"] = exc.errno
+            record["winerror"] = getattr(exc, "winerror", None)
     try:
         engine.close()
     except sqlite3.DatabaseError as exc:
         record["close_error"] = str(exc)
-    record["after_header"] = repr(path.read_bytes()[:16])
+    record["after_header_hex"] = path.read_bytes()[:16].hex()
     try:
         with closing(sqlite3.connect(path)) as observer:
             record["integrity"] = observer.execute("PRAGMA integrity_check").fetchone()[0]
@@ -130,7 +135,8 @@ def main():
                 probe = subprocess.run([sys.executable, "-B", "-X", "utf8", "-c", READINGS],
                                        cwd=sandbox, env=env, capture_output=True, timeout=60)
                 (output / f"{name}-readings.txt").write_text(
-                    (probe.stdout + probe.stderr).decode("utf-8", errors="replace"), encoding="utf-8")
+                    (probe.stdout + probe.stderr).decode("utf-8", errors="replace").replace("\r\n", "\n"),
+                    encoding="utf-8", newline="\n")
                 if probe.returncode:
                     raise AssertionError(f"{name} readings failed, see raw output")
                 readings = json.loads(probe.stdout)
@@ -143,8 +149,8 @@ def main():
                        "-q", "--disable-warnings", "--tb=short", f"--junitxml={junit}",
                        f"--basetemp={sandbox / 'tmp'}"]
             result = subprocess.run(command, cwd=sandbox, env=env, capture_output=True, timeout=120)
-            raw = (result.stdout + result.stderr).decode("utf-8", errors="replace")
-            (output / f"{name}.log").write_text(raw, encoding="utf-8")
+            raw = (result.stdout + result.stderr).decode("utf-8", errors="replace").replace("\r\n", "\n")
+            (output / f"{name}.log").write_text(raw, encoding="utf-8", newline="\n")
             tests = ET.parse(junit).findall(".//testcase")
             actual = sorted(t.get("name") for t in tests if t.find("failure") is not None)
             bad_other = any(t.find("error") is not None or t.find("skipped") is not None for t in tests)

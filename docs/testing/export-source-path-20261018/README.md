@@ -27,8 +27,10 @@
 | Linux / export_trajectory | 返回成功，重开 `file is not a database`，合成节点不可读 | ValueError 源库保护，源库存活 |
 
 原始字段在 `windows-summary.json` / `linux-summary.json` 的 `readings` 中，
-逐项含 `returned_success`、`before_header`、`after_header`、`reopen_error`、
+逐项含 `returned_success`、`before_header_hex`、`after_header_hex`、`reopen_error`、
 `fact_survived`。Windows 原版 export_all 并未复现数据破坏，不把其 OS 拒绝算作破坏成功。
+文件头以 16 字节的 hex 无损表示；OS 异常保留真实类型、消息与 errno/winerror，
+不公开本机临时文件名。此表示亦避免 JSON 中的 CRLF 转义被扫描器误判为 UNC 路径。
 
 ## 复跑与守卫
 
