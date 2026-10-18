@@ -7580,6 +7580,25 @@ class SpacetimeMemoryEngine:
 
     def search_content(self, query: str, layers: List[MemoryLayer] = None,
                        limit: int = 20) -> List[Tuple[STNode, float]]:
+        """内容检索（引擎面）：委托 `LayeredStore.search_content`（LIKE 预筛 +
+        二元组 Jaccard 排序），再走复用/模式加权记账。
+
+        #804（契约声明 · 守卫 `tests/test_issue804_search_like_wildcard_guard.py`）：
+        查询里的 `%` / `_` / `\\` 一律按**字面**匹配——store 层预筛经
+        `_escape_like`（`%`→`\\%`、`_`→`\\_`、`\\`→`\\\\`）转义并挂
+        `ESCAPE '\\'` 子句、模式经 `?` 参数绑定（#183 落地）。issue #804 报称
+        「含 % 查询抛 `ValueError: unsupported format character`」——**基线
+        40fceb6 复现不成立**：检索链（本方法 → store `search_content` →
+        `_like_fragments`/`_escape_like`/FTS `candidates`）全程无一处对查询做
+        Python `%` 格式化，含 `%`/`_` 查询不抛异常且只命中字面含该字符的内容
+        （读数见 #804 守卫件 docstring）。本件据此只钉契约＋补引擎面文档，
+        不改行为。边界（如实标注）：①`LINGSHU_FTS=1`（默认关）时候选生成走
+        二元组倒排，纯标点邻接的单字 gram（如 `%s` 的 `s`）会在索引侧并入
+        邻段 ⇒ 该形态查询 FTS 路径可能 0 命中（LIKE 路径不受影响）——属 FTS
+        分词粒度边界（#35/#797 族），不属本件；②预筛落空时的全表二元组
+        兜底会对**任何**未命中查询返回低/零分相似候选（#183 已裁定仅纯
+        通配符查询跳过兜底，其余口径逐字不变），非 `_` 通配语义。
+        """
         results = self.store.search_content(query, layers, limit)
         self._note_reuse([n.id for n, _ in results])
         # v1.12 P0-5a：模式成员检索加权（使用模式，不修改蒸馏产物）
