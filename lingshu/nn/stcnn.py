@@ -162,7 +162,24 @@ def detect_period(signal, min_period=2):
 
 
 def extract_spatiotemporal_primitives(frames):
-    """时空原语提取：运动/方向/速度/周期（白箱确定性）"""
+    """时空原语提取：运动/方向/速度/周期（白箱确定性）
+
+    #798：入口 fail-closed 校验——空帧列表 / 少于 2 帧时 raise ValueError（领域消息），
+    不再把 numpy 内部错误（``zero-size array to reduction operation minimum which
+    has no identity``，出自 ``frames_to_voxel`` 对空数组取 min/max 归一化）漏给调用方。
+    最小帧数取 **2**（判据）：本函数的全部时序算子——``MOTION_KERNEL``（kt=2）、
+    ``frame_diff``/``frame_rise`` 的 ``np.diff(axis=0)``、``detect_period`` 的前沿
+    间隔——都以「相邻两帧」为最小可分辨单元；单帧的时间维为 1，conv3d 输出空特征
+    图、diff/rise 全空 ⇒ 一切时空原语都是「未测量」却伪装成「测得 0」（静止/无周期），
+    与其静默返回伪读数，不如 fail-closed（与 physics._check_samples 的
+    「样本不足：需要 >= N 个」同款口径，#662 先例）。"""
+    n_frames = len(frames) if hasattr(frames, "__len__") else None
+    if n_frames is None or n_frames < 2:
+        raise ValueError(
+            "extract_spatiotemporal_primitives：帧列表为空/不足（至少需要 2 帧，"
+            "得到 %s 帧）——时空原语的时序算子（运动核/帧差/前沿检测）以相邻两帧"
+            "为最小可分辨单元" % ("?" if n_frames is None else n_frames)
+        )
     voxel = frames_to_voxel(frames)
     # ① 3D 卷积：运动核 → 时空特征图（运动响应）
     motion_feat = conv3d(voxel, MOTION_KERNEL)
