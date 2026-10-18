@@ -6680,6 +6680,33 @@ class SpacetimeMemoryEngine:
     # 等属未定项，不擅定；见 `add_perception` 内 #225 段「边界」）。
     _POLARITY_TAGS = frozenset({"success", "failure"})
 
+    # ---- #803：M5 去重键的零宽字符剥除 ----
+    # 零宽字符（ZWSP U+200B / ZWNJ U+200C / ZWJ U+200D / BOM U+FEFF / WJ U+2060）
+    # 视觉不可见但**字节不同** ⇒ `char_bigram_jaccard` 的二元组集合被打散，
+    # `important\u200dsecurity\u200dnotice` 与 `important security notice` 判不同源，
+    # M5 内容去重被绕过——同视觉内容可造 2^n 个「隐形变体」节点（内容污染 /
+    # 存储膨胀 / importance 分散）。修法：**去重键**（Jaccard 与分歧/矛盾判据的
+    # 输入）先剥除零宽字符；**落库正文不动**（用户字节原样保留，只正规化判同键）。
+    # 判据来源：公开 issue #803（复现 `'important security notice'` vs 插 2 个
+    # U+200D 变体 id 不同；建议「去重前做 Unicode 正规化」）。
+    # 边界（如实标注）：①只剥**零宽字符**（视觉同义面），不做 NFKC 全量
+    # 正规化——NFKC 还会折叠全/半角、连字等**语义可见**的差异（如 `①`→`1`、
+    # `ﬁ`→`fi`），把「用户故意的字形变体」也判同，超出本件攻击面，不擅扩；
+    # ②`skip_dedup=True` 的主动沉淀路径不经判同键，不受影响；③剥除只作用于
+    # **新写入与候选的比对两侧**——库里既存的含零宽节点与新写入的干净内容
+    # 也能互相判同（候选侧同样剥除）。
+    _ZERO_WIDTH_RE = None  # 惰性编译（模块顶部不 import re，与 _assertion_divergence 同款）
+
+    @staticmethod
+    def _strip_zero_width(s: str) -> str:
+        """#803：剥除零宽字符（U+200B-U+200D / U+FEFF / U+2060）——M5 判同键的正规化。"""
+        import re as _re
+        cls = SpacetimeMemoryEngine
+        if cls._ZERO_WIDTH_RE is None:
+            cls._ZERO_WIDTH_RE = _re.compile("[\u200b-\u200d\ufeff\u2060]")
+        return cls._ZERO_WIDTH_RE.sub("", s)
+
+
     # ---- M5 去重的「条件空间」判同（lingshu #268） ----
     @staticmethod
     def _conditions_mergeable(a: ConditionSpace, b: ConditionSpace) -> bool:
@@ -6904,22 +6931,31 @@ class SpacetimeMemoryEngine:
             # `OPPOSITE` 边/落冲突（issue 建议 4 的 fail-loud 属策略取舍，本件只做
             # 「不合并」这一最小面）。
             new_polarity = set(tags or []) & self._POLARITY_TAGS
+            # #803：判同键先剥零宽字符——零宽变体（ZWJ/ZWNJ/ZWSP/BOM/WJ）视觉相同
+            # 但字节不同，旧键直接比原始 content ⇒ 变体绕过 M5 去重各自成节点
+            # （见 `_strip_zero_width` 处注释）。比对**两侧**都剥除：新写入侧与
+            # 候选（库中既存节点）侧。
+            norm_new = self._strip_zero_width(content)
             for n in candidates:
                 if (set(n.tags or []) & self._POLARITY_TAGS) != new_polarity:
                     continue
                 # #268：条件空间也是判同键——条件不同即不同知识（见 docstring）
                 if not self._conditions_mergeable(cs, n.condition_space):
                     continue
-                sim = LayeredStore.char_bigram_jaccard(content, n.content)
+                sim = LayeredStore.char_bigram_jaccard(
+                    norm_new, self._strip_zero_width(n.content))
                 self._dedup_history.append(sim)
                 if len(self._dedup_history) > self._dedup_window:
                     self._dedup_history = self._dedup_history[-self._dedup_window:]
                 if sim > best_sim:
                     best_sim, best = sim, n
             if best and best_sim >= threshold:
-                divergence = self._assertion_divergence(content, best.content)
+                # #803：分歧/矛盾判据同样吃剥除零宽后的两侧——零宽字符插进否定词
+                # 内部（如 `不\u200d是`）会干扰词面判别；判同键与判分歧键必须同口径。
+                norm_best = self._strip_zero_width(best.content)
+                divergence = self._assertion_divergence(norm_new, norm_best)
                 if _contradiction.enabled():
-                    conflict_reason = (_contradiction.conflict(content, best.content)
+                    conflict_reason = (_contradiction.conflict(norm_new, norm_best)
                                        or _MAIN_DIVERGENCE_REASON.get(divergence, ""))
                     divergence = divergence or conflict_reason
                 if not divergence:
