@@ -42,6 +42,8 @@ Windows 相关回归：新守卫及 `test_issue665_nested_tx_savepoint.py`、
 `test_issue317_import_tx_ownership_guard.py`、`test_issue139_subgraph_replace_guard.py`、
 `test_issue139_subgraph_replace_validate_guard.py`、`test_core_thread_safety.py`，
 合计 **43 passed，0 skipped**。该数字包含新守卫，不与上表相加。
+另同步既有导出登记中 core.py 的 LF 归一指纹；登记守卫 **20 passed**，
+`tools/verify_manifest.py --strict --quiet` 为 **64 MATCH，0 MISMATCH，exit 0**。
 
 | 变异 | 指定守卫 | 必须失败的断言 |
 | --- | --- | --- |
