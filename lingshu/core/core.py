@@ -7152,8 +7152,46 @@ class SpacetimeMemoryEngine:
                  relation_type: EdgeType = EdgeType.CAUSAL,
                  confidence: float = 0.5,
                  condition_space: ConditionSpace = None,
-                 source_evidence: str = "extracted") -> STEdge:
-        """添加边（默认未验证）。source_evidence（P1-1）：extracted/inferred/ambiguous"""
+                 source_evidence: str = "extracted",
+                 dedup: bool = True) -> STEdge:
+        """添加边（默认未验证）。source_evidence（P1-1）：extracted/inferred/ambiguous
+
+        #801：写入前查同 (source_id, target_id, relation_type) 的既有边——存在则
+        **返回已有边**（带 `merged=True` 属性标记），不再插入平行副本（旧实现同参数
+        调 5 次产出 5 条独立边：`find_cycles`/`shortest_path`/`infer_causal_paths`
+        把同一事实计多次，存储无界增长——节点侧自 v1.26c 有 M5 去重，边侧零去重）。
+        判据来源：公开 issue #801 复现读数（5 次 add_edge → 5 个 edge_id）＋ 其
+        「修复建议 1/2」。命中口径取**返回已有边**而非 raise——与节点侧 M5 去重
+        先例（#223：命中返回原节点并带 `merged=True`）一致；`merged` 以返回对象
+        属性承载（STEdge 非 slotted dataclass，同 STNode 的 #223 先例），新建路径
+        恒 `merged=False`，既有调用方按 STEdge 使用不受影响。同 (source, target)
+        **不同 relation_type** 仍各自成边（语义不同的关系不是重复）。
+        `dedup=False`（issue 建议 2 的逃生口）：显式要求多条平行边时跳过查重照旧
+        插入（#327 守卫的平行边构图、需要 k 条平行边的枚举压测走此参数）。
+        边界（削掉的判别力/未覆盖面，如实标注）：①只挡**新增**面——库内既有平行边
+        不做存量迁移合并（#327 当年裁「合并+迁移会改既有边 id，波及衰减/验证/同步
+        面」，本件同样不动存量）；②命中后既有边的 confidence/verified/source_evidence
+        **不与新参数合并**（与 M5「只计复用不增信」#29① 同向：重复添加不增置信度）；
+        ③`LayeredStore.add_edge(STEdge)` 直写面不去重（同步/导入路径须保真，非本件
+        收口面）；④查重是 check-then-act，与 `add_node` 的旧行检查同款并发口径。"""
+        rt = relation_type if isinstance(relation_type, EdgeType) else EdgeType(relation_type)
+        if dedup:
+            row = self.store.conn.execute(
+                "SELECT * FROM edges WHERE source_id=? AND target_id=? AND relation_type=? "
+                "ORDER BY created_at, id LIMIT 1",
+                (source_id, target_id, rt.value)).fetchone()
+            if row is not None:
+                existing, _ = self.store._tolerant_edges([row])
+                if existing:
+                    hit = existing[0]
+                    hit.merged = True  # 与 M5 命中的 #223 标记同款（可区分「已存在」与「新建」）
+                    self._note_action("relation",
+                                      f"{source_id}→{target_id}",
+                                      [source_id, target_id],
+                                      {"relation": rt.value,
+                                       "evidence": source_evidence,
+                                       "dedup_hit": hit.id})
+                    return hit
         cs = condition_space or ConditionSpace(
             observation_position="关系建立",
             observation_tool="语义分析",
@@ -7164,12 +7202,13 @@ class SpacetimeMemoryEngine:
             id=f"edge_{uuid.uuid4().hex[:8]}_{int(time.time()*1000)}",
             source_id=source_id,
             target_id=target_id,
-            relation_type=relation_type,
+            relation_type=rt,
             condition_space=cs,
             confidence=confidence,
             verified=False,
             source_evidence=source_evidence
         )
+        edge.merged = False  # 新建路径恒 False（与 M5 新建节点同款，见 #223）
         self.store.add_edge(edge)
         self._note_action("relation",
                           f"{source_id}→{target_id}",
