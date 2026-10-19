@@ -27,9 +27,9 @@ def _seed(engine):
 
 def _assert_original_state(engine, original):
     assert engine._context_max == 10, "failed capacity change changed the runtime cap"
-    assert engine.store.get_meta("context_max")["context_max"] == "10"
-    assert all(engine.store.get_node(nid) is not None for nid in original)
     assert not engine.store.conn.in_transaction, "failed change left a pending transaction"
+    assert engine.store.get_meta("context_max")["context_max"] == "10", "failed capacity change changed stored metadata"
+    assert all(engine.store.get_node(nid) is not None for nid in original)
     # An independent connection checks durable state, not this connection's view.
     with sqlite3.connect(engine.store.db_path) as observer:
         assert observer.execute("SELECT value FROM engine_meta WHERE key='context_max'").fetchone()[0] == "10"
@@ -65,7 +65,7 @@ def test_fifo_failure_rolls_back_metadata_and_already_deleted_nodes(engine):
     engine.store.conn.execute("DROP TRIGGER block_second_delete")
     engine.set_context_cap(2)
     assert engine._context_max == 2
-    assert engine.store.get_node(original[0]) is None
+    assert engine.store.get_node(original[0]) is None, "successful capacity change did not trim FIFO"
     assert all(engine.store.get_node(nid) is not None for nid in original[1:])
 
 
@@ -123,7 +123,7 @@ def test_success_publishes_capacity_after_commit(engine):
     assert observed == [10], "runtime cap was published before the single final commit"
     assert engine._context_max == 2
     assert engine.store.get_meta("context_max")["context_max"] == "2"
-    assert engine.store.get_node(original[0]) is None
+    assert engine.store.get_node(original[0]) is None, "successful capacity change did not trim FIFO"
     assert all(engine.store.get_node(nid) is not None for nid in original[1:])
 
 

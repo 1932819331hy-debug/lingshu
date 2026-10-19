@@ -56,3 +56,22 @@
 使用临时合成 SQLite 库及真实引擎入口，无 DSH、脑端或外部模型依赖。没有模型效果、
 生产数据、完整 CI 或完整回归通过的结论。本补丁不改变多实例配置同步策略，也不保证
 所有受保护节点都能被裁到容量之内；沿用既有 FIFO 判据。
+
+## 具名变异自证
+
+```text
+python -X utf8 tools/testing/replay_transaction_guards.py --spec tests/fixtures/context_capacity_mutations.json --baseline 40fceb69e79d0f481455f05ea8581b6f6f5e5816 --mutate
+```
+
+Windows 和 Linux 各 4/4 条变异命中。每次只运行预先指定用例，要求恰好该用例失败、指定断言文本出现，且无错误或跳过；收集失败和超时不算命中。
+
+| 变异 | 指定断言 |
+|---|---|
+| `publish_runtime_before_commit` | runtime cap was published before the single final commit |
+| `save_metadata_outside_fifo_transaction` | failed capacity change changed stored metadata |
+| `allow_existing_caller_transaction` | DID NOT RAISE |
+| `omit_fifo_trimming` | successful capacity change did not trim FIFO |
+
+双平台逐条记录、源码/守卫 SHA256 和日志见同名目录。日志将临时输出目录前缀替换为 `<output>` 并移除行尾空白，保留失败正文、原始计数和退出码。完整未替换输出可由上述 driver 重新生成。
+
+通用复跑 driver 与另一事务修复 PR 内容相同，属于配套验证工具，不作为额外独立贡献重复计算；各 PR 的变异规格和业务修复独立。
