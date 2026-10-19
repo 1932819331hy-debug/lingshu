@@ -65,3 +65,25 @@
 
 仅在启用对应功能时影响上述业务写入。验证使用临时合成 SQLite 库和真实引擎入口，
 没有 DSH、脑端、外部模型、生产数据或完整 CI 通过的结论。
+
+## 具名变异自证
+
+```text
+python -X utf8 tools/testing/replay_transaction_guards.py --spec tests/fixtures/extension_transaction_mutations.json --baseline 40fceb69e79d0f481455f05ea8581b6f6f5e5816 --mutate
+```
+
+Windows 和 Linux 各 7/7 条变异命中。每次只运行预先指定用例，要求恰好该用例失败、指定断言文本出现，且无错误或跳过；收集失败和超时不算命中。
+
+| 变异 | 指定断言 |
+|---|---|
+| `ledger_record_owns_caller_transaction` | extension committed the caller transaction |
+| `ledger_sync_owns_caller_transaction` | extension committed the caller transaction |
+| `tms_registration_owns_caller_transaction` | TMS committed the caller transaction |
+| `tms_propagation_owns_caller_transaction` | TMS committed the caller transaction |
+| `synchronize_after_record_commit` | failed record committed evidence |
+| `allow_first_enable_inside_caller_transaction` | DID NOT RAISE |
+| `retain_tms_cache_after_failure` | failed propagation left a stale runtime cache |
+
+双平台逐条记录、源码/守卫 SHA256 和日志见同名目录。日志将临时输出目录前缀替换为 `<output>` 并移除行尾空白，保留失败正文、原始计数和退出码。完整未替换输出可由上述 driver 重新生成。
+
+通用复跑 driver 与另一事务修复 PR 内容相同，属于配套验证工具，不作为额外独立贡献重复计算；各 PR 的变异规格和业务修复独立。
