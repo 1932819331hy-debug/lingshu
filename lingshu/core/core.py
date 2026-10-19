@@ -200,11 +200,13 @@ def _dumps_tags(tags, ensure_ascii: bool = False) -> str:
 #   非 text 值中的 image/code（"etc." 是开放词，只取已实证项）；
 # ② `add_perception` 去重判据 #223 的 audio（候选集按 modality 过滤的显式
 #   测试值，tests/test_issue223_dedup_merge_fields_guard.py）；
-# ③ `provenance.from_legacy` 的 image（vision_pipeline 感知通道）。
+# ③ `provenance.from_legacy` 的 image（vision_pipeline 感知通道）；
+# ④ `subgraph_replace._attach` 的 visual（core.py 子树挂载的缺省 modality，
+#    tests/test_issue139_subgraph_replace_*.py 的 g5/g6 正对照在用）。
 # structure/protocol/self_state/trust_state 等模态是**写入路径内部值**——它们
 # 全部直构 `STNode(...)` 走 `add_node`（core.py 结构事件/锚点/自我快照等），
 # 不经 `add_perception` 感知入口，故不在本白名单内。扩展白名单是一行改动。
-_PERCEPTION_MODALITIES = frozenset({"text", "audio", "image", "code"})
+_PERCEPTION_MODALITIES = frozenset({"text", "audio", "image", "code", "visual"})
 
 
 def _validated_str_items(name: str, value):

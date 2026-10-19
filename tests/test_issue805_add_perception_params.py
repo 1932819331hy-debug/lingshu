@@ -287,7 +287,9 @@ def test_g4_container_none_normalized():
 
 
 def test_g5_modality_whitelist_all_pass():
-    for m in ("text", "audio", "image", "code"):
+    # visual：subgraph_replace._attach 的缺省 modality（core.py:12867，
+    # test_issue139_subgraph_replace_*.py g5/g6 正对照依赖）——CI 首轮红后补入。
+    for m in ("text", "audio", "image", "code", "visual"):
         e = _engine()
         n = e.add_perception(_BASE, modality=m, skip_dedup=True)
         assert n.modality == m
