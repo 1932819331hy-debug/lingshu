@@ -11783,6 +11783,61 @@ class SpacetimeMemoryEngine:
         return {r[1] for r in self.store.conn.execute(
             f"PRAGMA table_info({table})")}
 
+    # ---- #802：导出面（落盘 JSON）的 BiDi 控制/零宽字符剥除 ----
+    # BiDi 控制字符（嵌入/覆写 U+202A-U+202E、隔离 U+2066-U+2069、方向标记
+    # U+200E/U+200F）与零宽族（U+200B-U+200D / U+FEFF / U+2060）视觉不可见
+    # 但会被 BiDi 渲染器（VS Code / Notepad++ / 终端 cat / web UI / 日志查看
+    # 器）解释——RTLO（U+202E）使后续文本**反向显示**：`file\u202etxt` 落盘后
+    # 显示成 `txt.exe`，属视觉欺骗/钓鱼向量（CWE-176）。`json.dump` 只转义
+    # ASCII 控制符（< U+0020），非 ASCII 的 U+202E 原样落盘 ⇒ 导出 JSON 在
+    # 下游渲染面存在反转文本（spoofing 面）。
+    # 修法（最小 · 仅导出序列化面）：`export_all` / `export_trajectory`
+    # **写出前**对整棵导出树（表行的所有字符串值与键）剥除上述控制符。判据
+    # 来源：公开 issue #802 修复建议 1/2（「剥离或转义 BiDi 控制字符」「剥离或
+    # 标记零宽字符」）——两可之中取**剥除**：与 #803/PR #807 的 world 侧
+    # `_strip_zero_width`（判同键剥除）同款风格，且保证任意渲染器下「落盘
+    # JSON 渲染无反转」不依赖渲染器是否转义。
+    # 边界（如实标注）：①只剥**格式控制符**，不剥真正的 RTL 文字（阿拉伯/
+    # 希伯来字母、CJK、emoji、组合附加号均不在剥除集——正常双向文本照旧）；
+    # ②只动**导出序列化面**——落库正文（DB 字节）与 `import_all` 回读面不动
+    # （判据只管导出面；剥除后正文长度变短，实测回读无长度断言、不炸）；
+    # ③剥除是不可逆的（原字节不保留）——与「剥除」口径一致，导出面宁可丢
+    # 格式控制符也不落反转文本；④`export_trajectory` 只在**落盘分支**剥除，
+    # 批量模式（`output_path is None`，不落盘）返回体保持原样。
+    _EXPORT_CTRL_RE = None  # 惰性编译（模块顶部不 import re，与 #803 同款）
+
+    @staticmethod
+    def _strip_export_controls(s: str) -> str:
+        """#802：剥除 BiDi 控制/零宽字符——导出落盘 JSON 的渲染无反转保证。"""
+        import re as _re
+        cls = SpacetimeMemoryEngine
+        if cls._EXPORT_CTRL_RE is None:
+            # U+200E/U+200F LRM/RLM · U+202A-U+202E LRE/RLE/PDF/LRO/RTO(RTLO)
+            # · U+2066-U+2069 LRI/RLI/FSI/PDI · U+200B-U+200D ZWSP/ZWNJ/ZWJ
+            # · U+2060 WJ · U+FEFF BOM（零宽集与 #803 的 `_strip_zero_width`
+            # 同集，本面另收 BiDi 集）。
+            cls._EXPORT_CTRL_RE = _re.compile(
+                "[\u200e\u200f\u202a-\u202e\u2066-\u2069\u200b-\u200d\u2060\ufeff]")
+        return cls._EXPORT_CTRL_RE.sub("", s)
+
+    @classmethod
+    def _sanitize_export_obj(cls, obj):
+        """#802：对导出树做深剥除——所有字符串值与键过 `_strip_export_controls`。
+
+        面取**整棵树**而非仅 `nodes.content`：RTLO 可藏在任意人读字段（tags、
+        轨迹 JSON 的键/值——`export_trajectory` 的键来自用户内容的
+        `json.loads`），判据是「落盘 JSON 渲染无反转」而非「content 无反转」。
+        dict/list 递归，非字符串原样返回（数值/None/字节不动）。
+        """
+        if isinstance(obj, str):
+            return cls._strip_export_controls(obj)
+        if isinstance(obj, dict):
+            return {cls._strip_export_controls(k) if isinstance(k, str) else k:
+                    cls._sanitize_export_obj(v) for k, v in obj.items()}
+        if isinstance(obj, list):
+            return [cls._sanitize_export_obj(v) for v in obj]
+        return obj
+
     def export_all(self, output_path: str) -> Dict:
         """M13：全库导出（JSON · 6.5 摘要交换/灾备基础）
 
@@ -11863,6 +11918,10 @@ class SpacetimeMemoryEngine:
         finally:
             if own_tx:
                 self.store.conn.commit()
+        # #802：写出前对整棵导出树剥除 BiDi 控制/零宽字符（见
+        # `_strip_export_controls` 处注释）——落盘 JSON 渲染无反转。计数键
+        # （`exported_nodes` / `tables`）只数行数与表数，剥除不动行列数。
+        data = self._sanitize_export_obj(data)
         # #498（#330 修复的副作用）：`os.replace` 把目标换成**新 inode** ⇒
         # ①新档权限取 `0o666 & ~umask`，**不继承**旧档权限——运维刻意对备份设的
         #   `0600` 被静默放宽成 `0644`（全库导出含 `sensitivity=private` 条目、
@@ -13212,6 +13271,10 @@ class SpacetimeMemoryEngine:
             # #698：覆盖已存在目标 ⇒ 显式上报。读数取在写入**之前**（写后目标必在）。
             # 只进返回值、不进文件：落盘内容形状与 #57 契约逐字不变。
             overwrote_existing = os.path.exists(output_path)
+            # #802：落盘分支写出前剥除 BiDi 控制/零宽字符（与 `export_all`
+            # 同款；批量模式不落盘、返回体不动——见 `_strip_export_controls`
+            # 处注释边界④）。`reported` 取剥除后的树，与文件内容同源。
+            trajectory = self._sanitize_export_obj(trajectory)
             with open(output_path, "w", encoding="utf-8") as f:
                 json.dump(trajectory, f, ensure_ascii=False, indent=2)
             reported = dict(trajectory)
