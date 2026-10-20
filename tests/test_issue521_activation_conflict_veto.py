@@ -90,10 +90,14 @@ def _assertions():
            "TRUE" in acts and acts["TRUE"] > 0,
            acts)
 
+    base = _engine([TRUE, FALSE])[2]
     e, r, acts = _engine([TRUE, FALSE], conf=1.0)
-    _check("A04 ★行：把边改成满额 1.0——真命题被压出（证明按置信缩放的承重）",
-           "TRUE" not in acts,
-           acts)
+    # 满额边下 TRUE 必须**显著低于** 0.3 边的读数（证明按置信缩放承重）。
+    # 不断言「必被压出」：满额时 hop1 后恰为 0.1667（≥ act_floor 0.15），
+    # 是否在 hop2 被压出受浮点/hop 边界影响（Windows 与 Linux CI 实测不同）。
+    _check("A04 ★行：满额 1.0 时 TRUE 激活显著低于 0.3 边（证明缩放承重）",
+           acts.get("TRUE", 0) < base.get("TRUE", 0) - 0.1,
+           (acts, base))
 
     e, r, acts = _engine([TRUE])
     _check("A05 对照：只有 TRUE 时正常激活（抑制通路不误伤）",
@@ -143,7 +147,7 @@ _ARMS = {
         "lingshu/core/activation.py",
         [("                inh_rows.append(si); inh_cols.append(di); inh_mags.append(-d * _c)",
           "                inh_rows.append(si); inh_cols.append(di); inh_mags.append(-d)")],
-        {"A02", "E01"},
+        {"A02", "A04", "E01"},
     ),
     # 撤稀疏双向：单条 opposite 边场景下「TRUE 是否保留」无可观测差异
     # （置信缩放单独已兜住），由 E02 钉子钉住双向形式；双向的价值在多边对称。
@@ -159,7 +163,7 @@ _ARMS = {
         "lingshu/core/activation.py",
         [("                _c = min(1.0, max(0.0, _c))",
           "                _c = 1.0")],
-        {"A02"},
+        {"A02", "A04"},
     ),
     # 抑制归零（过度放宽）⇒ 满额边也不再压出 TRUE ⇒ A04 红。
     "M4": (
