@@ -1,0 +1,104 @@
+{
+  "python": "3.13.12",
+  "platform": "Linux",
+  "sqlite": "3.46.1",
+  "baseline": "40fceb69e79d0f481455f05ea8581b6f6f5e5816",
+  "guard_sha256": "9ff8a905bd21fa82eaa19550d70fb574e1d909108d7bd2262fb1725243fd9edd",
+  "records": [
+    {
+      "case": "fixed",
+      "ok": true,
+      "returncode": 0,
+      "passed": 4,
+      "failed_tests": [],
+      "errors": 0,
+      "skipped": 0,
+      "expected_failures": [],
+      "expected_assertion": "",
+      "pytest_summary": "4 passed in 0.72s",
+      "source_sha256": {
+        "lingshu/nn/hex_cnn.py": "17cb518fe46b2408fc83f2759def512fcb307c2798bc2ebdfaf450be17024cf7"
+      }
+    },
+    {
+      "case": "baseline",
+      "ok": true,
+      "returncode": 1,
+      "passed": 1,
+      "failed_tests": [
+        "test_parallel_saves_do_not_share_temporary_files[failure]",
+        "test_parallel_saves_do_not_share_temporary_files[success]",
+        "test_temporary_name_collision_keeps_unowned_file"
+      ],
+      "errors": 0,
+      "skipped": 0,
+      "expected_failures": [
+        "test_parallel_saves_do_not_share_temporary_files[success]",
+        "test_parallel_saves_do_not_share_temporary_files[failure]",
+        "test_temporary_name_collision_keeps_unowned_file"
+      ],
+      "expected_assertion": "",
+      "pytest_summary": "3 failed, 1 passed in 0.72s",
+      "source_sha256": {
+        "lingshu/nn/hex_cnn.py": "c0d9639796fc8525fee203307f017ea097f9b411d0b0e916491f0f028a3973a0"
+      }
+    },
+    {
+      "case": "share_process_temporary_file",
+      "ok": true,
+      "returncode": 1,
+      "passed": 0,
+      "failed_tests": [
+        "test_parallel_saves_do_not_share_temporary_files[success]"
+      ],
+      "errors": 0,
+      "skipped": 0,
+      "expected_failures": [
+        "test_parallel_saves_do_not_share_temporary_files[success]"
+      ],
+      "expected_assertion": "concurrent valid save was rejected",
+      "pytest_summary": "1 failed in 0.41s",
+      "source_sha256": {
+        "lingshu/nn/hex_cnn.py": "4b3c5a3bb5d61469ea285a5da3f194921bf3c79953dc68d2cb1eba992002a497"
+      }
+    },
+    {
+      "case": "truncate_existing_temporary_file",
+      "ok": true,
+      "returncode": 1,
+      "passed": 0,
+      "failed_tests": [
+        "test_temporary_name_collision_keeps_unowned_file"
+      ],
+      "errors": 0,
+      "skipped": 0,
+      "expected_failures": [
+        "test_temporary_name_collision_keeps_unowned_file"
+      ],
+      "expected_assertion": "temporary-name collision was not rejected",
+      "pytest_summary": "1 failed in 0.39s",
+      "source_sha256": {
+        "lingshu/nn/hex_cnn.py": "85bbf0eac06b3f27a0162d75b07bcbb028afbe4e006c64dacb8436ece44c9356"
+      }
+    },
+    {
+      "case": "unlink_unowned_temporary_file",
+      "ok": true,
+      "returncode": 1,
+      "passed": 0,
+      "failed_tests": [
+        "test_temporary_name_collision_keeps_unowned_file"
+      ],
+      "errors": 0,
+      "skipped": 0,
+      "expected_failures": [
+        "test_temporary_name_collision_keeps_unowned_file"
+      ],
+      "expected_assertion": "another save's temporary file was removed",
+      "pytest_summary": "1 failed in 0.39s",
+      "source_sha256": {
+        "lingshu/nn/hex_cnn.py": "1bb8021042c2c4ba4959342c02ec3d6a5c5a115bd807d612627a951d9a3939e9"
+      }
+    }
+  ]
+}

@@ -1,0 +1,45 @@
+{
+  "guard": "tests/test_consolidated_save_isolation.py",
+  "sources": ["lingshu/nn/hex_cnn.py"],
+  "total": 4,
+  "baseline_failures": [
+    "test_parallel_saves_do_not_share_temporary_files[success]",
+    "test_parallel_saves_do_not_share_temporary_files[failure]",
+    "test_temporary_name_collision_keeps_unowned_file"
+  ],
+  "mutations": [
+    {
+      "name": "share_process_temporary_file",
+      "test": "test_parallel_saves_do_not_share_temporary_files[success]",
+      "assertion": "concurrent valid save was rejected",
+      "changes": [{
+        "file": "lingshu/nn/hex_cnn.py",
+        "method": "save_consolidated",
+        "old": "tmp = f\"{target}.tmp-{os.getpid()}-{uuid.uuid4().hex}\"",
+        "new": "tmp = f\"{target}.tmp-{os.getpid()}\""
+      }]
+    },
+    {
+      "name": "truncate_existing_temporary_file",
+      "test": "test_temporary_name_collision_keeps_unowned_file",
+      "assertion": "temporary-name collision was not rejected",
+      "changes": [{
+        "file": "lingshu/nn/hex_cnn.py",
+        "method": "save_consolidated",
+        "old": "with open(tmp, \"x\", encoding=\"utf-8\") as f:",
+        "new": "with open(tmp, \"w\", encoding=\"utf-8\") as f:"
+      }]
+    },
+    {
+      "name": "unlink_unowned_temporary_file",
+      "test": "test_temporary_name_collision_keeps_unowned_file",
+      "assertion": "another save's temporary file was removed",
+      "changes": [{
+        "file": "lingshu/nn/hex_cnn.py",
+        "method": "save_consolidated",
+        "old": "if not owns_tmp:",
+        "new": "if False:"
+      }]
+    }
+  ]
+}
