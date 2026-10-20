@@ -7480,17 +7480,32 @@ class SpacetimeMemoryEngine:
         改写时仍后写者胜（不对 `trust_history` / `value_evolution` 做逐条归并，那属
         语义裁定面）；且合并**不回填内存**（本实例内存保持原样，只是落库值不再抹掉
         他方字段）。跨写者的同字段语义合并留设计者裁。
-        """
-        self.store.merge_meta(self.SELF_MODEL_META_KEY, self._merge_self_model_value)
 
-    def _merge_self_model_value(self, raw: Optional[str]) -> str:
+        保存失败时不推进本地合并基线：待保存改动继续被视为本地改动，可随下一次
+        正常保存一起重试。先取得 SQLite 写事务，再进入原有 store 锁，保持锁顺序。
+        调用方已有事务时仍参与该事务；不新增对调用方稍后回滚的运行态同步保证。
+        """
+        # Reserve the SQLite write transaction before the existing store lock,
+        # matching merge_meta's lock order. Publish only the exact local input
+        # whose write succeeded; a rejected save must leave it dirty for retry.
+        with self.store._tx():
+            with self.store._lock:
+                local = self.self_model.to_dict()
+                self.store.merge_meta(
+                    self.SELF_MODEL_META_KEY,
+                    lambda raw: self._merge_self_model_value(raw, local))
+                self._commit_locked()
+                self._self_model_baseline = local
+
+    def _merge_self_model_value(self, raw: Optional[str], local: Optional[Dict] = None) -> str:
         """`LayeredStore.merge_meta` 的取值回调：读回库内快照，按字段判归属（#483）。
 
         三方合并：基线（`_self_model_baseline`，本实例上次同步时的内存快照）／本实例
         现值（local）／库内现值（disk）。字段归属判据＝**本实例是否改过**：
           · `local[k] == base[k]` ⇒ 本实例未改过 ⇒ 采纳 `disk[k]`（他方更新不丢）；
           · `local[k] != base[k]` ⇒ 本实例改过 ⇒ 保留 `local[k]`（本实例的变更不丢）。
-        基线在返回前更新为 `local`（**不是** merged）——内存未回填，故该字段仍处
+        本回调只计算载荷；基线由 `_save_self_model` 在写入成功后更新为 `local`
+        （**不是** merged）——内存未回填，故该字段仍处
         「本实例未改动」态；若把基线置成 merged，下一笔写入就会把刚采纳的他方值
         当成「本地改动」再覆写回去（第二笔写复活丢更新）。
 
@@ -7503,14 +7518,14 @@ class SpacetimeMemoryEngine:
                 disk = json.loads(raw)
             except (TypeError, ValueError):  # 坏快照：按「无他方更新」处置，不阻断写入
                 disk = None
-        local = self.self_model.to_dict()
+        if local is None:
+            local = self.self_model.to_dict()
         base = getattr(self, "_self_model_baseline", None)
         merged = dict(local)
         if isinstance(disk, dict) and isinstance(base, dict):
             for k, v in disk.items():
                 if k in merged and merged[k] == base.get(k):
                     merged[k] = v
-        self._self_model_baseline = local
         return json.dumps(merged, ensure_ascii=False)
 
     def _load_self_snapshot(self) -> Optional[Tuple[Dict, str]]:
