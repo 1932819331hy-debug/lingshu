@@ -200,7 +200,9 @@ class ActivationEngine:
         self._adj_inh = None        # 本轮抑制邻接(仅 opposite 边,存 |decay|)
         self._node_index = None     # node_id → idx
         self._edge_meta = None      # (src_idx, dst_idx, decay) 兴奋边列表
-        self._inh_meta = None       # (src_idx, dst_idx, |decay|) 抑制边列表
+        self._inh_meta = None       # (src_idx, dst_idx, |decay|) 抑制边列表（单向）
+        self._adj_inh_unv = None    # 低置信(<0.5)抑制邻接（双向补充，issue #521）
+        self._inh_unv_meta = None   # (src_idx, dst_idx, |decay|×confidence) 低置信边列表
 
     # ---------------- 表结构(独立激活表,与内容记忆分离) ----------------
     def _ensure_tables(self):
@@ -287,6 +289,7 @@ class ActivationEngine:
                 cur_cs[nid] = {}
         rows, cols, decays = [], [], []
         inh_rows, inh_cols, inh_mags = [], [], []
+        unv_rows, unv_cols, unv_mags = [], [], []
         for src, dst, rtype, cs_json, edge_conf in edges:
             si, di = idx.get(src), idx.get(dst)
             if si is None or di is None:
@@ -308,16 +311,21 @@ class ActivationEngine:
             except (TypeError, ValueError):
                 d = d * COND_MATCH_NEUTRAL
             if d < 0:  # 负记忆同价(第五篇):相反边走独立抑制通路,不进兴奋邻接(issue #229)
-                # issue #521：抑制幅度 × 边置信（未复核 0.3 不得满额否决）；
-                # 非有限/越界的存量值按 [0,1] 钳制，坏值不放大抑制。
+                # issue #521：**低置信**（< 默认 0.5，含 register_conflict 的 0.3）
+                # 的 opposite 边按置信缩放、并进双向补充面（contested）；默认 0.5
+                # 及以上的边保持既有「满额单向」语义（#229 的既有契约，勿回归）。
                 try:
-                    _c = float(edge_conf) if edge_conf is not None else 0.3
+                    _c = float(edge_conf) if edge_conf is not None else 0.5
                 except (TypeError, ValueError):
-                    _c = 0.3
+                    _c = 0.5
                 if _c != _c:  # NaN
-                    _c = 0.3
+                    _c = 0.5
                 _c = min(1.0, max(0.0, _c))
-                inh_rows.append(si); inh_cols.append(di); inh_mags.append(-d * _c)
+                if _c < 0.5:
+                    inh_rows.append(si); inh_cols.append(di); inh_mags.append(-d * _c)
+                    unv_rows.append(si); unv_cols.append(di); unv_mags.append(-d * _c)
+                else:
+                    inh_rows.append(si); inh_cols.append(di); inh_mags.append(-d)
             else:
                 rows.append(si); cols.append(di); decays.append(d)
         if csr_matrix is not None and rows:
@@ -330,11 +338,18 @@ class ActivationEngine:
                                  shape=(n, n))
         else:
             adj_inh = None  # 降级:edge-list 抑制
+        if csr_matrix is not None and unv_rows:
+            adj_inh_unv = csr_matrix((np.array(unv_mags, dtype=np.float32),
+                                      (unv_rows, unv_cols)), shape=(n, n))
+        else:
+            adj_inh_unv = None
         self._adj = adj
         self._adj_inh = adj_inh
+        self._adj_inh_unv = adj_inh_unv
         self._node_index = idx
         self._edge_meta = (rows, cols, decays)
         self._inh_meta = (inh_rows, inh_cols, inh_mags)
+        self._inh_unv_meta = (unv_rows, unv_cols, unv_mags)
         self._node_ids = node_ids
         # 节点条件空间(节点级 cond_match 用;装载期已消费,留作审计/调试)
         self._node_cond = cur_cs
@@ -481,16 +496,19 @@ class ActivationEngine:
             #   supp[dst] = max over src (act[src]·|decay|),act[dst] ← max(act[dst]−supp,0)。
             supp = np.zeros(n, dtype=np.float32)
             if self._adj_inh is not None:
-                # issue #521：抑制按**对称**关系算——opposite 是互相矛盾，
-                # 不能只按存储方向（register_conflict 新→旧）让「后写者」单方面
-                # 否决「先写者」；双向取 max，结果与写入顺序无关。
-                supp = np.maximum(self._max_plus(self._adj_inh, act),
-                                  self._max_plus(self._adj_inh.T, act))
-            else:  # edge-list 降级（双向同口径）
+                supp = self._max_plus(self._adj_inh, act)
+                # issue #521：**低置信**边（<0.5）额外做反向抑制（双向），
+                # 未复核 0.3 边不得只按存储方向让后写者单方面否决先写者；
+                # 默认 0.5+ 的边保持既有单向（#229）。
+                if self._adj_inh_unv is not None:
+                    supp = np.maximum(supp, self._max_plus(self._adj_inh_unv.T, act))
+            else:  # edge-list 降级（低置信边双向同口径）
                 inh_rows, inh_cols, inh_mags = self._inh_meta
                 for si, di, m in zip(inh_rows, inh_cols, inh_mags):
                     if act[si] > 0:
                         supp[di] = max(supp[di], act[si] * m)
+                unv_rows, unv_cols, unv_mags = self._inh_unv_meta
+                for si, di, m in zip(unv_rows, unv_cols, unv_mags):
                     if act[di] > 0:
                         supp[si] = max(supp[si], act[di] * m)
             if supp.any():

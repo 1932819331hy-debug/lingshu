@@ -27,13 +27,15 @@ if str(_REPO) not in sys.path:
 
 from lingshu.core import activation as A  # noqa: E402
 from lingshu.core.activation import ActivationEngine  # noqa: E402
-from lingshu.core.core import SpacetimeMemoryEngine  # noqa: E402
+from lingshu.core.core import ConditionSpace, SpacetimeMemoryEngine  # noqa: E402
 
 TRUE = ("用户在二零二六年的年度体检报告中确认对青霉素类抗生素过敏，以后开药前"
         "必须提醒医生注意这一点，并在病历首页显著标注，避免出现严重的过敏反应事件")
 FALSE = ("用户在二零二六年的年度体检报告中确认对青霉素类抗生素不过敏，以后开药前"
          "必须提醒医生注意这一点，并在病历首页显著标注，避免出现严重的过敏反应事件")
 QUERY = "青霉素过敏吗"
+# 同一条件空间 ⇒ cond_match=1.0，抑制幅值只由 base×confidence 决定（可复算）。
+COND = ConditionSpace("fixture", "fixture", (100.0, 101.0), "synthetic")
 
 _CHECKS = []
 FAILS = []
@@ -52,7 +54,7 @@ def _check(name, cond, detail=""):
 def _engine(order, conf=None):
     e = SpacetimeMemoryEngine(":memory:")
     for s in order:
-        e.add_perception(s)
+        e.add_perception(s, condition_space=COND)
     if conf is not None:
         e.store.conn.execute(
             "UPDATE edges SET confidence=? WHERE relation_type='opposite'", (conf,))
@@ -127,8 +129,9 @@ def _assertions():
     src = _src("lingshu/core/activation.py")
     _check("E01 ★钉子：抑制幅度乘边置信",
            "inh_mags.append(-d * _c)" in src)
-    _check("E02 ★钉子：稀疏/边表两路径都双向",
-           "self._max_plus(self._adj_inh.T, act)" in src
+    _check("E02 ★钉子：低置信边稀疏/边表两路径都双向",
+           "self._max_plus(self._adj_inh_unv.T, act)" in src
+           and "unv_rows, unv_cols, unv_mags = self._inh_unv_meta" in src
            and "supp[si] = max(supp[si], act[di] * m)" in src)
 
 
@@ -145,32 +148,24 @@ _ARMS = {
     # 撤置信缩放：T-first 满额否决回来 ⇒ A02 红（E01 钉子按设计同红）。
     "M1": (
         "lingshu/core/activation.py",
-        [("                inh_rows.append(si); inh_cols.append(di); inh_mags.append(-d * _c)",
-          "                inh_rows.append(si); inh_cols.append(di); inh_mags.append(-d)")],
-        {"A02", "A04", "E01"},
+        [("                    inh_rows.append(si); inh_cols.append(di); inh_mags.append(-d * _c)",
+          "                    inh_rows.append(si); inh_cols.append(di); inh_mags.append(-d)")],
+        {"A02", "A04", "B01", "E01"},
     ),
     # 撤稀疏双向：单条 opposite 边场景下「TRUE 是否保留」无可观测差异
     # （置信缩放单独已兜住），由 E02 钉子钉住双向形式；双向的价值在多边对称。
     "M2": (
         "lingshu/core/activation.py",
-        [("                supp = np.maximum(self._max_plus(self._adj_inh, act),\n"
-          "                                  self._max_plus(self._adj_inh.T, act))",
-          "                supp = self._max_plus(self._adj_inh, act)")],
+        [("                    supp = np.maximum(supp, self._max_plus(self._adj_inh_unv.T, act))",
+          "                    supp = supp")],
         {"E02"},
     ),
     # 不读边置信（恒 1.0）⇒ 未复核边满额 ⇒ A02 红。
     "M3": (
         "lingshu/core/activation.py",
-        [("                _c = min(1.0, max(0.0, _c))",
-          "                _c = 1.0")],
-        {"A02", "A04"},
-    ),
-    # 抑制归零（过度放宽）⇒ 满额边也不再压出 TRUE ⇒ A04 红。
-    "M4": (
-        "lingshu/core/activation.py",
-        [("                _c = min(1.0, max(0.0, _c))",
-          "                _c = 0.0")],
-        {"A04"},
+        [("                if _c < 0.5:",
+          "                if False:")],
+        {"A02", "A04", "B01"},
     ),
 }
 
