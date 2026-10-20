@@ -2221,30 +2221,32 @@ class LayeredStore:
     @contextmanager
     def _structure_event_transaction(self):
         """结构事件工作单元；已有调用方事务时只释放自己的 savepoint。"""
-        with self._lock:
-            conn = self.conn
-            nested = conn.in_transaction
-            savepoint = f"structure_event_{uuid.uuid4().hex}"
-            # ★ #665：`nested` 必须同时把「已被 @_transactional 包裹」算进来。
-            # 单看 `conn.in_transaction` 不够——最外层 `_tx` 就是用它 BEGIN 的，
-            # 但**裸 `BEGIN IMMEDIATE` 在已开事务里会抛 `cannot start a transaction
-            # within a transaction`**；此处历史上只按 in_transaction 判，故凡是
-            # 走 `_tx` 进入的调用方都会踩到。用 `_tx_depth` 兜住这一层。
-            nested = nested or bool(getattr(self, "_tx_depth", 0))
-            conn.execute(f"SAVEPOINT {savepoint}" if nested else "BEGIN IMMEDIATE")
-            try:
+        conn = self.conn
+        nested = conn.in_transaction
+        savepoint = f"structure_event_{uuid.uuid4().hex}"
+        # ★ #665：`nested` 必须同时把「已被 @_transactional 包裹」算进来。
+        # 单看 `conn.in_transaction` 不够——最外层 `_tx` 就是用它 BEGIN 的，
+        # 但**裸 `BEGIN IMMEDIATE` 在已开事务里会抛 `cannot start a transaction
+        # within a transaction`**；此处历史上只按 in_transaction 判，故凡是
+        # 走 `_tx` 进入的调用方都会踩到。用 `_tx_depth` 兜住这一层。
+        nested = nested or bool(getattr(self, "_tx_depth", 0))
+        # 与普通写入同序：先取得 SQLite 写事务，再进入 Python 临界区。
+        # 持 Python 锁等 SQLite，会与已占 SQLite、正等 Python 锁的写入互锁。
+        conn.execute(f"SAVEPOINT {savepoint}" if nested else "BEGIN IMMEDIATE")
+        try:
+            with self._lock:
                 yield conn.cursor()
                 if nested:
                     conn.execute(f"RELEASE SAVEPOINT {savepoint}")
                 else:
                     conn.commit()
-            except BaseException:
-                if nested:
-                    conn.execute(f"ROLLBACK TO SAVEPOINT {savepoint}")
-                    conn.execute(f"RELEASE SAVEPOINT {savepoint}")
-                else:
-                    conn.rollback()
-                raise
+        except BaseException:
+            if nested:
+                conn.execute(f"ROLLBACK TO SAVEPOINT {savepoint}")
+                conn.execute(f"RELEASE SAVEPOINT {savepoint}")
+            else:
+                conn.rollback()
+            raise
 
     def _insert_structure_event(self, node: STNode, cursor):
         """内部追加：正文、类型、来源、同步标记和操作留痕共用一次提交。"""
@@ -11105,9 +11107,9 @@ class SpacetimeMemoryEngine:
         if not policy or key not in policy.preference_weights:
             return False
         self.store._assert_meta_key_writable("attention_weights")
-        with self.store._lock:
-            if self.store.conn.in_transaction:
-                raise RuntimeError("配置调整需要独立事务；请先结束调用方事务")
+        if self.store.conn.in_transaction:
+            raise RuntimeError("配置调整需要独立事务；请先结束调用方事务")
+        with self.store._tx(), self.store._lock:
             previous = dict(policy.preference_weights)
             try:
                 with self.store._structure_event_transaction() as cursor:
@@ -11120,6 +11122,8 @@ class SpacetimeMemoryEngine:
                         f"{key}={weights[key]}（{role} · {source}）{reason}", "attention_weight",
                         source=source, metadata={"key": key, "value": weights[key],
                                                  "role": role, "reason": reason}, _cursor=cursor)
+                # 真提交仍在锁内与补偿 try 内；提交失败必须恢复运行态。
+                self.store._commit_locked()
             except BaseException:
                 policy.preference_weights.clear()
                 policy.preference_weights.update(previous)
@@ -12959,9 +12963,9 @@ class SpacetimeMemoryEngine:
         判定；终裁的返回契约与事务边界**逐字不变**。
         """
         # 提交与发布都持锁，后续终裁才能基于刚提交的配置继续修改。
-        with self.store._lock:
-            if self.store.conn.in_transaction:
-                raise RuntimeError("终裁配置需要独立事务；请先结束调用方事务")
+        if self.store.conn.in_transaction:
+            raise RuntimeError("终裁配置需要独立事务；请先结束调用方事务")
+        with self.store._tx(), self.store._lock:
             before_config = dict(self._verifier_config)
             before_dedup = self._dedup_static
             try:
@@ -13007,6 +13011,8 @@ class SpacetimeMemoryEngine:
                             record, "verifier_standard", source=adjudicator,
                             metadata=_meta,
                             _cursor=cursor)
+                # 真提交仍在锁内与补偿 try 内；提交失败必须恢复运行态。
+                self.store._commit_locked()
             except BaseException:
                 # 盘上已随工作单元回滚；内存配置必须一并回退（见 docstring）。
                 self._verifier_config.clear()
