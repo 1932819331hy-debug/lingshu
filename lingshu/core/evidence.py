@@ -72,6 +72,19 @@ CREATE TABLE IF NOT EXISTS evidence (
 _IDX = "CREATE INDEX IF NOT EXISTS idx_evidence_node ON evidence(node_id)"
 
 
+#: `Role.PRIMARY` 的枚举**值**（`lingshu/core/core.py`：`PRIMARY = "primary"`）。
+#: 这里只记值、不 import `Role`：`core.py` 是在函数内惰性 import 本模块的
+#: （`enable_evidence_ledger`），本模块若在顶层 `from .core import Role`
+#: 会形成**循环导入**。层与角色的**单一真源**仍取 `self.store`
+#: （`LayeredStore.SHARED_LAYERS` / `LayeredStore.role`），与 `add_node` 同源。
+_PRIMARY_ROLE_VALUE = "primary"
+
+
+def _value_of(x):
+    """枚举取 `.value`，非枚举原样返回（容忍把 role 直接设成字符串的用法）。"""
+    return getattr(x, "value", x)
+
+
 def normalize_source(source: Optional[str]) -> str:
     s = (source or "").strip().lower()
     return s or "unattributed"
@@ -99,6 +112,62 @@ class EvidenceLedger:
             c.execute(_IDX)
             c.commit()
 
+    # ------------------------------------------------------------ 写权限闸
+    def _assert_shared_layer_writable(self, node_id: str) -> None:
+        """共享层写权限闸（#765 / #774）：非 PRIMARY 不得经证据账本写共享层。
+
+        缺陷形态（修前 `origin/main`）：`EvidenceLedger` 的写面（`record` / `sync`）
+        **没有任何层/角色闸** ⇒ SUB 实例拿到账本对象后直调 `record(...,
+        polarity=CONTRADICT)` 即可把 PRIMARY 建的**锚点/结构层**节点
+        `confidence 1.000000 → 0.333333`（`sync` 单独调则 → 0.5），且另一
+        PRIMARY 实例读回一致——引擎侧 `add_evidence` 的角色闸（若有）拦不住
+        「绕过引擎、直调账本对象」这条路。
+
+        判据（与 `LayeredStore.add_node` 的共享层闸**同款、同源**）：
+        节点所在层 ∈ `self.store.SHARED_LAYERS` 且 `self.store.role != PRIMARY`
+        ⇒ `PermissionError`。层与角色都从 `self.store` 上取（单一真源），
+        本模块**不** import `core`（避免循环导入，见 `_PRIMARY_ROLE_VALUE` 注）。
+
+        ★本笔（#769 / #780）**不再自持判据本体**：优先**委托** store 的唯一单点
+        `assert_node_writable_by_role`（`core.py` 的 `layer_writable_by_role`）。
+        原实现是本模块内联一份「层 ∈ SHARED_LAYERS 且 role != PRIMARY」——同一
+        判据两份实现正是本族缺陷（#769 三条旁路 + #780 整链）的成因，故收归单点。
+        对**鸭子类型** store（无该方法的测试替身 / 旧宿主）保留原内联兜底，避免
+        本闸因宿主换形而静默失效（兜底判据与原实现逐字一致，行为不变）。
+
+        边界（如实）：
+          · 本闸是**角色/层判据**，不是身份核验——`role` 仍是进程内构造参数
+            （该面属 issue #779，不在本条）。
+          · 闸拦的是「写共享层」，**不拦「写本地层」**：SUB 对自己的
+            context / knowledge / self 层节点记证据是合法用法，照旧放行。
+          · 只覆盖 `EvidenceLedger` 自己的写面；引擎侧 `annotate_semantics` /
+            `decay_cycle` 两条（#774 ③④，落在 `core.py`）本轮**未覆盖**，已登记。
+          · 闸只认**节点在库中的层**；节点不存在时交由调用方既有的
+            `KeyError` 语义处理（`record` 已先判存在性）。
+        """
+        # ★本笔（#769/#780）：判据收归 store 的唯一单点（存在性也由该单点处理：
+        # 节点不存在 ⇒ 放行，交由调用方既有语义）。
+        single = getattr(self.store, "assert_node_writable_by_role", None)
+        if callable(single):
+            single(node_id, "经证据账本写入共享层节点的 confidence")
+            return
+        # 兜底（鸭子类型 store）：与原实现逐字一致的判据，行为不变。
+        node = self.store.get_node(node_id)
+        if node is None:
+            return
+        layer = getattr(node, "layer", None)
+        if layer is None:
+            return
+        role = getattr(self.store, "role", None)
+        if _value_of(role) == _PRIMARY_ROLE_VALUE:
+            return
+        shared = getattr(self.store, "SHARED_LAYERS", None) or ()
+        if layer in shared:
+            raise PermissionError(
+                f"role={_value_of(role)} 无权写入共享层（{_value_of(layer)}），"
+                "共享层由父节点主控"
+            )
+
     # ------------------------------------------------------------ 写
     def record(self, node_id: str, source: Optional[str], polarity: int = SUPPORT,
                weight: float = 1.0, self_generated: bool = False,
@@ -108,6 +177,9 @@ class EvidenceLedger:
         w = _check_weight(weight)
         if not node_id or self.store.get_node(node_id) is None:
             raise KeyError(f"节点不存在：{node_id!r}")
+        # #774：闸必须在 INSERT **之前**——只在 `sync` 落闸会留下孤儿证据行
+        # （record 先 INSERT 再调 sync；SUB 被拒时 evidence 表已多一行）。
+        self._assert_shared_layer_writable(node_id)
         eid = uuid.uuid4().hex
         with self.store._lock:
             c = self.store.conn
@@ -123,7 +195,13 @@ class EvidenceLedger:
         return eid
 
     def sync(self, node_id: str) -> float:
-        """把推导出的置信度写回 nodes.confidence，使既有读路径看到同一个值。"""
+        """把推导出的置信度写回 nodes.confidence，使既有读路径看到同一个值。
+
+        #765 / #774：本方法**直接 UPDATE 共享层节点的 confidence**（0.5 那格），
+        故同样要先过 `_assert_shared_layer_writable`——闸落在 UPDATE 之前，
+        被拒时零状态变更。
+        """
+        self._assert_shared_layer_writable(node_id)
         conf = self.assess(node_id)["confidence"]
         with self.store._lock:
             c = self.store.conn

@@ -41,6 +41,7 @@
 不再以裸 `import numpy` 击穿整包导入;scipy 仍为可选稀疏后端(缺失降级 edge-list)。
 """
 from __future__ import annotations
+from contextlib import contextmanager
 import json
 import math
 import os
@@ -134,7 +135,8 @@ class _BorrowedConnection:
 
     引擎内部各处按「取连接 → 用完 close()」书写；`store=` / `conn=` 复用引擎连接
     （如 `:memory:`）时，真 `close()` 会把调用方的库一起关掉——本包装只让 `close()`
-    空转，不改变 `execute` / `commit` / `cursor` 的语义。
+    空转，不改变 `execute` / `commit` / `cursor` 的语义。事务由激活引擎的
+    `_transaction` 管理，借用已有事务时只操作自己的 SAVEPOINT。
     """
 
     def __init__(self, conn):
@@ -204,18 +206,53 @@ class ActivationEngine:
 
     # ---------------- 表结构(独立激活表,与内容记忆分离) ----------------
     def _ensure_tables(self):
-        con = self._con()
-        con.execute("""CREATE TABLE IF NOT EXISTS activation_nodes (
-            id TEXT PRIMARY KEY, workset TEXT NOT NULL, node_id TEXT NOT NULL,
-            activation REAL NOT NULL, source TEXT NOT NULL, hop INTEGER NOT NULL, ts REAL NOT NULL)""")
-        con.execute("CREATE INDEX IF NOT EXISTS idx_act_ws ON activation_nodes(workset)")
-        con.commit(); con.close()
+        with self._transaction() as con:
+            con.execute("""CREATE TABLE IF NOT EXISTS activation_nodes (
+                id TEXT PRIMARY KEY, workset TEXT NOT NULL, node_id TEXT NOT NULL,
+                activation REAL NOT NULL, source TEXT NOT NULL, hop INTEGER NOT NULL, ts REAL NOT NULL)""")
+            con.execute("CREATE INDEX IF NOT EXISTS idx_act_ws ON activation_nodes(workset)")
 
     def _con(self):
         """取连接：借用的共享连接优先（#293），否则按路径新开。"""
         if self._conn is not None:
             return self._conn
         return sqlite3.connect(self.db_path, timeout=30)
+
+    @contextmanager
+    def _transaction(self):
+        """Write atomically without committing a borrowed caller transaction.
+
+        Initialization participates in the same boundary. If its first schema
+        creation is rolled back by the caller, reconstruct the activation engine.
+        Commit/RELEASE failures use the same rollback path as statement failures.
+        """
+        con = self._con()
+        nested = con.in_transaction
+        savepoint = "activation_%s" % uuid.uuid4().hex
+        try:
+            if nested:
+                con.execute("SAVEPOINT %s" % savepoint)
+            else:
+                con.execute("BEGIN IMMEDIATE")
+            try:
+                yield con
+                if nested:
+                    con.execute("RELEASE SAVEPOINT %s" % savepoint)
+                else:
+                    con.commit()
+            except BaseException as error:
+                try:
+                    if con.in_transaction:
+                        if nested:
+                            con.execute("ROLLBACK TO SAVEPOINT %s" % savepoint)
+                            con.execute("RELEASE SAVEPOINT %s" % savepoint)
+                        else:
+                            con.rollback()
+                except sqlite3.Error as rollback_error:
+                    error.add_note("Activation rollback failed: %s" % rollback_error)
+                raise
+        finally:
+            con.close()
 
     def _warn_if_content_tables_absent(self):
         """#714：构造期给出一条明确 warning——`nodes` 表缺席时激活面是**空工作态**。
@@ -511,18 +548,17 @@ class ActivationEngine:
         #314：`hops` 给每个 node_id 的**首次激活跳号**（种子/自条件 = 0）；缺省仍写 0
         （签名向后兼容——不传即旧行为）。
         """
-        con = self._con()
-        con.execute("DELETE FROM activation_nodes WHERE workset=?", (workset,))
-        ts = time.time()
-        src_map = sources or {}
-        hop_map = hops or {}
-        for nid, a in members:
-            con.execute(
-                "INSERT OR REPLACE INTO activation_nodes VALUES (?,?,?,?,?,?,?)",
-                ("act_%s_%d" % (uuid.uuid4().hex[:8], int(ts * 1000)),
-                 workset, nid, a, src_map.get(nid, "propagate"),
-                 hop_map.get(nid, 0), ts))
-        con.commit(); con.close()
+        with self._transaction() as con:
+            con.execute("DELETE FROM activation_nodes WHERE workset=?", (workset,))
+            ts = time.time()
+            src_map = sources or {}
+            hop_map = hops or {}
+            for nid, a in members:
+                con.execute(
+                    "INSERT OR REPLACE INTO activation_nodes VALUES (?,?,?,?,?,?,?)",
+                    ("act_%s_%d" % (uuid.uuid4().hex[:8], int(ts * 1000)),
+                     workset, nid, a, src_map.get(nid, "propagate"),
+                     hop_map.get(nid, 0), ts))
 
     def _append_audit(self, audit: Dict):
         os.makedirs(os.path.dirname(self.audit_path) or ".", exist_ok=True)
@@ -581,17 +617,37 @@ class ActivationEngine:
                              "source": r[2], "hop": r[3], "ts": r[4]} for r in rows]}
 
     def import_workset(self, snapshot: Dict, workset: Optional[str] = None) -> Dict:
-        """恢复快照(激活状态重建——进程重启后工作态不失)。"""
+        """恢复快照(激活状态重建——进程重启后工作态不失)。
+
+        #771 ①（原子性）：旧实现**先 `DELETE` 目标 workset、再迭代 members**，全程无
+        事务保护、无 `except`/`rollback` ⇒ members 畸形（`None` / 非列表 / member 缺
+        `node_id` / `node_id=None` / activation 为 dict…）时异常逃逸，而**目标
+        workset 已被清空且无回滚**。借用连接形态（`store=` / `conn=`，即常驻部署
+        形态）下尤其重：`DELETE` 挂在调用方连接上，任一次后续提交即把它**固化**。
+        修法（最小 · 只补原子性，**不改错误语义**）：
+          ① 先把 `members` 物化成 `list` —— 非可迭代形态（`None` 等）在**任何写之前**
+             即抛（异常类型与旧实现逐字相同，仍是 `TypeError`）；
+          ② `DELETE` 与全部 `INSERT` 收进**同一事务**（已在外层事务中则用 SAVEPOINT，
+             不越权提交调用方事务），异常一律回滚后原样抛出 ⇒ 畸形输入下目标 workset
+             **逐行不变**（零变更）。
+        边界（如实标注）：①畸形 members 仍**抛异常**，不改判「静默返回错误结构」
+        （调用方契约原本就是抛）；②「目标 workset 不存在」不报错（旧语义：`DELETE`
+        影响 0 行、照常写入），本件不动；③本件只加「可迭代性」这一层前置校验，
+        member 内部的 schema 仍由既有异常面承担（`KeyError` / `ProgrammingError` /
+        `IntegrityError`），错误类型不重定义。判据来源：公开 issue #771 ①
+        （「校验通过后再在同一事务里 DELETE + INSERT；异常路径回滚」）。
+        """
         ws = workset or snapshot["workset"]
-        con = self._con()
-        con.execute("DELETE FROM activation_nodes WHERE workset=?", (ws,))
-        ts = time.time()
-        for m in snapshot["members"]:
-            con.execute("INSERT OR REPLACE INTO activation_nodes VALUES (?,?,?,?,?,?,?)",
-                        ("act_%s_%d" % (uuid.uuid4().hex[:8], int(ts * 1000)),
-                         ws, m["node_id"], m["activation"], "restored", m.get("hop", 0), ts))
-        con.commit(); con.close()
-        return {"status": "ok", "workset": ws, "restored": len(snapshot["members"])}
+        # ① 写前物化（非可迭代 ⇒ 在任何 DELETE 之前抛出，目标零变更）。
+        members = list(snapshot["members"])
+        with self._transaction() as con:
+            ts = time.time()
+            con.execute("DELETE FROM activation_nodes WHERE workset=?", (ws,))
+            for m in members:
+                con.execute("INSERT OR REPLACE INTO activation_nodes VALUES (?,?,?,?,?,?,?)",
+                            ("act_%s_%d" % (uuid.uuid4().hex[:8], int(ts * 1000)),
+                             ws, m["node_id"], m["activation"], "restored", m.get("hop", 0), ts))
+        return {"status": "ok", "workset": ws, "restored": len(members)}
 
 
 if __name__ == "__main__":

@@ -14,7 +14,10 @@
     `docs/plans/治理与写入边界_修复设计_v0.1.md` §2「S-127-1 (a) 写前查旧行 layer」。
   · 边界 —— 同 id 同层的原位覆盖**仍放行**（本件只堵换层/降级面）；
     数值接口 `update_node_confidence`/`update_node_importance` 的层与角色校验
-    **不在本件范围**（待裁清单 D-33：本批不动，另笔）——本守卫**不**断言其行为。
+    原**不在本件范围**（待裁清单 D-33：本批不动，另笔）——**该「另笔」已由
+    `#769` / `#780` 一笔落地**（判据收归 `LayeredStore.layer_writable_by_role`
+    单点 ＋ 两个数值接口的写前判据；常驻守卫见
+    `tests/test_issue769_780_governance_write_role_guard.py`）。本件断言组**一字未动**。
 
 断言组（抽掉任一修复即红）：
   Q1 SUB 用同 id 覆盖共享层行 ⇒ `PermissionError`，且库里旧行 layer/content **不变**。

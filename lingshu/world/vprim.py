@@ -165,6 +165,23 @@ def count_vprims(vprims: List[VPrim], category: str = None) -> Dict:
     }
 
 
+#: 锚点坐标组（**有符号**）。写出侧 `anchor_text()`/`describe()` 用 `int(v)`，
+#: 负坐标是常见产物（检测框溢出画面、退化框 `x2<x1`）——理由见 `parse_anchor`
+#: docstring 的 #730/#753 段。本常量是坐标组的**唯一真源**：读回侧
+#: （`parse_anchor`）与扫描侧（`ANCHOR_SCAN_PATTERN`）都从它拼出，两侧**不可能**
+#: 再各自收窄格式。#718 的第二份副本（core 内联 `\d+`）正是「单点真源被破坏」
+#: 的形态：扫描侧先按无符号过滤，负坐标锚点连匹配都过不了（`regex_hits=0`），
+#: 根本没机会进 `parse_anchor`，空间关系表整体静默失效。
+ANCHOR_COORD_PATTERN = r"-?\d+"
+
+#: 锚点**扫描形态**：从任意文本里**定位**锚点 token `类别@(x1,y1,x2,y2)`。
+#: 与 `parse_anchor` 共用 `ANCHOR_COORD_PATTERN`（单一真源）。core 的
+#: `_vprim_context_for_claim` 在其惰性导入处取用本常量——**勿**再内联字面量。
+ANCHOR_SCAN_PATTERN = (
+    r"[\w\-]+@\(" + ",".join([ANCHOR_COORD_PATTERN] * 4) + r"\)"
+)
+
+
 def parse_anchor(text: str) -> Optional[VPrim]:
     """从视觉锚点文本解析 VPrim：`cat@(x1,y1,x2,y2)`（推理链引用用）。
 
@@ -192,11 +209,18 @@ def parse_anchor(text: str) -> Optional[VPrim]:
         （正则以 `@` 起首，只在该字面量处展开，整体线性），再线性回扫取类别。
     类别自身含空白时格式与 vprims_to_scene_text 的 `[视觉原语…] ` 前缀无法区分，
     不在支持范围（保持「紧邻 `@(` 的非空白串」这一口径）。
+      - 坐标组改为由模块级常量 `ANCHOR_COORD_PATTERN` 拼出，且扫描形态
+        `ANCHOR_SCAN_PATTERN` 与它**同源**（#718）：本函数在 #730 放宽负号后，
+        core 的 `_vprim_context_for_claim` 仍内联着**第二份坐标组副本**
+        （写死 `\\d+`）——扫描先于解析把负坐标锚点滤掉（`regex_hits=0`），
+        本函数的放宽在扫描入口被整体架空。单点真源被破坏，故两侧合流到
+        同一个常量，**不再**存在可各自收窄格式的第二份副本。
     """
     import re
 
     m = re.search(
-        r"@\((-?\d+),(-?\d+),(-?\d+),(-?\d+)\)"
+        r"@\((" + ANCHOR_COORD_PATTERN + r"),(" + ANCHOR_COORD_PATTERN
+        + r"),(" + ANCHOR_COORD_PATTERN + r"),(" + ANCHOR_COORD_PATTERN + r")\)"
         r"(?:\s+-?\d+x-?\d+\s+conf=(?P<conf>[0-9]*\.?[0-9]+))?", text)
     if not m:
         return None
