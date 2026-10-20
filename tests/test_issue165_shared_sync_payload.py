@@ -150,6 +150,162 @@ class SharedSyncPayloadTests(unittest.TestCase):
                          {self.anchor.id, self.struct.id})
         self.assertEqual(res["conflicts"], [])
 
+    # =====================================================================
+    # #165 裁定路 B · §4（来源标识 ＋ 落库审计）/ §5a（上行待晋升副本分组导出）
+    #
+    # 本组只追加，P1–P6 一字未动。判据来源：本端 2026-10-16 对 issue #165 的
+    # 裁定帖（<!-- RULING-165 -->）第 4 条（载荷带来源实例标识并落审计，使「这条是
+    # 谁推上来的」可查）与第 5 条上半（SUB 侧 pending_sync / external_anchor 待晋升
+    # 副本应**单列分组**导出）。
+    #
+    # 未落地（如实标注，与裁定帖有出入）：路 B 第 1/2/3 条（新增 id 走
+    # propose→verify→adjudicate、overwrite 无密钥即拒、载荷带内容摘要哈希且缺哈希
+    # 即拒）**全部暂缓** —— 与在-main 的既有守卫正面冲突，编排侧 2026-10-17 裁定
+    # 暂缓；故本组**不含**这三条的断言。
+    # =====================================================================
+
+    #: 审计行类型（与 `core._audit_shared_sync_apply` 的 action_type 同字面量）
+    AUDIT_TYPE = "shared_sync_applied"
+
+    def _audit_rows(self, engine):
+        """取某引擎的同步落库审计行 `[(summary, node_ids_json, outcome_json)]`。"""
+        c = engine.store.conn.cursor()
+        c.execute("SELECT summary, node_ids, outcome FROM action_logs"
+                  " WHERE action_type=? ORDER BY id", (self.AUDIT_TYPE,))
+        return c.fetchall()
+
+    # ---- A1 载荷带 source_instance 键且 == 导出实例 identity ----
+    def test_a1_payload_carries_source_instance_key(self):
+        """A1：顶层键**必须在场**，且取值 == 导出实例的 identity。"""
+        p = self.engine.prepare_shared_sync()
+        self.assertIn("source_instance", p,
+                      "载荷缺 source_instance 键（#165 路 B §4）")
+        self.assertEqual(p["source_instance"], self.engine.self_model.identity)
+        # 无值时必须写**显式 None**（键缺席是歧义源，None 才是可机器判读的
+        # 「我们知道这里没填」）——造一个 identity 为空的实例作正对照。
+        e3 = SpacetimeMemoryEngine(":memory:", identity=None)
+        self.addCleanup(e3.close)
+        p3 = e3.prepare_shared_sync()
+        self.assertIn("source_instance", p3, "identity 为空时键仍必须在场")
+        self.assertIsNone(p3["source_instance"])
+
+    # ---- A2 落库后 action_logs 有该行、含来源标识与条数 ----
+    def test_a2_apply_records_audit_row_with_source_and_count(self):
+        """A2：发生落库 ⇒ 落一条审计，含来源实例标识与落库条数。
+
+        现状读数（本线探针，改动前）：`action_logs` 中 `shared_sync*` 行数 **0**
+        ⇒ 本断言在缺陷形态下必红（回退即红，见留痕）。
+        """
+        import json as _json
+        p = self.engine.prepare_shared_sync()
+        e2 = SpacetimeMemoryEngine(":memory:", identity="guard-165b")
+        self.addCleanup(e2.close)
+        self.assertEqual(self._audit_rows(e2), [],
+                         "前置：接收侧库应零审计行")
+        res = e2.apply_shared_sync(p)
+        self.assertTrue(res["applied"], "前置：本用例需要真的发生落库")
+        rows = self._audit_rows(e2)
+        self.assertEqual(len(rows), 1, "落库未留痕（#165 路 B §4）")
+        summary, node_ids_json, outcome_json = rows[0]
+        self.assertIn(str(len(res["applied"])), summary)
+        for nid in res["applied"]:
+            self.assertIn(nid, node_ids_json)
+        outcome = _json.loads(outcome_json)
+        self.assertEqual(outcome.get("source_instance"),
+                         self.engine.self_model.identity,
+                         "审计未记来源实例标识")
+        self.assertEqual(outcome.get("applied_count"), len(res["applied"]))
+        self.assertIs(outcome.get("overwrite"), False)
+
+    # ---- A3 幂等重放（零落库）⇒ 不新增审计行 ----
+    def test_a3_idempotent_replay_adds_no_audit_row(self):
+        """A3：全 `identical`、零落库的重放**不**新增审计行（防噪声）。"""
+        p = self.engine.prepare_shared_sync()
+        e2 = SpacetimeMemoryEngine(":memory:", identity="guard-165d")
+        self.addCleanup(e2.close)
+        e2.apply_shared_sync(p)
+        before = len(self._audit_rows(e2))
+        self.assertEqual(before, 1, "前置：首次落库应恰一行")
+        res = e2.apply_shared_sync(p)
+        self.assertEqual(res["applied"], [])
+        self.assertEqual(set(res["identical"]),
+                         {self.anchor.id, self.struct.id})
+        self.assertEqual(len(self._audit_rows(e2)), before,
+                         "幂等重放（零落库）新增了审计行 ⇒ 噪声")
+
+    # ---- B1 PRIMARY 导出 ⇒ pending_promotions 键在场且为空 ----
+    def test_b1_primary_export_has_empty_pending_promotions(self):
+        """B1：PRIMARY 侧无待晋升副本 ⇒ 键**在场**、值为空表。"""
+        p = self.engine.prepare_shared_sync()
+        self.assertIn("pending_promotions", p,
+                      "载荷缺 pending_promotions 键（#165 路 B §5a）")
+        self.assertEqual(p["pending_promotions"], [])
+
+    def _sub_engine(self, identity):
+        """造一个 SUB 实例（构造本身不需密钥）。"""
+        from lingshu.core.core import Role
+        sub = SpacetimeMemoryEngine(":memory:", identity=identity,
+                                    role=Role.SUB)
+        self.addCleanup(sub.close)
+        return sub
+
+    def _designer_key_env(self, key="guard-165-key"):
+        """临时置入设计者密钥（`register_external_anchor` 的 D-007 闸需要它），
+        经 `addCleanup` **复原**环境（本守卫自管，不污染同进程的其它件）。"""
+        import os as _os
+        saved = _os.environ.get("AEIS_DESIGNER_KEY")
+        _os.environ["AEIS_DESIGNER_KEY"] = key
+
+        def _restore():
+            if saved is None:
+                _os.environ.pop("AEIS_DESIGNER_KEY", None)
+            else:
+                _os.environ["AEIS_DESIGNER_KEY"] = saved
+
+        self.addCleanup(_restore)
+        return key
+
+    # ---- B2 SUB 导出 ⇒ 含待晋升副本，且 sync_payload 仍只含共享层 ----
+    def test_b2_sub_pending_promotions_grouped_without_polluting_payload(self):
+        """B2：SUB 的 `pending_sync` / `external_anchor` 副本单列分组导出，
+        **不**混进 `sync_payload`（后者语义一字不动：仍只含共享层）。
+
+        现状读数（本线探针，改动前）：`SUB sync_payload 条数: 0`、
+        `pending_sync=1 external_anchor=1`、**无** `pending_promotions` 键。
+        """
+        sub = self._sub_engine("guard-165-sub")
+        key = self._designer_key_env()
+        node = sub.register_external_anchor(
+            "external_calibration", "外部校准：输出须附来源", designer_key=key)
+        p = sub.prepare_shared_sync()
+        # ① sync_payload 仍只含共享层（SUB 侧共享层为空 ⇒ 空表）
+        self.assertEqual(p["sync_payload"], [], "SUB 侧无共享层条目")
+        self.assertEqual(set(p["layers"]), {"anchor", "structure"})
+        # ② 待晋升副本单列分组导出：该条同时带两标签 ⇒ 两组都出现
+        groups = p["pending_promotions"]
+        self.assertEqual({g["pending_group"] for g in groups},
+                         {"pending_sync", "external_anchor"},
+                         "待晋升副本未按触发标签单列分组")
+        self.assertEqual({g["id"] for g in groups}, {node.id})
+        # ③ 来源标识随载荷带出（SUB 实例自述）
+        self.assertEqual(p["source_instance"], "guard-165-sub")
+
+    # ---- B3 无标签 / 仅前缀相似的条目 ⇒ 不进 pending_promotions ----
+    def test_b3_untagged_or_prefix_similar_tags_not_exported(self):
+        """B3（判别力）：无标签条目、以及仅**前缀相同**的标签
+        （`pending_sync_extra`）都不得进 `pending_promotions`；正对照证明
+        上一条不是「恒空」的假绿。"""
+        sub = self._sub_engine("guard-165-b3")
+        sub.add_perception("普通本地知识一条", tags=["k"])
+        sub.add_perception("前缀相似标签一条", tags=["pending_sync_extra"])
+        self.assertEqual(sub.prepare_shared_sync()["pending_promotions"], [],
+                         "无标签 / 仅前缀相似的条目不得进 pending_promotions")
+        # 正对照：真带 `pending_sync` 的副本必须进（否则本组是恒真的假绿）
+        sub._write_structure_record("一条结构事件", "history")
+        got = sub.prepare_shared_sync()["pending_promotions"]
+        self.assertEqual([g["pending_group"] for g in got], ["pending_sync"])
+        self.assertEqual(len(got), 1)
+
 
 if __name__ == "__main__":
     unittest.main(verbosity=2)

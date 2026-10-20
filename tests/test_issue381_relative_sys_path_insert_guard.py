@@ -196,32 +196,39 @@ def test_c_every_sys_path_insert_is_isabs_guarded():
 
 
 def test_d_absolute_entry_still_inserted(tmp_path):
-    """D（正对照）：`_kb` 为**绝对**路径时仍按原样插入——修法未把能力一并删掉。
+    """D（正对照）：插入面改由 `LINGSHU_COMPONENT_ROOT` 驱动后，**绝对**根仍按原样插入
+    ——修法未把能力一并删掉；同一声明里的**相对**条目仍不插（#381 判据未松）。
 
-    把 `os.path.isabs` 临时钉为 True（模拟本机绝对形态），调两个方法后该条目
-    必须出现在 `sys.path` 里。若有人把整段插入删掉（而非加守卫），本断言判红。
+    `#10`（core.py 两处脱敏死占位符）落修后，原 `_kb` 字面量已删除，本插入面改由
+    `LINGSHU_COMPONENT_ROOT`（`component_resolver.configured_roots`）环境变量驱动
+    ⇒ 本正对照随之**改锚到该环境变量**（判据一字不变：绝对条目必须仍进 `sys.path`）。
+    若有人把整段插入删掉（而非改造为 env 驱动），本断言判红。
     """
+    abs_root = os.path.join(str(tmp_path), "kbroot")
+    os.makedirs(abs_root, exist_ok=True)
+    rel_entry = "rel_kb_381"
     code = (
         "import json, os, sys\n"
         "from lingshu.core.core import SpacetimeMemoryEngine\n"
-        "KB = r'<local-path> Files\\2_ai\\knowledge-base'\n"
+        "ABS = %r\n"
+        "REL = %r\n"
         "e = SpacetimeMemoryEngine(':memory:')\n"
-        "real = os.path.isabs\n"
-        "os.path.isabs = lambda p: True if p == KB else real(p)\n"
-        "try:\n"
-        "    e.pattern_separation_scan(limit=1)\n"
-        "finally:\n"
-        "    os.path.isabs = real\n"
-        "print('##J##' + json.dumps({'in_path': KB in sys.path}))\n"
-    )
+        "e.pattern_separation_scan(limit=1)\n"
+        "print('##J##' + json.dumps({'abs_in_path': ABS in sys.path,\n"
+        "                            'rel_in_path': REL in sys.path}))\n"
+    ) % (abs_root, rel_entry)
     env = dict(os.environ)
     env["PYTHONUTF8"] = "1"
     env["PYTHONPATH"] = REPO + os.pathsep + env.get("PYTHONPATH", "")
+    env["LINGSHU_COMPONENT_ROOT"] = abs_root + os.pathsep + rel_entry
     r = subprocess.run([sys.executable, "-X", "utf8", "-c", code],
                        cwd=str(tmp_path), capture_output=True, text=True,
                        encoding="utf-8", errors="replace", env=env)
     assert r.returncode == 0, (r.stdout[-800:], r.stderr[-1200:])
-    assert '"in_path": true' in (r.stdout or "").lower(), (
-        "绝对 `_kb` 未被插入 ⇒ 修法把能力一并删掉了（#381 正对照）：%s"
+    assert '"abs_in_path": true' in (r.stdout or "").lower(), (
+        "绝对根（`LINGSHU_COMPONENT_ROOT`）未被插入 ⇒ 修法把能力一并删掉了"
+        "（#381 正对照）：%s" % (r.stdout[-400:],))
+    assert '"rel_in_path": false' in (r.stdout or "").lower(), (
+        "同一声明里的**相对**条目被插进 `sys.path` ⇒ #381 判据被放松：%s"
         % (r.stdout[-400:],))
 

@@ -16,6 +16,10 @@ spacetime_memory_core · 智能论 v3.2 协议实例核心引擎
 # issue #156 v2：**最早落点**——在本文件任何裸名 import（含下方 `import json`）
 # 之前消除 cwd/空串 sys.path 解析面。包导入时 `lingshu/__init__.py` 已执行同一
 # 护栏（幂等，本行再调用一次为防御纵深，并使「最早落点」在本文件可自证）。
+# ★机制澄清（#273 路 B）：这里是「**解析期拒绝**」而非「从 `sys.path` 删除条目」——
+#   cwd/空串条目**仍在 `sys.path` 里**（`scrub()` 已不改写宿主 `sys.path`），只是被
+#   `_pathguard` 装在 `sys.meta_path` 上的 finder 在解析时跳过 ⇒ 对**解析结果**而言
+#   等价于「该面被消除」，对**宿主状态**而言则零侵入。
 # 见 lingshu/_pathguard.py（含精确范围声明与逃生口 LINGSHU_ALLOW_CWD_IMPORTS）。
 from .. import _pathguard as _ling_pathguard  # noqa: F401  (import 即执行，勿删)
 
@@ -25,6 +29,7 @@ import time
 import math
 import uuid
 import os
+import sys
 import warnings
 import hmac as _hmac
 import threading
@@ -45,7 +50,8 @@ except ImportError:  # 直跑 fallback（裸名互导）
 
 # 组件发现面收口（issue #156）：白名单组件的裸名导入不再经 cwd/空串 sys.path 条目解析。
 # v2 精确范围：① 本包 import 期由 _pathguard 消除 cwd/空串 sys.path 解析（覆盖**一切**
-# 经 sys.path 的裸名导入，含标准库——上一版只封白名单组件名，json.py 等仍被劫持）；
+# 经 sys.path 的裸名导入，含标准库——上一版只封白名单组件名，json.py 等仍被劫持）
+# ——「消除」取**解析期拒绝**义（#273 路 B）：条目不被删除，宿主 `sys.path` 零改写；
 # ② 白名单组件另由本守卫收口（含排除脚本目录）；③ 仍不覆盖：进程已被预置投毒
 # （sys.modules 预置 / 进程内 sys.path.insert）、逃生口 LINGSHU_ALLOW_CWD_IMPORTS 被
 # 显式打开的情形。
@@ -53,6 +59,7 @@ from . import contradiction as _contradiction
 
 from .component_resolver import (
     COMPONENT_NAMES as _COMPONENT_NAMES,
+    configured_roots as _configured_component_roots,
     discovery_report as _component_discovery_report,
     install as _install_component_resolver,
 )
@@ -79,7 +86,10 @@ def verify_designer(designer_key) -> bool:
       os.environ ⇒「模型/自动化永远无法读取」对同进程不成立。
     本批（#156 v2）的精确范围＝**消除 cwd/空串 `sys.path` 解析**——覆盖一切经
     `sys.path` 的裸名导入（含标准库），并另由组件守卫收口白名单 15 名（含排除
-    脚本目录）。仍**不覆盖**：进程已被预置投毒（`sys.modules` 预置 / 进程内
+    脚本目录）。★机制（#273 路 B 起）＝**解析期拒绝**，不是删除条目：cwd/空串
+    条目**仍在 `sys.path` 里**（`scrub()` 不再改写宿主 `sys.path`），由 `_pathguard`
+    装在 `sys.meta_path` 的 finder 在解析时跳过并抛 `ModuleNotFoundError`。
+    仍**不覆盖**：进程已被预置投毒（`sys.modules` 预置 / 进程内
     `sys.path.insert` / 别名冒充）、逃生口 `LINGSHU_ALLOW_CWD_IMPORTS` 被显式
     打开的情形。同进程可信性属**设计级**事项，待 D-007 后续裁定。"""
     expected = os.environ.get("AEIS_DESIGNER_KEY")
@@ -222,6 +232,28 @@ def _dumps_json(value, ensure_ascii: bool = True, where: str = "JSON 列") -> st
     """`nodes` 表 JSON 列的统一序列化真源（#494）：先过代理码点闸，再 json.dumps。"""
     _reject_surrogates(value, where)
     return json.dumps(value, ensure_ascii=ensure_ascii)
+
+
+def _json_tags(value) -> list:
+    """把 `nodes.tags` 的**库内/备份取值**归一为 list（#778 F1/F2 判据的读取助手）。
+
+    为什么需要：`tags` 列是 TEXT（JSON 文本）——库内读回是 `'["a","b"]'`、JSON `null`
+    读回是 `None`（#718 实测）、备份被篡改时也可能是真 list。保护标记保真判据要
+    「旧行 tags 是否含 `no_forget`」，故须先把三种形态统一成 list。
+    容错口径：非 list / 非法 JSON / None ⇒ `[]`（与 #718「`tags=None` 视为无该标记」
+    同向——**不**抛、不猜）；合法 JSON 但非 list（如字符串）亦归 `[]`。
+    边界（如实标注）：本助手**只读**，不写库；改写只在确需并入保护标记时经
+    `_dumps_tags`（tags 列唯一序列化真源）进行。
+    """
+    if isinstance(value, list):
+        return value
+    if not isinstance(value, str):
+        return []
+    try:
+        parsed = json.loads(value)
+    except (TypeError, ValueError):
+        return []
+    return parsed if isinstance(parsed, list) else []
 
 
 # =============================================================================
@@ -571,6 +603,31 @@ class STNode:
     semantic_coordinates: Dict = field(default_factory=dict)   # v1.7：符号/语义投影（D-003）
     state_attributes: Dict = field(default_factory=dict)       # v1.7：形容词（图像时间变化）
     entity_id: Optional[str] = None                            # v1.7：名词（实体挂接）
+    # ── `entity_id` 语义声明（公开 issue #766 定性收口 · 维护者端裁定 2026-10-17）──
+    # **本字段是「名词挂接 / 标注」，不是数据隔离边界。**
+    #
+    # 面内定位：与 `spatial_coordinates`（视觉坐标）、`state_attributes`（形容词）
+    # 并列的 v1.7「名词」面——记录「这条记忆挂在哪个实体名下」，供展示与挂接。
+    #
+    # 检索面**零消费**（实证，基线 origin/main 逐符号核过）：
+    #   · `SpacetimeMemoryEngine.recall` 的候选集与终排无 `entity_id` 条件；
+    #   · `LayeredStore.search_content`（LIKE 路径）的 SQL WHERE 只由 `layer IN (…)`
+    #     与 LIKE 片段构成；
+    #   · `FTSIndex.candidates`（FTS 路径）同样无该列；
+    #   · `lingshu/core/retrieval.py` 内本字段引用数为 **0**。
+    # ⇒ 异实体（含**另起进程**的实例）可经 `recall` / `search_content` 原样取回
+    #   ——这是**设计现状**，不是缺陷（判据：本仓不把库级 / 实例级字段当安全边界）。
+    #
+    # 读侧唯一的消费点都在**展示面**（均非过滤 / 鉴权）：`render_semantic_cube_3d`
+    # 的轨迹过滤、`query_by_semantics` 的实体名加分。
+    #
+    # 同款口径先例：本文件 `Role` docstring 的信任边界声明（角色是实例属性、
+    # 不构成安全边界）＋ 仓内既有明文「本层的角色 / 会话过滤是消费作用域，
+    # **不是身份认证边界**」。
+    #
+    # ⇒ 若日后要把它**升格**为隔离边界，属**设计取向变更**（不是「补一个漏掉的闸」）：
+    #   还缺一格前置——**调用方实体从哪里来**（引擎构造器只有 `identity` / `role`，
+    #   `nodes` 表无属主 / 实例列）。取向与落点见 `docs/architecture.md` §六 6.4。
 
     def to_row(self) -> tuple:
         """节点序列化为 SQLite 行元组（列序=nodes 表 schema）。
@@ -811,6 +868,17 @@ class SelfModel:
     def record_value_change(self, value: str, trigger: str):
         """价值观版本化：2.1.2 价值观修正事件可追溯。
 
+        .. deprecated:: lingshu #212（路 B）
+           本方法的语义是**全量替换（重置）**：`values = [value]`，整套价值观被
+           压成一条。**旧名与旧语义逐字保留**——仓外唯一调用方（自我认知引擎）
+           按两个位置参数调用，改签名或改缺省语义会**静默改变仓外行为**，故本名
+           不删、行为不动（向后兼容是硬约束 · #212 裁定理由 1）。新调用方请按
+           意图改用三个**条目级**显式入口（同 `_persist_hook` 出口）：
+             · `refine_value(old, new, trigger)` —— 只改指定条目（其余逐条仍在）；
+             · `add_value(value, trigger)`       —— 追加一条（列表变长，不抹既有）；
+             · `retire_value(value, trigger)`    —— 退役一条（其余仍在）。
+           保留原因：仓外调用方不可见、不可同步改；删除或改语义即断仓外契约。
+
         lingshu #212（无界增长）：旧实现每次调用为**每个** value 追加一条
         superseded、再追加一条新值 ⇒ 反复调用（含重复同一 value）令
         `value_evolution` 无上限增长（且重复同一 value 产生语义等价的冗余条目）。
@@ -837,6 +905,104 @@ class SelfModel:
         if len(self.value_evolution) > self.VALUE_EVOLUTION_MAX:
             self.value_evolution = self.value_evolution[-self.VALUE_EVOLUTION_MAX:]
         self._persist()  # #33：values 变更落库（旧实现只改内存，重启回默认）
+
+    # ---- 价值观条目级显式入口（lingshu #212 · 路 B）-----------------------------
+    #
+    # 记法（`trigger` 取值扩展 · **不新增列、不改表结构**）：旧方法的取值
+    # `"superseded"` 逐字保留；三个新入口用「前缀:目标条目|调用方原因」形态：
+    #   refine:<old>|<trigger>   条目 old 被 new 替换（记 old 与 new 两条）；
+    #   add:<value>|<trigger>    条目 value 新增（记 value 一条）；
+    #   retire:<value>|<trigger> 条目 value 退役（记 value 一条）。
+    # `trigger` 为**必填**（签名逐字对齐裁定原文）；空串/None 时省略 `|` 段，
+    # 故前缀与目标条目始终可解析。
+    #
+    # 三者的变更出口与旧方法**同一收口**：`_persist()`（即 `_persist_hook`，
+    # 引擎注入 `_save_self_model`）＋ `VALUE_EVOLUTION_MAX` 同款钳制；裸用场景
+    # （钩子为 None）与旧方法同款处理——空操作、不抛错。
+
+    def _append_value_evolution(self, entries: List[Dict]):
+        """条目级变更的统一出口：追加 → 钳制到 `VALUE_EVOLUTION_MAX` → 落库。
+
+        与 `record_value_change` 的钳制/落库手法逐字同款（对齐 `trust_history` /
+        `history` 的既有口径）；钳制保留**最近**（tail），与 I3 的既有语义一致。
+        """
+        self.value_evolution.extend(entries)
+        if len(self.value_evolution) > self.VALUE_EVOLUTION_MAX:
+            self.value_evolution = self.value_evolution[-self.VALUE_EVOLUTION_MAX:]
+        self._persist()
+
+    @staticmethod
+    def _evolution_trigger(prefix: str, target: str, trigger) -> str:
+        """拼 `value_evolution` 的 `trigger` 取值（前缀扩展记法 · 不新增列）。"""
+        base = "%s%s" % (prefix, target)
+        return base if not trigger else "%s|%s" % (base, trigger)
+
+    def refine_value(self, old: str, new: str, trigger: str) -> bool:
+        """**细化一条**价值观：只改指定条目，其余条目逐条仍在（lingshu #212 路 B）。
+
+        与旧名 `record_value_change`（全量替换）的关键差异：本方法**不动**其它
+        条目——`values` 中与 `old` 相等的条目原位替换为 `new`，列表长度不变。
+
+        幂等短路（对齐旧方法 `#212` 的既有手法，避免语义等价的冗余条目）：
+          · `old == new`，或 `old` 不在 `values` 中 ⇒ 无变化，返回 False，不记演化。
+
+        留痕：经 `_append_value_evolution` 记 **两条**——`old`（from=True→to=False）
+        与 `new`（from=False→to=True），二者 `trigger` 同为
+        `"refine:<old>|<trigger>"`（可据此成对分组）。
+
+        `trigger` 为调用方给出的原因（必填 · 签名逐字对齐裁定原文）。
+        返回：是否发生了变更（`bool`）。
+        """
+        if old == new or old not in self.values:
+            return False
+        self.values[self.values.index(old)] = new
+        trg = self._evolution_trigger("refine:", old, trigger)
+        now = time.time()
+        self._append_value_evolution([
+            {"value": old, "from": True, "to": False, "trigger": trg, "at": now},
+            {"value": new, "from": False, "to": True, "trigger": trg, "at": now},
+        ])
+        return True
+
+    def add_value(self, value: str, trigger: str) -> bool:
+        """**新增一条**价值观：列表变长，不抹掉既有条目（lingshu #212 路 B）。
+
+        旧实现只能 `values = [value]`（赋值＝重置），连「新增一条而不抹掉其余」
+        都表达不了；本方法做 append（`len(values)` +1）。
+
+        幂等短路：`value` 已在 `values` 中 ⇒ 无变化，返回 False，不记演化
+        （与旧方法 `#212` 的去重手法同款，防重复条目撑大 `values`）。
+
+        留痕：记 **一条** `value`（from=False→to=True），`trigger` 为
+        `"add:<value>|<trigger>"`。
+        返回：是否发生了变更（`bool`）。
+        """
+        if value in self.values:
+            return False
+        self.values.append(value)
+        self._append_value_evolution([{
+            "value": value, "from": False, "to": True,
+            "trigger": self._evolution_trigger("add:", value, trigger),
+            "at": time.time()}])
+        return True
+
+    def retire_value(self, value: str, trigger: str) -> bool:
+        """**退役一条**价值观：移除目标条目，其余条目逐条仍在（lingshu #212 路 B）。
+
+        幂等短路：`value` 不在 `values` 中 ⇒ 无变化，返回 False，不记演化。
+
+        留痕：记 **一条** `value`（from=True→to=False），`trigger` 为
+        `"retire:<value>|<trigger>"`。
+        返回：是否发生了变更（`bool`）。
+        """
+        if value not in self.values:
+            return False
+        self.values = [v for v in self.values if v != value]
+        self._append_value_evolution([{
+            "value": value, "from": True, "to": False,
+            "trigger": self._evolution_trigger("retire:", value, trigger),
+            "at": time.time()}])
+        return True
 
     def update_trust_state(self, t_total: float, round_no: int,
                            p_trust: float = None, p_gap: float = None):
@@ -943,7 +1109,39 @@ class SelfModel:
 # =============================================================================
 
 class Role(Enum):
-    """实例角色权限 · VAL-REVIEW-DEVIATION-20260813-001 P3-006"""
+    """实例角色权限 · VAL-REVIEW-DEVIATION-20260813-001 P3-006
+
+    ★信任边界声明（公开 issue #779 定性收口；维护者端裁定，2026-10-16）
+
+    **角色是实例属性，不是库级凭据。** `role` 的唯一真源是本进程构造参数
+    （默认 `Role.PRIMARY`；赋值仅 `SpacetimeMemoryEngine` / `LayeredStore` 构造处
+    的 `self.role = role`），既不落库、也不与库级凭据绑定——`export_all` 导出的
+    节点键集与 `engine_meta` 键集均**无** `role`。因此任何能在**同一进程内**构造
+    第二个存储/引擎实例、并指向同一 `db_path` 的代码，都可以用 `role=Role.PRIMARY`
+    取得全部属主权限。
+
+    **本闸的作用面＝角色误用与协作分工，不构成安全边界。**
+    - 已被拦住的面：非 PRIMARY 实例写共享层（锚点层/结构层，`SHARED_LAYERS`）、
+      共享层端点的边写入（#234 / #674）、`import_all` 导入含共享层行（#586）、
+      终裁固化提案（#586）——判据单一真源见 `add_node` / `_assert_edge_role`。
+    - 未被拦住的面：**同一进程内主动自建属主实例**（`role=Role.PRIMARY`、同一
+      `db_path`）、同进程直改 `store.role`，以及**直接打开 `db_path` 写库**
+      （例如 `sqlite3.connect(db_path)` 改 `nodes` 行）——最后一条**不需要**伪造
+      角色即可越过本闸与密钥闸 ⇒ 任何「库级 / 实例级」的收窄在**同进程**威胁下
+      都不成立。即：本闸拦的是「同一部署内的角色误用」，不提供对同进程代码的隔离。
+
+    **同进程可信性属设计级事项**，归属与密钥面同款：见 `verify_designer` docstring
+    的「同进程可信性属**设计级**事项，待 D-007 后续裁定」（公开 issue #156），以及
+    `docs/plans/待裁清单_v0.1.md` 附-C ⑦ 的 `#156` 深修路线。★口径如实标注：该 ⑦
+    原文逐字为「架构面让不可信代码**不与密钥**同进程」——**只写密钥面、未写角色面**；
+    本条与它**同族 / 同构**（实证依据是本类的实测读数：同进程直连 `db_path` 即可越过
+    角色与密钥两道闸），**不是**「⑦ 已覆盖角色面」。
+
+    仓内既有的同向表述（本声明只是把它**写明**，不新增取向）：`docs/plans/场景推演
+    整合_v0.1.md` 明写「本层的角色/会话过滤是消费作用域，**不是身份认证边界**」；
+    `add_node` docstring 亦只自称「多角色**写权限边界**」。故本条**不做单点收口**，
+    收窄取向（共享层写面统一收口）归设计者，落点见 `docs/architecture.md` §六 6.3。
+    """
     PRIMARY = "primary"   # 父节点/主实例：可写共享层（锚点层、结构层）
     SUB = "sub"           # 子节点/辅助实例：仅本地层（知识层、情境层、自我层）
 
@@ -1126,6 +1324,29 @@ class LayeredStore:
     IMMUTABLE_LAYERS = {MemoryLayer.ANCHOR, MemoryLayer.STRUCTURE,
                         MemoryLayer.SELF}  # v1.16 扮演论：SELF 层=自我锚点（扮演依据）不可遗忘
 
+    #: #768：`engine_meta` 治理键集合——**单一真源**（键集此前只存在于
+    #: `SpacetimeMemoryEngine.ENGINE_META_GUARDED_KEYS`，而写入口 `set_meta` /
+    #: `merge_meta` 在本类上 ⇒ 闸与集合分处两层，各写一份必漂移）。
+    #: 引擎侧 `SpacetimeMemoryEngine.ENGINE_META_GUARDED_KEYS` 改为**引用本属性**
+    #: （别名，不是复制），`tests/test_issue768_engine_meta_governance_guard.py`
+    #: 以恒等断言钉死两者同一（`is` 与 `==` 双查）。
+    #:
+    #: 键的判据来源：`#479`（`self_model_snapshot`，身份/信任持久面）＋
+    #: `#671`（其余四键：启动期被回读的治理载荷——`verifier_config` /
+    #: `attention_weights` / `context_max` / `structure_writer_schema`）。
+    #: `SELF_MODEL_META_KEY` 是引擎侧的同名字面量（`"self_model_snapshot"`），
+    #: 本集合按字面量列出以免本类依赖后定义的类型；两者一致性由上述守卫钉死。
+    #:
+    #: 与 `ENGINE_META_NONGOVERNANCE_KEYS`（`_schema_version` / `_last_decay_at`）
+    #: **互斥**：非治理键无治理载荷，写面照旧放行（红线：不一刀切）。
+    ENGINE_META_GUARDED_KEYS = frozenset({
+        "self_model_snapshot",       # 身份/信任持久快照（#479）
+        "verifier_config",           # 验证/去重配置（#671）
+        "attention_weights",         # 注意力偏好权重（#671）
+        "context_max",               # 情境层 FIFO 上限（#671）
+        "structure_writer_schema",   # 结构写入器开关（#671）
+    })
+
     #: 盲区（`blindspots.status`）合法状态白名单（#222）。
     #: 判据来源：仓内 `add_blindspot`（落 `"open"`）/`resolve_blindspot`（落 `"resolved"`）
     #: ＋ 公开 issue #222「建议修复 2：对 status 做白名单（`open`/`resolved`/…）」。
@@ -1139,17 +1360,22 @@ class LayeredStore:
     #: 自动裁剪会与「审计只追加、无更新/删除路径」的既有声明契约冲突，保留窗口
     #: 的取值属设计者裁面（见 `prune_action_logs` docstring 与交付报告）。
     ACTION_LOGS_KEEP_ROWS = 10000
-    SCHEMA_VERSION = 2  # 建表块每新增表/列时 +1（配合 _init_tables 启动只读化守卫；
+    SCHEMA_VERSION = 3  # 建表块每新增表/列时 +1（配合 _init_tables 启动只读化守卫；
                         # 守卫已兼比结构 _SCHEMA_TABLES/_SCHEMA_COLUMNS，
                         # 版本号不再单独作「跳过建表块」的依据）
                         # v2：promotion_proposals 加 content_hash（#140）
+                        # v3：新增 designer_todos 待办表（#130 路 B）
+                        # ★为什么必须 +1（#130 路 B 裁定帖原文）：只把表加进
+                        # `_SCHEMA_TABLES` 而不升版本，**已有库**的启动只读化守卫
+                        # 会因「版本匹配 + 结构齐全」跳过整个建表块 ⇒ 新表永不被
+                        # 建出，登记待办时运行时报 `no such table: designer_todos`。
 
     # 只读化守卫的结构对照（_init_tables 的全部表 + 三处 ALTER 补出的列）：版本号
     # 与实际 DDL 无强制绑定，故守卫须兼比结构，否则「版本匹配但结构陈旧」的库永远补不上。
     _SCHEMA_TABLES = frozenset(('nodes', 'edges', 'blindspots', 'skills', 'promotion_proposals',
                                 'protections', 'rejected_paths', 'verifier_standards',
                                 'escalation_points', 'action_logs', 'engine_meta', 'gap_history',
-                                'flywheel_reuse'))
+                                'flywheel_reuse', 'designer_todos'))
     _SCHEMA_COLUMNS = {'nodes': ('semantic_coordinates', 'state_attributes', 'entity_id'),
                        'edges': ('source_evidence',), 'blindspots': ('predictability',),
                        'promotion_proposals': ('content_hash',)}
@@ -1242,6 +1468,13 @@ class LayeredStore:
         self.last_skipped_rows: List[str] = []
         #: #653 边侧逐行容错计数（每次装载面调用刷新；见 `_tolerant_edges`）。
         self.last_skipped_edges: List[str] = []
+        #: #775 访问计数旁路写的失败诊断读数——旧实现在 `increment_access_many`
+        #: 里 `except sqlite3.OperationalError: pass` ⇒ 写竞争下**静默少记**访问
+        #: 次数（该计数参与提权/降权、遗忘信号与检索排序次键），调用方无从知道。
+        #: 现：失败次数与末次错误原文落在实例上（可读、可断言），并随每次失败
+        #: 经 `warnings.warn` 上报——不再静默，但仍不阻断检索主流程。
+        self.access_count_write_failures: int = 0
+        self.last_access_count_error: Optional[str] = None
         self._structure_writer_active = bool(self.get_meta("structure_writer_schema"))
         if self._structure_writer_active:
             self.conn.execute("PRAGMA foreign_keys=ON")
@@ -1311,6 +1544,47 @@ class LayeredStore:
         self._local.slot = slot
         self._conns.add(slot)
         return slot
+
+    #: #775：本线程 `_tx` 嵌套深度的线程本地存储键（与线程级连接同域）。
+    @property
+    def _tx_depth(self) -> int:
+        """**本线程**的 `_tx` 嵌套深度（#775：从实例级改为线程本地）。
+
+        为什么必须线程本地：连接是**线程级**（`conn` property / `_connect`），
+        而旧实现把深度记在**实例**上。线程 A 把实例深度抬到 2 并持真写锁后，
+        线程 B 读到的是**别人的**深度 ⇒ `_structure_event_transaction` 判
+        `nested=True` 只发 `SAVEPOINT`、**不发 `BEGIN IMMEDIATE`** ⇒ 该结构事件
+        单元全程不持写锁，#36/#517 的「单元期间持写锁以保护快照」保证在跨线程
+        下失效（`SAVEPOINT` 也不开新事务，B 的写落在 autocommit 上）。
+
+        形态：`property` 转发到 `self._local`（`threading.local()`），故
+        ①对外仍是同名属性——`getattr(store, "_tx_depth", 0)` 的既有读者
+        （`_commit_locked` / `delete_node` / `_structure_event_transaction`
+        与仓内测试的桩）读到的是**本线程**的深度，单线程语义逐位不变；
+        ②`_local` 尚未建立时兜底返回 0（`__init__` 之前/极端早访问）。
+        """
+        _local = getattr(self, "_local", None)
+        return getattr(_local, "tx_depth", 0) if _local is not None else 0
+
+    @_tx_depth.setter
+    def _tx_depth(self, value: int):
+        self._local.tx_depth = value
+
+    @property
+    def _tx_owns_txn(self) -> bool:
+        """**本线程**最外层 `_tx` 帧是否自己开了真事务（#775 配套线程本地化）。
+
+        与 `_tx_depth` 同源：它只在「本帧 `_tx` 是最外层（depth==1）」时被赋值，
+        并被 `_commit_locked` 读来判「提交权是否在本层」（#317）。跨线程读到别人
+        的归属位会让本线程的最外层帧误判「自己只是别人的 SAVEPOINT」而放弃提交
+        ⇒ 同样必须随深度一起线程本地化。默认 True（与旧 `getattr(..., True)` 同）。
+        """
+        _local = getattr(self, "_local", None)
+        return getattr(_local, "tx_owns_txn", True) if _local is not None else True
+
+    @_tx_owns_txn.setter
+    def _tx_owns_txn(self, value: bool):
+        self._local.tx_owns_txn = value
 
     @property
     def conn(self) -> sqlite3.Connection:
@@ -1540,6 +1814,19 @@ class LayeredStore:
             c.execute("ALTER TABLE promotion_proposals ADD COLUMN content_hash TEXT DEFAULT ''")
         except Exception:
             pass
+        # #778-F4（加固不对称）：本表**不声明** `FOREIGN KEY(node_id) REFERENCES
+        # nodes(id)`——对照边表（`edges` 有两条 `REFERENCES nodes(id)` ＋ #93 孤儿
+        # 边预筛），`protections` 既无外键也无孤儿闸，故 `PRAGMA foreign_key_check`
+        # **结构上覆盖不到它**：含孤儿保护行（`node_id` 指向不存在节点）的备份可
+        # 无报错落库、`integrity_ok` 仍为 True，且该行随 `export_all` 继续传播。
+        # 为何**不**补外键（如实标注取舍）：本仓每个连接都开 `PRAGMA foreign_keys=ON`
+        # （#93），补上外键后**含孤儿保护行的备份**（正是本缺陷的现场）会在
+        # `import_all` 的通用写腿抛 `FOREIGN KEY constraint failed` 并**中断整次
+        # 导入**——与 #93 当年必须先补「孤儿边预筛」是同一个坑，而导入侧的对称预筛
+        # 落在 `import_all` 内（本笔范围外）。故取「**独立孤儿检查 ＋ 完整性面上报**」
+        # 路线，判据真源＝`LayeredStore.orphan_protection_rows`（单一实现，无第二份
+        # 判据），上报面＝`SpacetimeMemoryEngine.verify_integrity` / `export_all`。
+        # 旧库兼容：本表 DDL 逐字未改（无 schema 变更），旧库无需迁移。
         c.execute('''
             CREATE TABLE IF NOT EXISTS protections (
                 node_id TEXT PRIMARY KEY, reason TEXT, created_at REAL
@@ -1565,6 +1852,26 @@ class LayeredStore:
             CREATE TABLE IF NOT EXISTS escalation_points (
                 id TEXT PRIMARY KEY, code TEXT, trigger TEXT, condition TEXT, action TEXT,
                 severity TEXT DEFAULT 'medium', enabled INTEGER DEFAULT 1, created_at REAL
+            )
+        ''')
+        # #130（路 B · 裁定帖原文）：「升级点由谁在何时消费」此前**整条链路缺失**
+        # ——`check_escalation` 是一张已定义、已播种、无人查的表，`needs_designer`
+        # 是一个已置位、无人读的标志。本表即那一格的落点：`needs_designer=True`
+        # 时把「待设计者裁决」登记成一行**可列举**的待办（`status='open'`），
+        # 使「已升级」这件事从返回体里的一句文案变成库内可查的事实。
+        # 命名体例与同区既有表一致（`rejected_paths` 的
+        # `id TEXT PRIMARY KEY … status TEXT DEFAULT 'open' … created_at/consumed_at`）。
+        # ★消费方**尚未接线**（如实标注）：本表当前只有登记面（
+        # `LayeredStore.add_designer_todo`）与只读列举面
+        # （`LayeredStore.list_designer_todos` / 引擎门面同名方法），**没有**任何
+        # 位置读它并推进 `status`（`open` → `consumed`）。方向按裁定帖对齐本仓
+        # 既有的设计者终裁唯一合规通路 `propose → verify → adjudicate`；具体消费点
+        # 与状态推进语义属**未决语义题**（裁定帖「存疑」节自陈未给出），本件不擅自
+        # 接线（见 `add_designer_todo` docstring 与交付报告）。
+        c.execute('''
+            CREATE TABLE IF NOT EXISTS designer_todos (
+                id TEXT PRIMARY KEY, code TEXT, claim TEXT, action TEXT,
+                status TEXT DEFAULT 'open', created_at REAL, consumed_at REAL
             )
         ''')
         # ---- v1.14 观测持久化（OBS-REV1：行为日志/引擎元数据落库，跨进程稳定） ----
@@ -1609,6 +1916,62 @@ class LayeredStore:
 
     # ---------- 节点操作 ----------
 
+    # ---- 治理列写面的角色闸（唯一真源 · #769 / #780） ----
+    #: 沿革：本类此前只有 `add_node` 一处按「层 × 角色」判写权限；其余写面
+    #: （TMS 传播 / 数值接口 / 结构重要性重算链 / 构造期坐标迁移 / 自我快照回收）
+    #: **零判据** ⇒ SUB 可绕过 `add_node` 直接改写共享层行的
+    #: `confidence` / `importance` / `state_attributes` / 坐标列，甚至硬删 SELF 行
+    #: （公开 issue #769 三条 + #780 整链；`docs/plans/待裁清单_v0.1.md` **D-33**
+    #: 「`#127` 数值接口是否同批 → 本批不动，另笔」——本笔即那一笔）。
+    #: 判据来源（不另造）：`SHARED_LAYERS` 的语义注释 ＋ `add_node` 的既有闸
+    #: （「共享层仅 PRIMARY 可写」）＋ `#127` 的 D-07「写入前查旧行（按行判权限）」
+    #: / D-08「禁同 id 换层」形状。故把该判据**提成单点**，`add_node` 与全部旁路
+    #: 写面共用同一实现（同一列两套口径的成因正是「每处各写一份判据」）。
+
+    def layer_writable_by_role(self, layer) -> bool:
+        """角色 × 层 的写权限判据（**唯一真源**）：共享层仅 PRIMARY 可写。
+
+        `layer` 可传 `MemoryLayer` 或库中原始文本值（调用方常直接持 SQL 读回的
+        字符串）；`None` / 未知层值 ⇒ 放行——存在性与合法性由各调用方既有的
+        `KeyError` / 容错语义承担，本判据只回答「层 × 角色」这一问。
+        """
+        if layer is None:
+            return True
+        if not isinstance(layer, MemoryLayer):
+            try:
+                layer = MemoryLayer(layer)
+            except ValueError:
+                # 库中 layer 列的非法值不在本判据的判面内：这类行在 `get_node` /
+                # `STNode.from_row` 的枚举转换处即 fail-closed 抛错（本判据只回答
+                # 「层 × 角色」，不重复承担数据合法性校验——否则同一校验两处实现，
+                # 正是本族缺陷的成因）。
+                return True
+        return not (layer in self.SHARED_LAYERS and self.role != Role.PRIMARY)
+
+    def _deny_shared_layer_write(self, layer, node_id=None, action="写入共享层"):
+        raise PermissionError(
+            f"role={self.role.value} 无权{action}"
+            + (f"（{node_id} 为 {layer.value}）" if node_id is not None
+               else f"（{layer.value}）")
+            + "，共享层由父节点主控")
+
+    def assert_node_writable_by_role(self, node_id, action="写入共享层节点"):
+        """写前按**库中旧行**的 layer 判权限（#127 D-07「按行判权限」的形状）。
+
+        节点不存在 ⇒ 放行（存在性不由本判据回答）。非 PRIMARY 且目标行属共享层
+        ⇒ `PermissionError`（fail-closed，调用方须在**任何写之前**调用）。
+        """
+        node = self.get_node(node_id)
+        if node is None:
+            return
+        if not self.layer_writable_by_role(node.layer):
+            self._deny_shared_layer_write(node.layer, node_id, action)
+
+    def assert_nodes_writable_by_role(self, node_ids, action="写入共享层节点"):
+        """批量形态（整体预判 ⇒ 先判后写、被拒时零落库）。"""
+        for nid in node_ids:
+            self.assert_node_writable_by_role(nid, action)
+
     @_transactional
     def add_node(self, node: STNode) -> str:
         """写入节点并返回 id。共享层（anchor/structure）仅 PRIMARY 角色可写，
@@ -1638,7 +2001,9 @@ class LayeredStore:
         `apply_shared_sync(overwrite=True)` 合法路径），故「覆盖受保护节点内容」这一
         判别力仍未收口，只收口了「保护标记被静默抹掉」。
         数值接口 `update_node_confidence` / `update_node_importance` 的层与角色校验
-        不在本件范围内（待裁清单 D-33：本批不动，另笔）。
+        原不在本件范围内（待裁清单 D-33：本批不动，另笔）——**该「另笔」已由
+        `#769` / `#780` 一笔落地**（本文件 `layer_writable_by_role` 判据单点 ＋
+        两个数值接口的写前判据），本段保留以记录沿革。
         另注（#191 口径）：自我层行不受「共享层仅 PRIMARY 可写」约束后，
         `#127` 的同 id 禁换层闸对自我层**仍然生效**（换层判据与层集合无关）。
 
@@ -1663,10 +2028,10 @@ class LayeredStore:
         ⇒ 该节点在 `decay_cycle` 里**永不被选中删除**，#185 的「NaN 永不遗忘」
         症状仍在。取默认 0.5 ⇒ 节点回到普通衰减面。**阈值本体未改**。
         """
-        if node.layer in self.SHARED_LAYERS and self.role != Role.PRIMARY:
-            raise PermissionError(
-                f"role={self.role.value} 无权写入共享层（{node.layer.value}），共享层由父节点主控"
-            )
+        # 本判据已提为单点 `layer_writable_by_role`（#769/#780）——`add_node` 与
+        # TMS 传播 / 数值接口 / 重算链 / 构造期迁移 / 自我快照回收共用同一实现。
+        if not self.layer_writable_by_role(node.layer):
+            self._deny_shared_layer_write(node.layer)
         # #164：值域钳制（唯一写入汇聚点）——见 docstring。原位写回 node，使
         # 调用方拿到的返回对象与落库值一致（回报=事实）。
         # #185：钳制改经 `_finite_clamp`（非有限值 → 字段默认 0.5，而非 Python
@@ -1700,7 +2065,7 @@ class LayeredStore:
         existing = self.get_node(node.id)
         overwrite_protected = None
         if existing is not None:
-            if existing.layer in self.SHARED_LAYERS and self.role != Role.PRIMARY:
+            if not self.layer_writable_by_role(existing.layer):
                 raise PermissionError(
                     f"role={self.role.value} 无权覆盖共享层行（id={node.id} 现为 "
                     f"{existing.layer.value}），共享层由父节点主控"
@@ -1766,9 +2131,59 @@ class LayeredStore:
         c.execute("SELECT key, value FROM engine_meta")
         return dict(c.fetchall())
 
+    def _assert_meta_key_writable(self, key: str) -> None:
+        """#768：`engine_meta` 治理键的写闸（角色判据，fail-closed）。
+
+        为什么需要：`engine_meta` 是**库级**表，其中 5 个治理键在启动期被回读
+        （`ENGINE_META_GUARDED_KEYS`），改写它们等于改写身份/信任快照、验证阈值、
+        注意力偏好、情境层上限与结构写入器开关。而 `set_meta` / `merge_meta`
+        旧实现既无 key 白名单、也无角色闸 ⇒ 任何非 PRIMARY 实例（无需密钥）都能
+        持久化改写，且重启后原样生效（#768 复现实测）。
+
+        判据＝**实例角色**：`role != Role.PRIMARY` ⇒ `PermissionError`。
+        为什么不用设计者密钥闸（`import_all` 的 D-007 口径）：`set_context_cap`
+        等门面方法是**常规公开 API**（仓内 `tests/test_issue246_*` / `_259_*` /
+        `_493_*` / `_655_*` 都以默认 PRIMARY 引擎调它），改成要密钥会打断既有
+        正常用法；而「谁能写共享/治理面」的仓内单一真源本就是 `Role`
+        （`SHARED_LAYERS` 写闸、`add_node`、`_assert_edge_role` 同一口径），
+        `StructureWriter.__init__` 已是同款先例。
+
+        作用面边界（如实标注）：
+        ① **只对治理键**：`_last_decay_at` / `_schema_version` 等非治理键照旧放行；
+        ② 判据是**实例角色属性**，同进程内伪造角色（#779）不在本闸作用面——
+           该面属威胁模型边界，由 `#156` / `D-007` 承载；
+        ③ SUB 与 PRIMARY **共库**时 SUB 不得配置治理面（设计如此：治理面由父
+           节点主控）；
+        ④ **按库归属分档（收窄，防打断既有合法用法）**：本闸只作用于**跨进程
+           持久**的库。`db_path=":memory:"` 的库由本实例独占（`_memory_dsn` 按
+           实例 uuid 唯一化，见 `__init__`）且进程退出即消失 ⇒ `#768` 的危害链
+           「SUB 改写 → **重启后** PRIMARY 回读被篡改值」在该形态下**不成立**，
+           故 SUB 配置自有内存库的上限/元数据照旧放行。收窄的实测依据：仓内
+           `tests/test_issue259_context_fifo_insertion_order_guard.py` 的 B 组
+           以 `Role.SUB` + `:memory:` 调 `set_context_cap(5)`（配置**自有**库的
+           FIFO 上限），是一处既有合法用法，一刀切会把它打成红。
+           **未覆盖面（如实标注）**：显式传入共享缓存 DSN
+           （`file:...?mode=memory&cache=shared`）时两个实例可同进程共库，该形态
+           按「文件库」处理（拦），但同进程面本就在本闸作用面之外（见 ②）；
+           文件库上「SUB 自有库」与「SUB 与 PRIMARY 共库」在本闸内**不作区分**
+           （仓内无库级归属标记，判据不可得）——该细分属设计者裁面。
+        """
+        if (key in self.ENGINE_META_GUARDED_KEYS and self.role != Role.PRIMARY
+                and getattr(self, "_memory_dsn", None) is None):
+            raise PermissionError(
+                f"role={self.role.value} 无权写 engine_meta 治理键（{key}）——"
+                f"治理键由父节点主控（#768）"
+            )
+
     @_transactional
     def set_meta(self, key: str, value: str) -> None:
-        """写引擎元数据（upsert）。"""
+        """写引擎元数据（upsert）。
+
+        #768：治理键（`ENGINE_META_GUARDED_KEYS`）写入前过角色闸——非 PRIMARY
+        实例写治理键 ⇒ `PermissionError`（判据与边界见
+        `_assert_meta_key_writable` docstring）。非治理键照旧放行。
+        """
+        self._assert_meta_key_writable(key)
         with self._lock:
             c = self.conn.cursor()
             c.execute("INSERT OR REPLACE INTO engine_meta (key, value) VALUES (?, ?)",
@@ -1786,7 +2201,12 @@ class LayeredStore:
         最新已提交态，且其间无其他写者可插入——这是「不另加版本号也能免丢更新」的
         根据（读-改-写窗口被事务与写锁闭合）。
         返回被替换的旧值（键不存在则 None），供调用方判定/留痕。
+
+        #768：与 `set_meta` 同一把闸——治理键在**调用 `value_fn` 之前**过角色闸
+        （非 PRIMARY ⇒ `PermissionError`），否则「读改写」会在被拒的路径上先跑
+        一遍取值回调（可能带副作用）。
         """
+        self._assert_meta_key_writable(key)
         with self._lock:
             c = self.conn.cursor()
             c.execute("SELECT value FROM engine_meta WHERE key = ?", (key,))
@@ -1926,6 +2346,17 @@ class LayeredStore:
         上报（不静默吞；`warn` 属既有审计动作，lint 计数零净增），返回值形状
         保持 `{"migrated_nodes": N}` 不变（不破坏既有调用方契约）。**未**新增宽
         `except Exception`；迁移**判据与阈值未动**（仍是顶层 `startswith` 三前缀）。
+
+        #769 ③（共享层写面补角色闸）：本方法是**构造期维护**（`__init__` 无条件
+        调用），不是用户写操作——但旧实现无条件改写**全部行**的
+        `spatial_coordinates` / `semantic_coordinates` ⇒ 「仅构造一个 SUB 实例」
+        即越权改写共享层（锚点/结构层）行的坐标列（核验帖实测：8 字段中这两列
+        被改、其余 6 列不动，并留一条不记发起者角色的 `structure_event` 审计）。
+        修法取**取向 (b)**：非 PRIMARY 时**只跳过共享层行**、本地层照迁——既不
+        越权改共享层，又不让 SUB 实例的本地数据永久停在旧格式（取向 (a)「SUB
+        整体不迁移」会让本地层旧格式永久滞留，代价更大）。判据复用唯一单点
+        `layer_writable_by_role`（与 `add_node` 同源）。跳过数经既有
+        `warnings.warn` 面上报（不静默），返回值形状不变。
         """
         # 常规启动通常已无旧字段：先做只读候选检查，避免每次启动争写锁。
         candidates = self.conn.execute(
@@ -1948,10 +2379,12 @@ class LayeredStore:
             return {"migrated_nodes": 0}
         migrated = 0
         skipped_bad_rows = 0
+        skipped_shared_rows = 0
         with self._structure_event_transaction() as c:
-            c.execute("SELECT id, spatial_coordinates, semantic_coordinates FROM nodes")
+            c.execute("SELECT id, spatial_coordinates, semantic_coordinates, layer FROM nodes")
             for row in c.fetchall():
                 nid, sp_json, se_json = row[0], row[1], row[2]
+                nid_layer = row[3]
                 # #691 P1-c：坏行跳过并计数（构造期不再崩）。
                 try:
                     sp = json.loads(sp_json or "{}")
@@ -1965,6 +2398,18 @@ class LayeredStore:
                 semantic_keys = [k for k in sp if k.startswith(
                     ("protocol_", "radical_", "neural_"))]
                 if not semantic_keys:
+                    continue
+                # #769 ③（构造期维护 ≠ 用户写操作，但仍属共享层写面）：本方法由
+                # `__init__` **无条件**调用 ⇒ 旧实现「仅构造 SUB 实例」即改写共享层
+                # 行的 `spatial_coordinates` / `semantic_coordinates`（核验帖实测：
+                # 8 字段中 spatial/semantic 两列被改，其余 6 列不动；并留一条
+                # `structure_event` 审计，但不记发起者角色）。取向 (b)——**只跳过
+                # 共享层行、本地层照迁**（既不越权改共享层，又不让 SUB 实例的本地
+                # 数据永久停在旧格式；取向 (a)「SUB 整体不迁移」会让本地层旧格式
+                # 永久滞留，代价更大）。跳过数经既有 `warnings.warn` 面上报（不静默），
+                # 返回值形状 `{"migrated_nodes": N}` 不变（不破坏既有调用方契约）。
+                if not self.layer_writable_by_role(nid_layer):
+                    skipped_shared_rows += 1
                     continue
                 se.setdefault("protocol", {}).setdefault("concept", {})
                 se.setdefault("radical", {})
@@ -1992,6 +2437,13 @@ class LayeredStore:
             warnings.warn(
                 "#691 坐标迁移跳过 %d 条坏 JSON 行（spatial/semantic 非法，原文未改）"
                 % skipped_bad_rows, RuntimeWarning, stacklevel=2)
+        if skipped_shared_rows:
+            # #769 ③：共享层行被角色闸跳过 ⇒ 上报（不静默）。取向 (b) 的代价面：
+            # 这些行仍是旧格式，需由 PRIMARY 实例完成迁移。
+            warnings.warn(
+                "#769 坐标迁移跳过 %d 条共享层（anchor/structure）行：role=%s 无权改写"
+                "共享层坐标列（本地层行已照迁；共享层行需由 PRIMARY 实例迁移）"
+                % (skipped_shared_rows, self.role.value), RuntimeWarning, stacklevel=2)
         return {"migrated_nodes": migrated}
 
 
@@ -2093,6 +2545,12 @@ class LayeredStore:
         #168：删边改经 `_strip_incident_edges`（单一真源）——对端为锚点/结构层
         （`IMMUTABLE_LAYERS`）的边在删除前落一条 `immutable_edge_stripped` 审计，
         使不可变层节点失去关联边**可追查**（详见该助手 docstring）。
+
+        ★本笔（治理写面「同列两套口径」收口 · P3）：对端标签清理腿补**层 × 角色**
+        判据——主闸只判被删**目标行**，本腿此前对 `nodes.tags` 零判据 ⇒ SUB 删本地行
+        时可改写共享层 peer 的 `tags`（实测，跨实例读回同值）。形态＝peer 不可写则
+        **跳过该 peer 的标签清理 + 计入 `last_skipped_rows`**（不抛错，与同段 `#720`
+        坏 tags 容错同款口径；理由与后果面见循环内注释）。
         """
         # #517：快速预读只服务 bool 契约的早退（不存在/不可变层），**保护判定不再
         # 留在无事务快照上**——旧实现「autocommit 读判定（t0 快照）→ 首条 DML 才隐式
@@ -2126,6 +2584,23 @@ class LayeredStore:
                       " WHERE relation_type=? AND (source_id=? OR target_id=?)",
                       (EdgeType.OPPOSITE.value, node_id, node_id))
             peers = {t if s == node_id else s for s, t in c.fetchall()}
+            # ★本笔（治理写面「同列两套口径」收口 · P3）：peer 的 **layer** 用于下面
+            # 的写权限判据；一次性批量取回（沿 `#417` 的 `_SQL_IN_CHUNK` 分批单点，
+            # 与 `_strip_incident_edges` 同款），**不**在循环内逐 peer 回查——本方法
+            # 有「循环体内无 `get_node` / 不逐节点 SELECT」的 N+1 守卫
+            # （`tests/test_core_nplus1_getstats_forgetadvisor.py` I 段）。
+            # 取不到的 peer（行不存在 / layer 非法值）不登记 ⇒ 判据得 `None` ⇒ 放行：
+            # 这类行不可能是共享层行（`SHARED_LAYERS` 的两个取值都是合法枚举值），
+            # 合法性失败语义仍由既有 tags 解析腿承担。
+            _peer_layers: Dict[str, str] = {}
+            _peers_list = sorted(peers)
+            for _pi in range(0, len(_peers_list), _SQL_IN_CHUNK):
+                _pchunk = _peers_list[_pi:_pi + _SQL_IN_CHUNK]
+                _pph = ",".join("?" * len(_pchunk))
+                for _pid, _play in c.execute(
+                        f"SELECT id, layer FROM nodes WHERE id IN ({_pph})",
+                        _pchunk).fetchall():
+                    _peer_layers[_pid] = _play
             # #720：本方法逐行容错计数（写路径也刷新一次；语义＝「本次调用跳过的
             # 坏行 id」，与装载面 `_tolerant_nodes` 的刷新口径同名同义）。
             self.last_skipped_rows = []
@@ -2137,6 +2612,7 @@ class LayeredStore:
             self._strip_incident_edges(c, node_id)
             c.execute("DELETE FROM nodes WHERE id=?", (node_id,))
             _bad_tag_peers: List[str] = []
+            _locked_tag_peers: List[str] = []
             for peer in peers:
                 c.execute("SELECT COUNT(*) FROM edges WHERE relation_type=?"
                           " AND (source_id=? OR target_id=?)",
@@ -2155,6 +2631,23 @@ class LayeredStore:
                 # 跳过 id 如实计入 `last_skipped_rows`；**不**阻断删除主流程。
                 c.execute("SELECT tags FROM nodes WHERE id=?", (peer,))
                 _prow = c.fetchone()
+                # ★本笔（治理写面「同列两套口径」收口 · P3）：主闸只判**被删目标行**
+                # （上方 `node.layer in IMMUTABLE_LAYERS`），本 peer 腿此前对
+                # `nodes.tags` **零层/角色判据** ⇒ SUB 删自己的本地行时，可把共享层
+                # peer 的 `tags` 由 `["conflict","no_forget"]` 改成 `["no_forget"]`
+                # （实测，PRIMARY 跨实例读回同值）；而同列经 `tag_node` 打共享层目标
+                # 必被 `#234` 拦 ⇒ 同一列两套口径。判据复用 store 侧单点
+                # （`layer_writable_by_role`，不另造第二份）。
+                # 形态＝**跳过该 peer 的标签清理 + 计入 `last_skipped_rows`**，不抛错
+                # （与同段 `#720` 坏 tags 容错同款口径）：`delete_node` 的语义是删
+                # **本地层**节点，因一个**邻居**是共享层就让整条删除失败，会把
+                # `decay_cycle` / `enforce_context_cap` 等既有删除路径打成红。
+                # 后果面（如实标注）：跳过会在共享层 peer 上留下**悬挂的 `conflict`
+                # 标签**（OPPOSITE 边已随删除消失、标签未被移除）——这是「宁可留脏
+                # 标签，也不让非 PRIMARY 改写共享层」的取舍，清理由 PRIMARY 侧承担。
+                if not self.layer_writable_by_role(_peer_layers.get(peer)):
+                    _locked_tag_peers.append(peer)
+                    continue
                 try:
                     _ptags = ((json.loads(_prow[0]) if _prow[0] else [])
                               if _prow else None)
@@ -2172,9 +2665,10 @@ class LayeredStore:
                                json.dumps({"reason": "opposite_edge_gone",
                                            "removed_node": node_id}, ensure_ascii=False),
                                json.dumps({}, ensure_ascii=False)))
-            if _bad_tag_peers:
+            if _bad_tag_peers or _locked_tag_peers:
                 self.last_skipped_rows = list(dict.fromkeys(
-                    list(self.last_skipped_rows or []) + _bad_tag_peers))
+                    list(self.last_skipped_rows or [])
+                    + _bad_tag_peers + _locked_tag_peers))
             self._commit_locked()
         return True
 
@@ -2186,8 +2680,17 @@ class LayeredStore:
         旧实现把 delta 原样拼进 `confidence + ?` ⇒ `confidence + NaN = NaN` 落库成
         NULL（`MIN/MAX` 遇 NULL 仍回 NULL）；此后 `decay_cycle` 的
         `WHERE confidence > ? AND confidence < 1.0` 对 NULL 全不成立 ⇒ 该行永不衰减。
+
+        #769 ④ / #780 ②（D-33 的「另笔」）：本接口此前**无层/角色判据** ⇒ SUB 直调
+        即把 PRIMARY 建的锚点/结构层行 `confidence 1.0 → 0.5`（核验帖实测，跨实例读回
+        同值）。现按 `add_node` 的同款判据（`layer_writable_by_role` 单点）**写前按
+        库中旧行判权限**（`#127` D-07 形状）：非 PRIMARY 且目标行属 `SHARED_LAYERS`
+        ⇒ `PermissionError`（fail-closed、零落库）。本地层（knowledge/context/self）
+        的增信路径不受影响（SUB 对自己节点的复核照旧放行——`#191` 裁定 SELF 属本地层）。
         """
         delta = _finite_or(delta, 0.0)
+        # 闸落在 UPDATE 之前（本方法已挂 @_transactional ⇒ 被拒时零落库）。
+        self.assert_node_writable_by_role(node_id, action="改写共享层节点的 confidence")
         with self._lock:
             c = self.conn.cursor()
             c.execute('''
@@ -2241,8 +2744,17 @@ class LayeredStore:
         `executemany`）与「是否刷新近因」（`touch`）二者**正交**——故同一条连接上
         按 `touch` 选择 `executemany` 的 SQL，两套语义并存。
 
-        失败容忍与旧实现一致：`sqlite3.OperationalError`（写锁持有 ⇒ 立即放弃）
-        整个批次一起吞掉——访问计数是统计性质，不阻断检索主流程。
+        失败容忍（#775 起**不再静默**）：`sqlite3.OperationalError` 仍不阻断检索
+        主流程，但经 `_note_access_count_failure()` 计数 + 留原文 + `warnings.warn`
+        上报——旧实现是 `pass`，写竞争下访问计数**静默少记**（详见类 docstring 与
+        `_note_access_count_failure`）。
+
+        ★`timeout=0` **保留不动**（刻意的非阻塞设计，非本缺陷）：本连接自开、
+        不经 `_connect`，故不继承 `busy_timeout=30000` —— 外部写锁持有时**立即**
+        放弃（裸 SQL 对照：同语句、同持锁态下必抛 `database is locked`），从而
+        绝不把 `recall` / `search_content` 的 touch 路径拖住最多 30 秒。本笔**只**
+        把「被吞掉的失败」改为「被上报的失败」，**不**改锁等待取向（改锁等待属
+        语义变更，见报告「取向题：要不要为访问计数等锁」）。
         """
         ids = [i for i in (node_ids or []) if i]
         if not ids:
@@ -2266,7 +2778,33 @@ class LayeredStore:
             finally:
                 obs.close()
         except sqlite3.OperationalError:
-            pass  # 计数失败可容忍（统计性质），不阻断检索
+            # #775：计数失败仍可容忍（统计性质、不阻断检索），但**不得静默**。
+            self._note_access_count_failure()
+
+    def _note_access_count_failure(self):
+        """上报一次「访问计数旁路写失败」（#775：取代旧实现的 `except …: pass`）。
+
+        三档读数（皆可读、可断言）：
+          ① `self.access_count_write_failures` 自增 —— 累计失败批次数；
+          ② `self.last_access_count_error` —— 末次错误原文（`类型: 消息`）；
+          ③ `warnings.warn` —— 每次失败即时上报（属既有审计动作，
+             `silent_except_lint` 认它；调用方可用 `pytest.warns` / 日志观测）。
+
+        为什么异常对象取自 `sys.exc_info()` 而不写成 `except … as exc`：
+        `increment_access_many` 有一处**既有静态守卫**
+        （`tests/test_core_nplus1_getstats_forgetadvisor.py` 的 K 组）逐字要求该
+        函数体内出现不带 `as` 的 `except sqlite3.OperationalError:`——本笔不为
+        迁就自身写法去改那条既有断言（守卫是既有的，改它属超范围）。
+        """
+        exc = sys.exc_info()[1]
+        self.access_count_write_failures = (
+            getattr(self, "access_count_write_failures", 0) + 1)
+        self.last_access_count_error = (
+            "%s: %s" % (type(exc).__name__, exc) if exc is not None else None)
+        warnings.warn(
+            "#775 访问计数写入失败（第 %d 次；该批已放弃，不阻断检索）：%s"
+            % (self.access_count_write_failures, self.last_access_count_error),
+            RuntimeWarning, stacklevel=3)
 
     # ---------- 边操作 ----------
 
@@ -3103,6 +3641,21 @@ class LayeredStore:
         边界（削掉的判别力，如实标注）：首次进入时间模式（无 `_last_decay_at`
         记录）时按**一个周期**计 dt，而非 0——避免「刚部署/刚重启首轮不衰减」；
         取此口径与 `start_auto_decay` 的周期语义一致。
+
+        #176 追评（时钟回拨把游标写回更小的 `now`）：旧实现无条件
+        `set_meta(key, str(now))`——回拨那一轮 `dt` 虽被钳成 0（不反向增信），
+        **游标却倒退了**；时钟恢复后下一轮 `now - last` 把回拨区间**再算一遍**
+        ⇒ 一次 1 小时回拨让恢复后多遗忘约 1 小时（情境层记忆被提前删除、
+        知识层 confidence 额外回落，无日志）。修法（issue 建议 1，最小）：
+        写回**单调不降**的游标 `max(last_f, now)`（无游标时仍写 `now`）——
+        回拨轮游标留在原处、`dt` 仍钳 0，恢复轮 `dt = now - last_f` 只计
+        真实流逝。判据来源：公开 issue #176 追评（`max(now, last_f)`）＋
+        本端独立复跑读数（对照 `T0→T0+60→T0+120` 与回拨 `T0→T0-3540→T0+120`
+        在相同真实流逝下 importance 相等）。
+        边界（削掉的判别力，如实标注）：本件**只**让游标不倒退，**不**改
+        `dt` 的钳零语义（回拨区间不计入衰减，也不反向增信）；issue 建议 2
+        （进程内周期调度改用 `time.monotonic()`）不在本件范围——本函数是
+        「墙钟记账」面，`monotonic` 属调度面，属另一个语义变更。
         """
         if now is None:
             return self._DECAY_PERIOD_SECONDS
@@ -3114,7 +3667,10 @@ class LayeredStore:
         dt = self._DECAY_PERIOD_SECONDS if last_f is None else (now - last_f)
         if dt < 0:
             dt = 0.0          # 时钟回拨：不前进（不反向增信）
-        self.set_meta(self._LAST_DECAY_META_KEY, str(now))
+        # #176 追评：游标**单调不降**——回拨时不得把更小的 `now` 写回，否则时钟
+        # 恢复后 `now - last` 会把回拨区间重复计入（情境层记忆被提前删除）。
+        self.set_meta(self._LAST_DECAY_META_KEY,
+                      str(now if last_f is None else max(last_f, now)))
         return dt
 
     def _decay_value(self, x: float, factor: float, dt: float) -> float:
@@ -3149,6 +3705,19 @@ class LayeredStore:
         指数衰减（设计者设计：短期记忆随时间淡出，长期/知识层保留）。
         #29③：KNOWLEDGE 层**置信度**（非内容）随时间回落——未确证断言不得
         因重复写入而永久为真；已确证（confidence=1.0）与受保护节点不衰减。
+
+        #781（口径声明 · **只声明现状、不改语义**）：`archived` 与 `no_forget` 在
+        两条遗忘路径上**不等价**。本函数的情境层删除段经 `_is_forget_protected`
+        判定，只认 `no_forget` 标签 ∪ `protections` 行登记，**不认 `archived`**
+        ⇒ 仅带 `archived` 的情境节点照样被本路径删除（实测：仅 `archived` 的节点
+        经 200 轮 `decay_cycle` 已消失，同批 `no_forget` 者仍在）；而
+        `SpacetimeMemoryEngine.forget_advisor` 的跳过条件是
+        `"no_forget" in tags or "archived" in tags` ⇒ **认 `archived`**（仅带
+        `archived` 者被跳过、不归档也不删）。故「归档即保护」的直觉在两条路径上
+        结论相反。本件**不**统一两者（是否让 `decay_cycle` 也认 `archived` 属设计
+        面裁定），仅把现状显式落到注释，防日后无声漂移。判据来源：公开 issue #781
+        第 4 点 ＋ 本端独立读数（`tests/test_issue778_781_forget_protection_guard.py`
+        的 G6 钉住该分叉）。
 
         #115：`OPPOSITE`（冲突）边**免疫普通衰减**。冲突边是 `register_conflict`
         建的「矛盾记忆」标记（confidence=0.3、verified=False），旧实现与普通未验证
@@ -3779,6 +4348,16 @@ class LayeredStore:
         角色检查，SUB 可对结构层节点伪造 `promotion_pending`/`conflict` 等标签，改变
         PRIMARY 的治理状态。判据来源：公开 issue #234「期望行为：共享层节点的标签、
         保护、冲突登记也只允许 PRIMARY 修改」＋「建议修复 4」。
+
+        #781（可审计）：打 `no_forget` 标签时落一条 `action_logs`（与 `add_node` 的
+        `protected_node_overwritten` 同例）。该标签是**遗忘保护的第二个真源**
+        （`_is_forget_protected`：`no_forget` ∈ tags ∪ `protections` 行），一旦打上
+        即永久豁免 `decay_cycle` 与 `forget_advisor` 两条遗忘路径，而旧实现打标
+        **零审计**（`action_logs` 增量 0）⇒ 保护名单可被非属主单向扩张却无留痕。
+        审计**只**加在 `no_forget` 这一支，不扩到全部标签面（避免大面积行为变更）。
+        边界（如实标注）：本件只补审计，**不**新增 `untag_node` / `unprotect_node`
+        回收入口，也**不**给 `no_forget` 加配额或审批——那两条属设计取向（谁有权把
+        一条记忆标成不可遗忘），见 issue #781 回帖。
         """
         if self.role != Role.PRIMARY:
             n = self.get_node(node_id)
@@ -3801,10 +4380,23 @@ class LayeredStore:
         if own_tx:
             self.conn.execute("BEGIN IMMEDIATE")
         node = self.get_node(node_id)
+        added = False
         if node and tag not in node.tags:
             node.tags.append(tag)
             c = self.conn.cursor()
             c.execute("UPDATE nodes SET tags=? WHERE id=?", (_dumps_tags(node.tags), node_id))
+            added = True
+        # #781：只对 `no_forget` 落审计（幂等：重复打标不重复留痕——`added` 为真
+        # 才记，避免同一事实被反复刷进审计面）。
+        if added and tag == "no_forget":
+            self.log_action(
+                "no_forget_tagged",
+                f"节点 {node_id} 被打上 no_forget 标签（#781）：该标签是遗忘保护的"
+                f"第二个真源（protections 行之外），豁免 decay_cycle 与 "
+                f"forget_advisor 两条遗忘路径；仓内无 untag 入口",
+                node_ids=[node_id],
+                outcome={"layer": node.layer.value, "role": self.role.value,
+                         "tag": tag})
         if own_tx:
             self._commit_locked()
 
@@ -4259,22 +4851,56 @@ class LayeredStore:
         `no_forget` 改成 `protections` 表的派生视图（issue 并列的第二条建议属设计
         取舍，未采纳）；②`_lock` 为进程内锁、跨进程无效，故用 DB 级 `BEGIN IMMEDIATE`；
         ③已在事务中（嵌套调用）则不插手，交由外层边界。
+
+        #778-F3（数据损坏 · 前置存在性）：本方法此前**先写后查**——旧实现先
+        `INSERT OR REPLACE INTO protections` 再 `get_node(node_id)` ⇒ 拼错 id、
+        传 `None`/空串**一律静默成功**，`protections` 落一条**孤儿行**（`nodes` 无此
+        节点），且该行成为**潜伏保护**：之后同 id 建节点即被拒删（`delete_node`
+        返回 False，而 `no_forget` 标签并未回填）。修法：把取节点提到写行**之前**，
+        不存在即 `ValueError`（异常类型先例：同文件 `promote_to_shared` 的
+        `raise ValueError("节点不存在")`）。
+        判据来源：公开 issue #778 F3 ＋ 其核验帖（另补出 `protect_node(None, …)`
+        可无上界灌 NULL 行、并使 `get_protected_nodes()` 返回 `None`/`''` 条目）。
+        边界（如实标注）：本闸只判「目标节点存在」，**不**判 `reason` 语义、**不**引入
+        配额或审批（「谁有权把一条记忆标成不可遗忘」属设计取向，见 #781 回帖）。
+
+        #781（可审计）：本方法落一条 `action_logs`（与 `add_node` 的
+        `protected_node_overwritten` 同例），使「某节点被登记为不可遗忘」可查——
+        旧实现 `tag_node` / `protect_node` 都不落审计（`action_logs` 增量 0），
+        保护名单可被非属主单向扩张却无留痕。审计只加在**本方法**与 `tag_node` 的
+        `no_forget` 一支，**不**扩到全部标签面（避免大面积行为变更）。
         """
-        if self.role != Role.PRIMARY:
-            n = self.get_node(node_id)
-            if n is not None and n.layer in self.SHARED_LAYERS:
-                raise PermissionError(
-                    f"role={self.role.value} 无权保护共享层节点（{node_id} 为 "
-                    f"{n.layer.value}），共享层由父节点主控（#234）")
         own_tx = not self.conn.in_transaction
         if own_tx:
             self.conn.execute("BEGIN IMMEDIATE")
+        # #778-F3：**先取节点**再写行。这一次读同时供两道闸用（存在性 + #234 角色），
+        # 且落在 #344 的原子边界**之内**——顺序与 #344 的修复口径一致（读 tags 与
+        # 写 tags 同事务），故不引入第二次 `get_node`。
+        node = self.get_node(node_id)
+        if node is None:
+            raise ValueError(
+                "protect_node 拒绝：节点不存在（id=%r）——#778-F3：保护登记要求目标"
+                "节点已存在，否则会落下指向空处的孤儿保护行（旧实现先写后查，拼错 "
+                "id 静默成功，且该行会成为潜伏保护）" % (node_id,))
+        if self.role != Role.PRIMARY and node.layer in self.SHARED_LAYERS:
+            raise PermissionError(
+                f"role={self.role.value} 无权保护共享层节点（{node_id} 为 "
+                f"{node.layer.value}），共享层由父节点主控（#234）")
         c = self.conn.cursor()
         c.execute("INSERT OR REPLACE INTO protections VALUES (?,?,?)", (node_id, reason, time.time()))
-        node = self.get_node(node_id)
-        if node and "no_forget" not in node.tags:
+        tag_added = "no_forget" not in node.tags
+        if tag_added:
             node.tags.append("no_forget")
             c.execute("UPDATE nodes SET tags=? WHERE id=?", (_dumps_tags(node.tags), node_id))
+        # #781：保护登记落审计（只追加，不进检索面）。
+        self.log_action(
+            "protected_node_registered",
+            f"节点 {node_id} 被登记为不可遗忘（#781）：protections 行 + no_forget "
+            f"标签，豁免 decay_cycle 与 forget_advisor 两条遗忘路径",
+            node_ids=[node_id],
+            outcome={"reason": reason, "layer": node.layer.value,
+                     "role": self.role.value,
+                     "no_forget_tag_added": tag_added})
         if own_tx:
             self._commit_locked()
 
@@ -4282,6 +4908,35 @@ class LayeredStore:
         """取保护名单节点 id 列表（不可遗忘层的豁免集合）。"""
         c = self.conn.cursor()
         c.execute("SELECT node_id FROM protections")
+        return [r[0] for r in c.fetchall()]
+
+    def orphan_protection_rows(self) -> List[str]:
+        """取 `protections` 表里的**孤儿行** node_id（指向不存在节点的保护登记）。
+
+        #778-F4（加固不对称）：`protections` 表**无外键声明**（对照 `edges` 有两条
+        `REFERENCES nodes(id)` ＋ #93 的孤儿边预筛）⇒ `PRAGMA foreign_key_check`
+        **结构上覆盖不到它**：`node_id` 指向不存在节点的保护行可静默落库、
+        `integrity_ok` 仍为 True，且该行随 `export_all` 继续传播。本方法是该缺陷的
+        **判据真源**（单一实现），上报面为 `SpacetimeMemoryEngine.verify_integrity`
+        与 `export_all`。
+
+        为何走「独立检查」而不补外键（如实标注取舍）：① SQLite 无法对既有表
+        `ALTER TABLE ... ADD CONSTRAINT` ⇒ 补外键只对新库生效、旧库永久无约束
+        （schema 兼容性分叉）；② 本仓每条连接都开 `PRAGMA foreign_keys=ON`（#93），
+        一旦 `protections` 有了外键，**含孤儿保护行的备份**（正是本缺陷的现场）会在
+        `import_all` 的通用写腿抛 `FOREIGN KEY constraint failed` 并**中断整次导入**
+        ——与 #93 当年「必须先补孤儿边预筛再开外键」是同一个坑，而导入侧的对称预筛
+        落在 `import_all` 内（属另一条修复线）。故取「独立孤儿检查 ＋ 完整性面上报」，
+        不动表结构、不改导入语义。
+
+        边界（如实标注）：本方法**只读不清理**（孤儿行不自动删除——「谁有权解除
+        保护登记」属设计取向，本件不引入回收入口）；返回按 `rowid` 升序（稳定序，
+        便于取样本），`NULL`/空串 `node_id` 同样计入孤儿（它们必不匹配任何节点）。
+        """
+        c = self.conn.cursor()
+        c.execute("SELECT p.node_id FROM protections p "
+                  "LEFT JOIN nodes n ON p.node_id = n.id "
+                  "WHERE n.id IS NULL ORDER BY p.rowid ASC")
         return [r[0] for r in c.fetchall()]
 
     def _is_forget_protected(self, node, protected: Set[str] = None,
@@ -4295,6 +4950,14 @@ class LayeredStore:
         ＋ 待裁清单 D-15/D-17（应用层单一谓词）。
         边界（削掉的判别力）：`protections.created_at` 仍不被读——保护**永久**生效，
         无 TTL（待裁清单 D-11 裁定「永久＋显式解除」，本件不引入时效语义）。
+
+        #781（口径声明 · **只声明现状、不改语义**）：本谓词**不认 `archived`**——
+        它只判 `no_forget` ∈ tags ∪ node_id ∈ protections。而
+        `SpacetimeMemoryEngine.forget_advisor` 的跳过条件是
+        `"no_forget" in tags or "archived" in tags`（**认 `archived`**）⇒ 两条遗忘
+        路径对 `archived` 的处理相反：仅带 `archived` 的情境节点被 `forget_advisor`
+        跳过，却被 `decay_cycle`（经本谓词）照常删除。本件**不**统一（属设计面
+        裁定），只把分叉显式落到注释，防日后无声漂移。
 
         ★优化（本笔 · 零行为变更）：本谓词实际只读 `node.tags` 与 `node.id` 两个字段，
         而批量调用方（`decay_cycle` 的两段循环）此前传的是 `self.get_node(nid)`
@@ -4419,6 +5082,28 @@ class LayeredStore:
                   "ORDER BY rowid DESC", ("%self_snapshot%",))
         rows = c.fetchall()
         if len(rows) <= keep:
+            return 0
+        # #769 ②（治理列写面补角色闸）：SELF 层在 `IMMUTABLE_LAYERS` 内——`delete_node`
+        # 对 SELF 行一律返回 `False`，而本方法此前**零角色判据**直接 `DELETE` ⇒
+        # 同一层的「不可删」语义两套口径：SUB 调 `prune_self_snapshots(keep=0)` 即
+        # 硬删全部 SELF 快照（核验帖实测 SELF 行 `3 → 0`，而 `delete_node` 对同层
+        # 仍返回 `False`）。现按 `delete_node` 的**同判据**收口：非 PRIMARY 一行都不删。
+        #
+        # 取向（二选一，如实标注理由与代价）：**返回 0 并经 `warnings.warn` 上报**，
+        # 不抛 `PermissionError`。理由：SELF 属**本地层**（#191 裁定：SUB 可写自我层），
+        # `update_self` 在 SUB 上是合法路径（其内部即调本方法做有界保留）⇒ 若在此抛错，
+        # SUB 的 `update_self` 会被一并打掉，属**回归 #191**（正是 `add_node` 改用
+        # `SHARED_LAYERS` 而非 `IMMUTABLE_LAYERS` 所要避免的形态）。代价（如实）：
+        # 本闸是「拒删 + 告警」而非 fail-closed 抛错，调用方若忽略告警只会看到
+        # `0`——故告警文案显式点名角色与跳过条数，且该口径只在「确实有候选被跳过」
+        # 时触发（`len(rows) > keep`），正常小库与 PRIMARY 侧零告警噪音。
+        if self.role != Role.PRIMARY:
+            warnings.warn(
+                "#769 prune_self_snapshots 拒绝：role=%s 无权回收自我层快照"
+                "（SELF 属不可遗忘层，与 delete_node 同判据）——本次跳过 %d 条候选，"
+                "零删除；如需回收请以 PRIMARY 身份执行。"
+                % (self.role.value, len(rows) - keep),
+                RuntimeWarning, stacklevel=2)
             return 0
         protected = set(self.get_protected_nodes())
         # keep 保留的是**最近** keep 条（rowid 降序前缀）；保护件在淘汰候选里跳过。
@@ -4550,8 +5235,17 @@ class LayeredStore:
         旧实现原样拼进 `importance + ?` ⇒ NaN 落库成 NULL，此后 `decay_cycle` 的
         `WHERE importance > ?`（情境层遗忘门）对 NULL 全不成立 ⇒ 该节点**永不遗忘**；
         `+inf` 则使其在所有 `ORDER BY importance DESC` 检索里永远排第一。
+
+        #769 ④ / #780 ②（D-33 的「另笔」）：同 `update_node_confidence`——本接口
+        此前无层/角色判据（既有守卫 docstring 明写「数值接口不在本件范围」），SUB
+        直调即把锚点 `importance 0.3 → 0.8` / `0.9 → 1.0`。现按同款单点判据
+        **写前按库中旧行**判权限：非 PRIMARY 且旧行属共享层 ⇒ `PermissionError`。
+        内部调用方（`recalc_structural_importance` / `_protect_upstream` /
+        `add_perception` 去重 / 巩固周期）一律先经各自入口的层判，故本闸对它们
+        只做**兜底**，不改变 PRIMARY 侧读数。
         """
         delta = _finite_or(delta, 0.0)
+        self.assert_node_writable_by_role(node_id, action="改写共享层节点的 importance")
         c = self.conn.cursor()
         c.execute("UPDATE nodes SET importance = MIN(1.0, MAX(0.0, importance + ?)) WHERE id=?",
                   (delta, node_id))
@@ -4641,11 +5335,14 @@ class LayeredStore:
         # 旧实现在下方循环里逐节点调 `_read_state_attr(nid, "structural_boost", 0.0)`
         # ⇒ N 次 `SELECT state_attributes FROM nodes WHERE id=?`（N+1）。该列与
         # `id, importance` 同表同行 ⇒ 一并取出、按 `_state_attr_of` 单点解析一次。
-        c_.execute("SELECT id, importance, state_attributes FROM nodes")
+        # #769/#780：`layer` 一并取出——下方**逐节点**判「目标行层 × 角色」，避免
+        # 每节点一次 `SELECT layer`（与既有 N+1 收口同法）。
+        c_.execute("SELECT id, importance, state_attributes, layer FROM nodes")
         rows = c_.fetchall()
-        imp_map = {nid: (imp if imp is not None else 0.5) for nid, imp, _sa in rows}
+        imp_map = {nid: (imp if imp is not None else 0.5)
+                   for nid, imp, _sa, _ly in rows}
         _sb_map = {nid: self._state_attr_of(_sa, "structural_boost", 0.0)
-                   for nid, _imp, _sa in rows}
+                   for nid, _imp, _sa, _ly in rows}
 
         # 因果上游度传播（BFS · 深度上限 · 节点去重 · 路径置信度加权）
         influence: Dict[str, float] = {}
@@ -4670,9 +5367,20 @@ class LayeredStore:
 
         movers = []
         protected = []
+        skipped_shared = []
         applied = 0
-        for nid, imp, _sa in rows:
+        for nid, imp, _sa, nid_layer in rows:
             infl = influence.get(nid, 0)
+            # #769/#780：**逐节点隔离**——非 PRIMARY 时共享层行整体跳过（既不写
+            # `state_attributes`、也不抬 `importance`、也不登记 `protections`）。
+            # 取向理由：旧实现只在下游 `_protect_upstream` 的 `#234` 闸处抛错，
+            # 而 `_write_influence` **已提交** ⇒ 「先写后抛」的部分落库（核验帖
+            # 点名的非原子格）。逐节点跳过（而非整链抛错）使：①零部分落库；
+            # ②SUB 对**本地层**节点的重算照旧生效（不回归既有语义，`self` 层不在
+            # `SHARED_LAYERS`）；③跳过数经 `skipped_shared` 上报，不静默。
+            if not self.layer_writable_by_role(nid_layer):
+                skipped_shared.append(nid)
+                continue
             # 上游度写入 state_attributes（可检索/可查）
             if infl > 0 and not dry_run:
                 self._write_influence(nid, infl)
@@ -4730,6 +5438,10 @@ class LayeredStore:
                 "candidates": len(movers), "applied": applied,
                 "influence_nodes": len(influence),
                 "protected": len(protected),
+                # #769/#780：非 PRIMARY 时被跳过的共享层节点数（逐节点隔离 ⇒
+                # 零部分落库；上报而不静默）。
+                "skipped_shared": len(skipped_shared),
+                "skipped_shared_nodes": skipped_shared[:50],
                 "top_influence": [{"node_id": n, "concept_influence": v} for n, v in top_influence],
                 "movers": movers[:50]}
 
@@ -4740,7 +5452,17 @@ class LayeredStore:
 
         #299：新增 `key` 参数（默认 `concept_influence`，旧行为不变），供
         `recalc_structural_importance` 复用同一通道写入 `structural_boost`。
+
+        #780 ① / #769 ③：本方法此前**无层/角色判据**（核验帖实测：SUB 直调
+        `_write_influence(锚点, 7.77)` 即改写共享层行的 `state_attributes`，且该列被
+        下游 `_state_attr_of` 当结构化真值读回 ⇒ 篡改会改变后续结构提升基准）。
+        现按 `add_node` 的同款单点判据**写前按库中旧行**判权限：非 PRIMARY 且目标行
+        属 `SHARED_LAYERS` ⇒ `PermissionError`（闸在 SELECT/UPDATE **之前** ⇒
+        被拒时零落库）。共享层节点的 `state_attributes` 是治理列，由父节点主控；
+        SELF/本地层不在 `SHARED_LAYERS`，照旧可写。
         """
+        self.assert_node_writable_by_role(
+            node_id, action="改写共享层节点的 state_attributes")
         c = self.conn.cursor()
         c.execute("SELECT state_attributes FROM nodes WHERE id=?", (node_id,))
         row = c.fetchone()
@@ -4797,7 +5519,15 @@ class LayeredStore:
         return self._state_attr_of(row[0], key, default)
 
     def _protect_upstream(self, node_id: str, infl: float, floor: float):
-        """越上游越要记录：保护登记 + no_forget + importance 保底。"""
+        """越上游越要记录：保护登记 + no_forget + importance 保底。
+
+        #780 ①：本助手此前零角色判据（其内部 `protect_node` 有 `#234` 闸，但闸抛在
+        `_write_influence` **已提交之后** ⇒ 整次 recalc「先写后抛」、部分落库）。
+        现在**入口先判**（`assert_node_writable_by_role`）：非 PRIMARY 且目标行属
+        共享层 ⇒ 在任何写之前 `PermissionError`（零落库）；共享层节点的保护登记由
+        父节点主控（与 `protect_node` 的 `#234` 判据同源，此处只是把它提到最前）。
+        """
+        self.assert_node_writable_by_role(node_id, action="保护共享层节点")
         self.protect_node(node_id, f"结构保护:概念影响度 {infl}（因果上游度≥阈值，2026-08-20）")
         node = self.get_node(node_id)
         if node and node.importance is not None and node.importance < floor:
@@ -4904,7 +5634,12 @@ class LayeredStore:
         # 仍带 insight_event 标签；旧实现只认标签不认层与角色 ⇒ SUB 可把已终裁
         # 的结构层节点 verified→refuted、追加伪造证据、抬 importance 到 0.9。
         # 与 #234 给 tag_node/protect_node/register_conflict/add_edge 加的闸同款。
-        if node.layer in self.SHARED_LAYERS and self.role != Role.PRIMARY:
+        # ★本笔（第 4 项 · 消除第二份实现）：判据改为**委托**单点
+        # `layer_writable_by_role`（G 线本笔落地的唯一真源）——原内联形态
+        # `node.layer in self.SHARED_LAYERS and self.role != Role.PRIMARY` 与单点
+        # 判据同源，但属**第二份实现**。零行为差异已实测（同一批构造 × 两角色，
+        # 返回/抛错与调用后行快照逐字相同）。
+        if not self.layer_writable_by_role(node.layer):
             raise PermissionError(
                 f"role={self.role.value} 无权改写共享层（{node.layer.value}）的洞见"
                 f"（id={insight_id}）——已终裁晋升的洞见归 PRIMARY 主控（#519）")
@@ -4963,15 +5698,22 @@ class LayeredStore:
 
         #281：条件统计旧实现按 `x["conditions"].get(k)` 的**真值**分组，把
         「键存在但值为假」（`False`/`0`/`""`）与「键不存在」（未记录该条件）混同
-        ——未测样本被当作「该条件为假」计入 `without` 组，统计口径失真。修法（最小）：
-        **只在该键存在（已记录）的样本内**按真值分 with/without，键不存在的样本
-        不进入本条件的统计。判据来源：公开 issue #281「修复建议 1」——「未显式提供
-        （confidence=0.3）的条件不进入对应统计」。
-        边界（削掉的判别力，如实标注）：本件只修「键不存在 vs 键存在但值为假」的
-        混同，**不**改 `_normalize_conditions` 给未提供条件填默认值的行为 ⇒ 经
-        `insight_record` 写入的节点 5 个条件键**恒存在**（默认值），故本件对这类
-        样本的分组结果与旧口径相同；`pressure`/`tone` 因默认值为非空字符串恒为真、
-        分组仍出不了统计的问题（issue #281 根因 2/3，需按取值分组）**不在本件**。
+        ——未测样本被当作「该条件为假」计入 `without` 组，统计口径失真。上一轮
+        （`f0a9dc7`）只按「键存在」收窄，但**真实路径零效果**：`_normalize_conditions`
+        给**未显式提供**的条件也填了默认值 ⇒ 经 `insight_record` 写入的节点
+        C1–C8 键**恒存在**，未显式提供的条件仍按其**默认值**落进 `with_`/`without`
+        （`premise_questioned`/`externalized`/`cross_domain` 默认为假 ⇒ 混入
+        `without`；`pressure`/`tone` 默认为非空字符串 ⇒ 恒真混入 `with_`），
+        统计口径失真（实测 `n_without=15 / cer_without=0.667`，预期 `5 / 0.0`）。
+        修法（最小）：判据由「键存在」改为「**显式提供**」——`_normalize_conditions`
+        早已把「显式提供=0.7／默认回落=0.3」写进 `conditions.confidence`，本件
+        只是**把它读出来**：`confidence[k] >= 0.7` 才算 present。无 `confidence`
+        标记时（旧库样本／裸 SQL 构造）**回落**旧判据「键存在」，以免旧样本变成
+        新红。判据来源：公开 issue #281「修复建议 1」——「未显式提供（confidence=0.3）
+        的条件不进入对应统计」。
+        边界（削掉的判别力，如实标注）：本件只修「显式提供 vs 默认回落」的混同，
+        **不**改 `_normalize_conditions` 给未提供条件填默认值的行为（写入面不变）；
+        `pressure`/`tone` 按取值分组（issue #281 根因 2/3）**不在本件**。
         `pending = n - nv` 把 refuted 计入 pending、以及 REFUTED 后 importance 不
         回落（同 issue 附带两处）亦**不在本件**。
         """
@@ -4989,7 +5731,11 @@ class LayeredStore:
                 status = ("verified" if any("verified" in t for t in tags)
                           else "refuted" if "refuted" in tags else "pending")
             conditions = (ins.get("conditions") or {}).get("values", {}) if isinstance(ins, dict) else {}
-            candidates.append({"id": nid, "status": status, "conditions": conditions})
+            # #281：`conditions.confidence`（`_normalize_conditions` 写入：显式提供
+            # =0.7／默认回落=0.3）一并带出——判据在数据里，旧实现没读它。
+            confidence = (ins.get("conditions") or {}).get("confidence", {}) if isinstance(ins, dict) else {}
+            candidates.append({"id": nid, "status": status, "conditions": conditions,
+                               "confidence": confidence})
         n = len(candidates)
         nv = sum(1 for x in candidates if x["status"] == "verified")
         cer = nv / n if n else 0.0
@@ -5000,9 +5746,18 @@ class LayeredStore:
             # #281：旧实现 `x["conditions"].get(k)` 按**真值**分组，把「键存在但值为
             # 假」（False/0/""）与「键不存在」（未记录该条件）混同——两者都落进
             # without 组 ⇒ 未测的条件被当作「该条件为假」的样本，统计口径失真。
-            # 改为**只在该键存在（已记录）的样本内**按真值分 with/without 两组；
-            # 键不存在的样本不进入本条件的统计。
-            present = [x for x in candidates if k in x["conditions"]]
+            # 判据改为「**显式提供**」：`confidence[k] >= 0.7`（`_normalize_conditions`
+            # 的口径：显式提供=0.7／默认回落=0.3）；无 `confidence` 标记（旧库样本／
+            # 裸 SQL 构造）时**回落**旧判据「键存在」，旧样本不至变成新红。
+            def _explicit(x, _k=k):
+                _conf = x.get("confidence")
+                if isinstance(_conf, dict) and _k in _conf:
+                    try:
+                        return float(_conf.get(_k) or 0.0) >= 0.7
+                    except (TypeError, ValueError):
+                        return False
+                return _k in (x["conditions"] or {})     # 回落：旧库样本 / 裸 SQL 构造
+            present = [x for x in candidates if _explicit(x)]
             with_ = [x for x in present if x["conditions"].get(k)]
             without = [x for x in present if not x["conditions"].get(k)]
             if len(with_) >= 5 and len(without) >= 5:
@@ -5258,8 +6013,11 @@ class LayeredStore:
            这是「初始化」与「运行期治理写」的分离，不是闸的漏洞：播种内容不可由
            调用方控制。
         ③ **未**扩张到同表其它写点：`import_all`（备份恢复）经 `M13_TABLES` 含
-           `escalation_points` 的 `INSERT OR REPLACE` 直写 `conn`，**绕过本闸**——
-           该面属既有登记项 #125（「恢复路径绕过写入边界」）的范围，本件不动；
+           `escalation_points` 直写 `conn`，**绕过本闸**——该面属既有登记项 #125
+           （「恢复路径绕过写入边界」）的范围，本件不动。**后续进展**（R16-125-esc，
+           2026-10-16）：`import_all` 在该表上的**同 id 覆写面**已收窄（既有 id 行
+           不写、跳过数经 `skipped_existing_rows` 上报），但「**无密钥新增行**」
+           那一半仍在（属设计取舍/决策面，见 `import_all` docstring 末段）；
            `set_escalation_enabled` 已有闸（#130）；读面（`list_escalation_points`）
            不加闸。
         """
@@ -5351,10 +6109,27 @@ class LayeredStore:
 
         issue #130：此开关先前**无授权、无审计**。现补齐与
         `adjudicate_promotion` **同款**的 fail-closed 密钥闸，并把变更写入
-        `action_logs`（审计留痕可查）。"""
+        `action_logs`（审计留痕可查）。
+
+        #130 路 B 补丁（**角色判**，裁定帖原文：「开关限 PRIMARY」）：密钥闸只回答
+        「调用方是否持有设计者密钥」，**不回答「这个实例该不该动共享治理表」**——
+        同一部署下 SUB 实例天然持有同一环境变量（`verify_designer` 只比对本进程
+        `AEIS_DESIGNER_KEY`，见其 docstring 的 #156 事实边界；#586 已就同一理由判定
+        「密钥闸不构成角色隔离」）⇒ SUB 持密钥即可关掉**共享治理表**里的全部升级点
+        （危机响应面被单方面解除，本端读数确认）。现按本类既有单点
+        `layer_writable_by_role` 的同款判据（共享层仅 PRIMARY 可写）补角色判：
+        **仅 `Role.PRIMARY` 可关**，SUB 即便持密钥也 `PermissionError`。
+        闸序：密钥闸在前（既有句面与行为**逐字保留**，无密钥时两处写点的报错文案
+        仍逐字一致——`tests/test_issue749_escalation_write_gate.py` F 组钉此），
+        角色闸在后。**`action_logs` 审计留痕保留不动**（被角色闸拒时零审计行：
+        拒在写之前，与无密钥路径同形）。"""
         if not verify_designer(designer_key):
             raise PermissionError(
                 "D-007 设计者认证失败：密钥无效或未配置 AEIS_DESIGNER_KEY（fail-closed）")
+        if self.role != Role.PRIMARY:
+            raise PermissionError(
+                f"role={self.role.value} 无权启停共享治理表的升级点"
+                "（升级点表跨实例共享，仅 PRIMARY 可写；SUB 持密钥亦拒）")
         c = self.conn.cursor()
         c.execute("UPDATE escalation_points SET enabled=? WHERE id=?",
                   (int(enabled), escalation_id))
@@ -5362,6 +6137,85 @@ class LayeredStore:
             "escalation_toggle",
             f"set escalation {escalation_id} enabled={bool(enabled)}",
             outcome={"escalation_id": escalation_id, "enabled": bool(enabled)})
+
+    # ---- #130（路 B）：升级点的「按 code 直查」面与「待设计者裁决」待办表 ----
+
+    def get_escalation_point_by_code(self, code: str) -> Optional[Dict]:
+        """按 `ESC-00x` **直查**一条升级点（精确匹配），查不到返回 `None`。
+
+        #130（路 B · 裁定帖原文）：「新调用点用 `ESC-00x` 直查（精确、可审计、
+        不受分词影响），**不动** `check_escalation` 现有的双向包含」。本方法即那个
+        直查单点——`WHERE code=?` 精确等值，**不**经 `check_escalation` 的
+        子串/双向包含面（分词、触发词长度、信号写法都不再影响命中）。
+
+        为什么不复用 `check_escalation`（如实标注）：后者的契约是「**信号** → 升级点」
+        的模糊匹配（`signal in trigger` 双向包含，见其 docstring），拿它做「我已知是
+        哪条 code，取回该条」会在语义上引入无关的匹配面（信号恰好含别的触发词时
+        返回多条）。两个面用途不同，故直查单列，**不改** `check_escalation`。
+
+        边界（削掉的判别力）：①同 code 多行时取 `rowid` 最小的一条（`code` 列无
+        唯一约束，`add_escalation_point` 不禁止重复登记同 code）；②**不**过滤
+        `enabled`——本方法是「取回该条」，启用与否由调用方判（`check_escalation`
+        才按 `enabled=1` 过滤）；③返回形状与 `list_escalation_points` 的单行同形
+        （NULL 经 `or ""` 归一，与 #656 同口径）。
+        """
+        c = self.conn.cursor()
+        c.execute("SELECT * FROM escalation_points WHERE code=? ORDER BY rowid LIMIT 1",
+                  (code,))
+        r = c.fetchone()
+        if not r:
+            return None
+        return {"id": r[0], "code": r[1], "trigger": r[2] or "", "condition": r[3] or "",
+                "action": r[4], "severity": r[5], "enabled": bool(r[6]),
+                "created_at": r[7]}
+
+    @_transactional
+    def add_designer_todo(self, code: str, claim: str, action: str) -> str:
+        """登记一条「待设计者裁决」待办（#130 路 B），返回待办 id。
+
+        为什么有这张表（裁定帖原文，问题重述）：「这一步缺的语义是『谁在什么时候查
+        升级点、查到之后系统进入什么状态』——`check_escalation` 是一张已定义、已播种、
+        无人查的表，`needs_designer` 是一个已置位、无人读的标志」。本表把「已升级」
+        从返回体里的一句文案变成库内可查的事实（`status='open'`）。
+
+        ★**消费方尚未接线**（如实标注，裁定帖「存疑」节自陈未给出具体消费点）：
+        本表当前只有**登记面**（本方法）与**只读列举面**（`list_designer_todos` /
+        引擎门面同名方法），**没有**任何位置读它并推进 `status`（`open` →
+        `consumed`，`consumed_at` 列因此恒为 NULL）。推进方向按裁定帖对齐本仓既有的
+        设计者终裁唯一合规通路 `propose → verify → adjudicate`；具体消费点与状态推进
+        语义属**未决语义题**，本件不擅自接线（不新造第二条终裁入口，见 `designer_decide`
+        一节的裁定理由）。
+
+        为什么**不**设 `verify_designer` 密钥闸（如实标注取舍）：登记动作由引擎**自身**
+        的三级终裁（`_terminal_judgment` 判 `needs_designer`）触发，不是「调用方注入
+        任意治理判据」——`recursive_reflect` 是公开 API、任何调用方都不持有设计者密钥，
+        给登记加密钥闸等于让登记在该路径上**永远不可能发生**（本表也就永远为空）。
+        与 #749 的播种分离同款判据：「程序自身的记录动作」与「运行期由调用方注入的
+        治理写」分开。代价（如实标注）：`claim` 文本由调用方控制、会落库；但本表
+        当前**零消费方**，故该文本不构成任何触发判据，也不改变任何既有行为。
+        """
+        tid = f"todo_{uuid.uuid4().hex[:8]}"
+        c = self.conn.cursor()
+        c.execute("INSERT INTO designer_todos VALUES (?,?,?,?,?,?,?)",
+                  (tid, code, claim, action, "open", time.time(), None))
+        self._commit_locked()
+        return tid
+
+    def list_designer_todos(self, status: str = None) -> List[Dict]:
+        """列「待设计者裁决」待办（只读面，缺省全列，可按 `status` 过滤）。
+
+        按 `created_at` 升序（同刻按 `rowid`，保证确定性）。**只读**：不推进任何
+        状态、不写审计（见 `add_designer_todo` 的「消费方尚未接线」段）。
+        """
+        c = self.conn.cursor()
+        if status is None:
+            c.execute("SELECT * FROM designer_todos ORDER BY created_at, rowid")
+        else:
+            c.execute("SELECT * FROM designer_todos WHERE status=?"
+                      " ORDER BY created_at, rowid", (status,))
+        return [{"id": r[0], "code": r[1], "claim": r[2], "action": r[3],
+                 "status": r[4], "created_at": r[5], "consumed_at": r[6]}
+                for r in c.fetchall()]
 
     # ---------- 统计 ----------
 
@@ -5516,6 +6370,21 @@ class SpacetimeMemoryEngine:
         self._dedup_static = 0.85          # M5 去重静态基准（2.7.2 动态死区）
         self._dedup_window = 30
         self._dedup_history: List[float] = []
+        # #800：M5 去重「查→插」原子化锁。`add_perception` 的去重判定（全层
+        # 候选扫描 + Jaccard 阈值）与后续 `add_node` INSERT 之间原本无引擎级
+        # 互斥——store 的 `RLock`（`LayeredStore._lock`）只覆盖**单次**读写
+        # 调用，两线程的 SELECT 都可跑在对方 INSERT 之前 ⇒ 同内容并发写产出
+        # 多个重复节点（TOCTOU；实测 3 线程 × 20 次同内容 = 3 个不同 id）。
+        # 取 `RLock` 而非 `Lock`：跨度内含 provider/证据钩子调用面
+        # （`to_semantic_coordinates` / `_evidence.record`），若钩子再入
+        # `add_perception`（同线程）`Lock` 会自死锁；`RLock` 同线程可重入、
+        # 跨线程互斥语义不变。边界（如实标注）：①只护**单引擎实例内**的线程
+        # 并发——多进程共享同一库文件不在本件面（那是 sqlite 事务层职责）；
+        # ②`skip_dedup=True` 的写入不经判同键，本就不产生该竞态，锁对其
+        # 透传无害；③跨引擎实例（两个 `SpacetimeMemoryEngine` 指同一 db）
+        # 各持各的锁，竞态面仍在——issue 口径是「同一引擎实例多线程」
+        # （复现即此形态），多实例属另一件。
+        self._m5_dedup_lock = threading.RLock()
         self._context_max = self._load_context_max()  # M4 情境层 FIFO 上限（参照 AEIS）
                                                       # #246：跨进程持久化（见 _load_context_max）
         self._embedding_provider = None    # M1 语义检索提供者（duck-typed 注入，D-005）
@@ -5826,6 +6695,33 @@ class SpacetimeMemoryEngine:
     # 等属未定项，不擅定；见 `add_perception` 内 #225 段「边界」）。
     _POLARITY_TAGS = frozenset({"success", "failure"})
 
+    # ---- #803：M5 去重键的零宽字符剥除 ----
+    # 零宽字符（ZWSP U+200B / ZWNJ U+200C / ZWJ U+200D / BOM U+FEFF / WJ U+2060）
+    # 视觉不可见但**字节不同** ⇒ `char_bigram_jaccard` 的二元组集合被打散，
+    # `important\u200dsecurity\u200dnotice` 与 `important security notice` 判不同源，
+    # M5 内容去重被绕过——同视觉内容可造 2^n 个「隐形变体」节点（内容污染 /
+    # 存储膨胀 / importance 分散）。修法：**去重键**（Jaccard 与分歧/矛盾判据的
+    # 输入）先剥除零宽字符；**落库正文不动**（用户字节原样保留，只正规化判同键）。
+    # 判据来源：公开 issue #803（复现 `'important security notice'` vs 插 2 个
+    # U+200D 变体 id 不同；建议「去重前做 Unicode 正规化」）。
+    # 边界（如实标注）：①只剥**零宽字符**（视觉同义面），不做 NFKC 全量
+    # 正规化——NFKC 还会折叠全/半角、连字等**语义可见**的差异（如 `①`→`1`、
+    # `ﬁ`→`fi`），把「用户故意的字形变体」也判同，超出本件攻击面，不擅扩；
+    # ②`skip_dedup=True` 的主动沉淀路径不经判同键，不受影响；③剥除只作用于
+    # **新写入与候选的比对两侧**——库里既存的含零宽节点与新写入的干净内容
+    # 也能互相判同（候选侧同样剥除）。
+    _ZERO_WIDTH_RE = None  # 惰性编译（模块顶部不 import re，与 _assertion_divergence 同款）
+
+    @staticmethod
+    def _strip_zero_width(s: str) -> str:
+        """#803：剥除零宽字符（U+200B-U+200D / U+FEFF / U+2060）——M5 判同键的正规化。"""
+        import re as _re
+        cls = SpacetimeMemoryEngine
+        if cls._ZERO_WIDTH_RE is None:
+            cls._ZERO_WIDTH_RE = _re.compile("[\u200b-\u200d\ufeff\u2060]")
+        return cls._ZERO_WIDTH_RE.sub("", s)
+
+
     # ---- M5 去重的「条件空间」判同（lingshu #268） ----
     @staticmethod
     def _conditions_mergeable(a: ConditionSpace, b: ConditionSpace) -> bool:
@@ -6007,111 +6903,126 @@ class SpacetimeMemoryEngine:
         # 才再跑更宽的 `contradiction.conflict`（差异片段上的极性 / 含中文数字的数值 / 反义）。
         conflict_reason = ""
         merged = False
-        if not skip_dedup and isinstance(content, str) and content.strip():
-            threshold = self._effective_dedup_threshold()
-            # #223：候选集限同模态——modality 不同的不参与去重
-            # #297：候选集**不再按 importance/last_access 截断前 200 条**——旧实现
-            # `query_nodes(layer=KNOWLEDGE, limit=200)` 的排序是
-            # `ORDER BY importance DESC, last_access DESC`（为检索服务），知识层超过
-            # 200 条后，较早写入、未被访问的内容**对去重不可见** ⇒ 逐字相同的感知被
-            # 重复入库（同一事实拆成多份节点，增信/实体标签/访问计数分散在副本上，
-            # recall 被重复项占位）。改为**全层同模态候选**（`limit=-1`，SQLite
-            # LIMIT -1 = 不限条数，与同文件 `get_layer_nodes` 同款口径）。
-            # 判据来源：公开 issue #297（「去重视野只有 importance/last_access 前 200
-            # 条……较早写入的内容对去重不可见」）＋ 该 issue「修复建议 2：全层扫描」
-            # （经验标定；仓内理论章节未规定 M5 候选视野口径，追不到更早出处）。
-            # 边界（削掉的判别力/代价，如实标注）：①本修法取 issue 建议 2（全层扫描）
-            # ——写入代价随知识层规模**线性增长**（实测本机 2000 行候选装载 + 比对
-            # 约 0.03s）；②issue 建议 1 的「低频二元组 `content LIKE` 预筛」在本仓
-            # **无收益**——`nodes.content` 无索引，`content LIKE '%…%'` 同样是全表扫描
-            # （本仓索引只有 `idx_nodes_layer/idx_edges_source/idx_edges_target`，
-            # core.py:988-990），故不引入；③issue 建议 3（维持 200 并显式声明）**不**
-            # 采纳——那只是把漏去重写进文档，缺陷仍在；④仍按 `modality` 过滤（#223）。
-            candidates = self.store.query_nodes(layer=MemoryLayer.KNOWLEDGE,
-                                                modality=modality, limit=-1)
-            best, best_sim = None, 0.0
-            # #225：极性闸——**成败极性不同的节点不得合并**。旧实现只比正文二元组，
-            # 而 `record_action_sequence` 把成败写成正文前缀（`成功：`/`失败：`，且
-            # outcome 截到 `[:40]`）＋ `success`/`failure` 标签；动作序列越长，
-            # 「成功/失败」二字占的二元组比例越小 ⇒ 相似度越过阈值，失败经验被
-            # 并进「成功」节点（反之亦然）——对立结论在节点层**消失**，且以对方
-            # 身份留在图里（`recall`/`ActivationEngine` 只读 nodes）。
-            # 判据：候选与新写入的极性标签集必须**相等**（同为空亦相等）；「一侧有
-            # 极性、另一侧无」同样判不同（宁另立节点，不静默合并）。
-            # 判据来源：公开 issue #225「建议修复 1：M5 去重的候选必须极性一致：
-            # `success`/`failure` 不同的节点不得合并（最小改法：候选与新写入的极性
-            # 标签不一致时跳过该候选）」＋ issue #225 标题/复现（经验标定；仓内
-            # 理论章节未规定 M5 判同键的极性口径，追不到更早出处）。
-            # 边界（削掉的判别力，如实标注）：①极性词表只取 `success`/`failure`
-            # 两个既有标签，不引入 `negative`/`conflict` 等**尚不存在**的极性标签
-            # （issue 括注「以及将来的…」属未定项，不擅定）；②本闸只挡「合并」，
-            # 不改 `record_action_sequence` 的 outcome 截断口径（issue 建议 3 的
-            # 「保留末尾退出码」是另一条独立面）；③极性不同的两条写入**不**自动建
-            # `OPPOSITE` 边/落冲突（issue 建议 4 的 fail-loud 属策略取舍，本件只做
-            # 「不合并」这一最小面）。
-            new_polarity = set(tags or []) & self._POLARITY_TAGS
-            for n in candidates:
-                if (set(n.tags or []) & self._POLARITY_TAGS) != new_polarity:
-                    continue
-                # #268：条件空间也是判同键——条件不同即不同知识（见 docstring）
-                if not self._conditions_mergeable(cs, n.condition_space):
-                    continue
-                sim = LayeredStore.char_bigram_jaccard(content, n.content)
-                self._dedup_history.append(sim)
-                if len(self._dedup_history) > self._dedup_window:
-                    self._dedup_history = self._dedup_history[-self._dedup_window:]
-                if sim > best_sim:
-                    best_sim, best = sim, n
-            if best and best_sim >= threshold:
-                divergence = self._assertion_divergence(content, best.content)
-                if _contradiction.enabled():
-                    conflict_reason = (_contradiction.conflict(content, best.content)
-                                       or _MAIN_DIVERGENCE_REASON.get(divergence, ""))
-                    divergence = divergence or conflict_reason
-                if not divergence:
-                    self.store.increment_access(best.id)
-                    if getattr(self, "_evidence", None) is not None:
-                        # 证据账本开启时记一条证据（同源重复不增信由账本保证，见 core/evidence.py）
-                        self._evidence.record(best.id, source, self_generated=self_generated,
-                                              note="M5 去重命中")
-                    self.store.tag_node(best.id, "duplicate")
-                    # #223②：新输入的 tags / entities 取并集并入（旧实现全丢）
-                    for t in (tags or []):
-                        self.store.tag_node(best.id, t)
-                    for eid in (entities or []):
-                        self.store.tag_node(best.id, f"ent:{eid}")
-                    # #223②：importance 取两者较大值（旧实现：以 0.95 重复写入，
-                    # 原节点仍是 0.3）
-                    merged_node = self.store.get_node(best.id) or best
-                    if importance > merged_node.importance:
-                        self.store.update_node_importance(
-                            best.id, importance - merged_node.importance)
-                    merged_node = self.store.get_node(best.id) or merged_node
-                    merged_node.merged = True   # #223③：区分「已合并」
-                    return merged_node
-                divergent_with = best.id
-        semantic_coords = {}
-        if self._semantic_provider is not None:
-            # v1.7：结构化语义坐标（D-003 字段分离；文本节点写入 concept/radical/neural）
-            semantic_coords = self._semantic_provider.to_semantic_coordinates(content)
-        node = STNode(
-            id=f"node_{uuid.uuid4().hex[:8]}_{int(time.time()*1000)}",
-            content=content,
-            modality=modality,
-            spatial_coordinates=spatial_coordinates or {},
-            temporal_coordinate=time.time(),
-            condition_space=cs,
-            importance=importance,
-            confidence=0.5,
-            layer=MemoryLayer.KNOWLEDGE,
-            tags=tags or [],
-            semantic_coordinates=semantic_coords
-        )
-        self.store.add_node(node)
-        if divergent_with:
-            # 矛盾落账（#29②）：更正语句与原命题建 OPPOSITE 边 + 双方 conflict 标签，
-            # 待验证单元复核——不再静默「入库即一致」。
-            self.store.register_conflict(node.id, divergent_with)
+        # #800：M5 去重「查→插」原子化——去重判定（候选扫描+阈值+分歧）与
+        # `add_node` INSERT 收进同一把 `_m5_dedup_lock`（引擎级）。旧实现两段
+        # 之间无互斥：并发线程的 SELECT 都跑在对方 INSERT 之前，各自判「不存在」
+        # 后各自 INSERT ⇒ 同内容产出多个重复节点（TOCTOU；见 `__init__` 处
+        # #800 注释的判据来源与边界）。锁内含合并路径的整段副作用与新建路径的
+        # `register_conflict`（分歧账与判同决策同临界区）；锁外的实体标签/证据
+        # 记账只作用于已定 id，不参与判同，留在临界区外。
+        with self._m5_dedup_lock:
+            if not skip_dedup and isinstance(content, str) and content.strip():
+                threshold = self._effective_dedup_threshold()
+                # #223：候选集限同模态——modality 不同的不参与去重
+                # #297：候选集**不再按 importance/last_access 截断前 200 条**——旧实现
+                # `query_nodes(layer=KNOWLEDGE, limit=200)` 的排序是
+                # `ORDER BY importance DESC, last_access DESC`（为检索服务），知识层超过
+                # 200 条后，较早写入、未被访问的内容**对去重不可见** ⇒ 逐字相同的感知被
+                # 重复入库（同一事实拆成多份节点，增信/实体标签/访问计数分散在副本上，
+                # recall 被重复项占位）。改为**全层同模态候选**（`limit=-1`，SQLite
+                # LIMIT -1 = 不限条数，与同文件 `get_layer_nodes` 同款口径）。
+                # 判据来源：公开 issue #297（「去重视野只有 importance/last_access 前 200
+                # 条……较早写入的内容对去重不可见」）＋ 该 issue「修复建议 2：全层扫描」
+                # （经验标定；仓内理论章节未规定 M5 候选视野口径，追不到更早出处）。
+                # 边界（削掉的判别力/代价，如实标注）：①本修法取 issue 建议 2（全层扫描）
+                # ——写入代价随知识层规模**线性增长**（实测本机 2000 行候选装载 + 比对
+                # 约 0.03s）；②issue 建议 1 的「低频二元组 `content LIKE` 预筛」在本仓
+                # **无收益**——`nodes.content` 无索引，`content LIKE '%…%'` 同样是全表扫描
+                # （本仓索引只有 `idx_nodes_layer/idx_edges_source/idx_edges_target`，
+                # core.py:988-990），故不引入；③issue 建议 3（维持 200 并显式声明）**不**
+                # 采纳——那只是把漏去重写进文档，缺陷仍在；④仍按 `modality` 过滤（#223）。
+                candidates = self.store.query_nodes(layer=MemoryLayer.KNOWLEDGE,
+                                                    modality=modality, limit=-1)
+                best, best_sim = None, 0.0
+                # #225：极性闸——**成败极性不同的节点不得合并**。旧实现只比正文二元组，
+                # 而 `record_action_sequence` 把成败写成正文前缀（`成功：`/`失败：`，且
+                # outcome 截到 `[:40]`）＋ `success`/`failure` 标签；动作序列越长，
+                # 「成功/失败」二字占的二元组比例越小 ⇒ 相似度越过阈值，失败经验被
+                # 并进「成功」节点（反之亦然）——对立结论在节点层**消失**，且以对方
+                # 身份留在图里（`recall`/`ActivationEngine` 只读 nodes）。
+                # 判据：候选与新写入的极性标签集必须**相等**（同为空亦相等）；「一侧有
+                # 极性、另一侧无」同样判不同（宁另立节点，不静默合并）。
+                # 判据来源：公开 issue #225「建议修复 1：M5 去重的候选必须极性一致：
+                # `success`/`failure` 不同的节点不得合并（最小改法：候选与新写入的极性
+                # 标签不一致时跳过该候选）」＋ issue #225 标题/复现（经验标定；仓内
+                # 理论章节未规定 M5 判同键的极性口径，追不到更早出处）。
+                # 边界（削掉的判别力，如实标注）：①极性词表只取 `success`/`failure`
+                # 两个既有标签，不引入 `negative`/`conflict` 等**尚不存在**的极性标签
+                # （issue 括注「以及将来的…」属未定项，不擅定）；②本闸只挡「合并」，
+                # 不改 `record_action_sequence` 的 outcome 截断口径（issue 建议 3 的
+                # 「保留末尾退出码」是另一条独立面）；③极性不同的两条写入**不**自动建
+                # `OPPOSITE` 边/落冲突（issue 建议 4 的 fail-loud 属策略取舍，本件只做
+                # 「不合并」这一最小面）。
+                new_polarity = set(tags or []) & self._POLARITY_TAGS
+                # #803：判同键先剥零宽字符——零宽变体（ZWJ/ZWNJ/ZWSP/BOM/WJ）视觉相同
+                # 但字节不同，旧键直接比原始 content ⇒ 变体绕过 M5 去重各自成节点。
+                # 比对两侧都剥除：新写入侧与候选（库中既存节点）侧。
+                norm_new = self._strip_zero_width(content)
+                for n in candidates:
+                    if (set(n.tags or []) & self._POLARITY_TAGS) != new_polarity:
+                        continue
+                    # #268：条件空间也是判同键——条件不同即不同知识（见 docstring）
+                    if not self._conditions_mergeable(cs, n.condition_space):
+                        continue
+                    sim = LayeredStore.char_bigram_jaccard(
+                        norm_new, self._strip_zero_width(n.content))
+                    self._dedup_history.append(sim)
+                    if len(self._dedup_history) > self._dedup_window:
+                        self._dedup_history = self._dedup_history[-self._dedup_window:]
+                    if sim > best_sim:
+                        best_sim, best = sim, n
+                if best and best_sim >= threshold:
+                    # #803：分歧/矛盾判据同口径（两侧剥零宽）。
+                    norm_best = self._strip_zero_width(best.content)
+                    divergence = self._assertion_divergence(norm_new, norm_best)
+                    if _contradiction.enabled():
+                        conflict_reason = (_contradiction.conflict(norm_new, norm_best)
+                                           or _MAIN_DIVERGENCE_REASON.get(divergence, ""))
+                        divergence = divergence or conflict_reason
+                    if not divergence:
+                        self.store.increment_access(best.id)
+                        if getattr(self, "_evidence", None) is not None:
+                            # 证据账本开启时记一条证据（同源重复不增信由账本保证，见 core/evidence.py）
+                            self._evidence.record(best.id, source, self_generated=self_generated,
+                                                  note="M5 去重命中")
+                        self.store.tag_node(best.id, "duplicate")
+                        # #223②：新输入的 tags / entities 取并集并入（旧实现全丢）
+                        for t in (tags or []):
+                            self.store.tag_node(best.id, t)
+                        for eid in (entities or []):
+                            self.store.tag_node(best.id, f"ent:{eid}")
+                        # #223②：importance 取两者较大值（旧实现：以 0.95 重复写入，
+                        # 原节点仍是 0.3）
+                        merged_node = self.store.get_node(best.id) or best
+                        if importance > merged_node.importance:
+                            self.store.update_node_importance(
+                                best.id, importance - merged_node.importance)
+                        merged_node = self.store.get_node(best.id) or merged_node
+                        merged_node.merged = True   # #223③：区分「已合并」
+                        return merged_node
+                    divergent_with = best.id
+            semantic_coords = {}
+            if self._semantic_provider is not None:
+                # v1.7：结构化语义坐标（D-003 字段分离；文本节点写入 concept/radical/neural）
+                semantic_coords = self._semantic_provider.to_semantic_coordinates(content)
+            node = STNode(
+                id=f"node_{uuid.uuid4().hex[:8]}_{int(time.time()*1000)}",
+                content=content,
+                modality=modality,
+                spatial_coordinates=spatial_coordinates or {},
+                temporal_coordinate=time.time(),
+                condition_space=cs,
+                importance=importance,
+                confidence=0.5,
+                layer=MemoryLayer.KNOWLEDGE,
+                tags=tags or [],
+                semantic_coordinates=semantic_coords
+            )
+            self.store.add_node(node)
+            if divergent_with:
+                # 矛盾落账（#29②）：更正语句与原命题建 OPPOSITE 边 + 双方 conflict 标签，
+                # 待验证单元复核——不再静默「入库即一致」。
+                self.store.register_conflict(node.id, divergent_with)
         if entities:
             for eid in entities:
                 self.store.tag_node(node.id, f"ent:{eid}")
@@ -6573,13 +7484,12 @@ class SpacetimeMemoryEngine:
     #: `ENGINE_META_NONGOVERNANCE_KEYS`（见下），由
     #: `tests/test_issue671_engine_meta_guarded_keys_guard.py` 的 G5 扫描源码闭合：
     #: 将来新增一个启动回读键而忘了分类 ⇒ 守卫红。
-    ENGINE_META_GUARDED_KEYS = frozenset({
-        SELF_MODEL_META_KEY,
-        "verifier_config",
-        "attention_weights",
-        "context_max",
-        "structure_writer_schema",
-    })
+    #:
+    #: #768（本笔 · 单一真源）：集合**上提到 `LayeredStore.ENGINE_META_GUARDED_KEYS`**
+    #: ——写入口 `set_meta` / `merge_meta` 在 store 层，闸与键集分处两层时各写一份必
+    #: 漂移。本属性改为**别名引用**（不是复制），恒等性由
+    #: `tests/test_issue768_engine_meta_governance_guard.py` 的 `is` / `==` 双查钉死。
+    ENGINE_META_GUARDED_KEYS = LayeredStore.ENGINE_META_GUARDED_KEYS
 
     #: #671：源码内**全部** `engine_meta` 读点出现的键（机械闭合腿的分类全集）。
     #: 判据来源：`git grep -n 'get_meta(' lingshu/` ＋ `engine_meta WHERE key=` 的
@@ -6627,17 +7537,32 @@ class SpacetimeMemoryEngine:
         改写时仍后写者胜（不对 `trust_history` / `value_evolution` 做逐条归并，那属
         语义裁定面）；且合并**不回填内存**（本实例内存保持原样，只是落库值不再抹掉
         他方字段）。跨写者的同字段语义合并留设计者裁。
-        """
-        self.store.merge_meta(self.SELF_MODEL_META_KEY, self._merge_self_model_value)
 
-    def _merge_self_model_value(self, raw: Optional[str]) -> str:
+        保存失败时不推进本地合并基线：待保存改动继续被视为本地改动，可随下一次
+        正常保存一起重试。先取得 SQLite 写事务，再进入原有 store 锁，保持锁顺序。
+        调用方已有事务时仍参与该事务；不新增对调用方稍后回滚的运行态同步保证。
+        """
+        # Reserve the SQLite write transaction before the existing store lock,
+        # matching merge_meta's lock order. Publish only the exact local input
+        # whose write succeeded; a rejected save must leave it dirty for retry.
+        with self.store._tx():
+            with self.store._lock:
+                local = self.self_model.to_dict()
+                self.store.merge_meta(
+                    self.SELF_MODEL_META_KEY,
+                    lambda raw: self._merge_self_model_value(raw, local))
+                self._commit_locked()
+                self._self_model_baseline = local
+
+    def _merge_self_model_value(self, raw: Optional[str], local: Optional[Dict] = None) -> str:
         """`LayeredStore.merge_meta` 的取值回调：读回库内快照，按字段判归属（#483）。
 
         三方合并：基线（`_self_model_baseline`，本实例上次同步时的内存快照）／本实例
         现值（local）／库内现值（disk）。字段归属判据＝**本实例是否改过**：
           · `local[k] == base[k]` ⇒ 本实例未改过 ⇒ 采纳 `disk[k]`（他方更新不丢）；
           · `local[k] != base[k]` ⇒ 本实例改过 ⇒ 保留 `local[k]`（本实例的变更不丢）。
-        基线在返回前更新为 `local`（**不是** merged）——内存未回填，故该字段仍处
+        本回调只计算载荷；基线由 `_save_self_model` 在写入成功后更新为 `local`
+        （**不是** merged）——内存未回填，故该字段仍处
         「本实例未改动」态；若把基线置成 merged，下一笔写入就会把刚采纳的他方值
         当成「本地改动」再覆写回去（第二笔写复活丢更新）。
 
@@ -6650,14 +7575,14 @@ class SpacetimeMemoryEngine:
                 disk = json.loads(raw)
             except (TypeError, ValueError):  # 坏快照：按「无他方更新」处置，不阻断写入
                 disk = None
-        local = self.self_model.to_dict()
+        if local is None:
+            local = self.self_model.to_dict()
         base = getattr(self, "_self_model_baseline", None)
         merged = dict(local)
         if isinstance(disk, dict) and isinstance(base, dict):
             for k, v in disk.items():
                 if k in merged and merged[k] == base.get(k):
                     merged[k] = v
-        self._self_model_baseline = local
         return json.dumps(merged, ensure_ascii=False)
 
     def _load_self_snapshot(self) -> Optional[Tuple[Dict, str]]:
@@ -6925,7 +7850,14 @@ class SpacetimeMemoryEngine:
         #655：盘面坏值（非有限/超大）经 `_to_int_or` 回落 `DEFAULT_CONTEXT_MAX`
         （fail-closed）——旧写法在此抛 `OverflowError`，且该值会被 `set_meta`
         写进盘面，使**下次构造**也失败。判据来源：公开 issue #655。
+
+        #768：**改内存值之前**过治理键角色闸——非 PRIMARY 实例在**跨进程持久**
+        的库上 ⇒ `PermissionError`，内存与盘面都不动（内存库按库归属分档放行，
+        见 `_assert_meta_key_writable`）。为什么闸位必须在赋值之前：旧形态若
+        先改 `self._context_max` 再在落库处抛，内存已改而盘面未写 ⇒ 静默分叉
+        （与 `#191` 的 `update_self` 同款病：调用方看到异常，运行态却已变）。
         """
+        self.store._assert_meta_key_writable("context_max")
         self._context_max = _to_int_or(max_size, self.DEFAULT_CONTEXT_MAX)
         self.store.set_meta("context_max", str(self._context_max))
         self.store.enforce_context_cap(self._context_max)
@@ -7664,6 +8596,26 @@ class SpacetimeMemoryEngine:
         raise ValueError(
             "export 落点越界（%s）：须在 %s 任一白名单根内"
             % (out_path, roots))
+
+    def _guard_export_source_path(self, out_path: str):
+        """导出可覆盖旧备份，但不可覆盖本连接的数据库及事务辅助文件。"""
+        target = os.path.normcase(os.path.realpath(out_path))
+        # 使用连接报告的实际文件集合，而非只查初始化时的 db_path。
+        # 内存库的 file 为空；通过 ATTACH 增加的库也是正在使用的真源。
+        for _, _, database_path in self.store.conn.execute("PRAGMA database_list"):
+            if not database_path:
+                continue
+            for suffix in ("", "-wal", "-shm", "-journal"):
+                source = database_path + suffix
+                aliases_source = target == os.path.normcase(os.path.realpath(source))
+                if not aliases_source:
+                    try:
+                        # realpath 不合并硬链接；轨迹直写会经硬链接截断真源。
+                        aliases_source = os.path.samefile(out_path, source)
+                    except FileNotFoundError:
+                        pass
+                if aliases_source:
+                    raise ValueError("export 目标不可覆盖正在使用的 SQLite 数据库或辅助文件")
 
     WORLD3D_OUT_ROOT_ENV = "LINGSHU_WORLD3D_OUT_ROOT"
 
@@ -9513,6 +10465,21 @@ class SpacetimeMemoryEngine:
            问2 影响（预期输出/验证反馈·1.8）：predict_routes → 影响路线 + 分级
         3. 三级 终裁（维生系统·可逆性优先）：可逆性判定；重要决策升级设计者
         4. 归档（记录单元）：反思链写入行为日志 + 记忆（reflection_chain）
+
+        ★**返回契约**（#130 路 B 起，`status` 取值域**扩展一档**）：
+        - `"structural_blindspot"`：递归深度已达上限（3.12 运行约束），**不**归档；
+        - `"pending_designer"`：三级终裁判 `needs_designer=True`（不可逆 + 结构/存在级
+          影响）⇒ 已按 `ESC-002` 直查升级点并把「待设计者裁决」登记进 `designer_todos`
+          待办表（`verdict["todo_id"]`），**反思本身照常完成归档**（`high` 级只记录
+          不阻断，见 `_terminal_judgment` docstring）；
+        - `"reflected"`：其余情形（既有取值与语义**逐字不变**）。
+
+        ★**下游须同步**（如实标注）：这是返回契约的**扩展**，不是重命名——按
+        `report["status"] == "reflected"` 判「反思成功」的调用方，在升级场景下会
+        把 `pending_designer` 判为非成功。路 B 的语义正是「升级了、但反思照常完成」，
+        故调用方应改判 `status in ("reflected", "pending_designer")`（或用
+        `report["verdict"]["needs_designer"]` 判升级）。本件不改任何既有调用方，
+        也不改 `"reflected"` / `"structural_blindspot"` 两档的行为。
         """
         if depth >= max_depth:
             return {
@@ -9549,7 +10516,10 @@ class SpacetimeMemoryEngine:
         report["verdict"] = verdict
 
         # ---- 4. 归档（记录单元） ----
-        report["status"] = "reflected"
+        # #130 路 B：`needs_designer=True` ⇒ `status` 返回 `pending_designer`
+        # （其余取值与行为逐字不变；契约扩展与下游须同步见 docstring）。
+        report["status"] = ("pending_designer" if verdict.get("needs_designer")
+                            else "reflected")
         self._archive_reflection(report)
         return report
 
@@ -9566,19 +10536,29 @@ class SpacetimeMemoryEngine:
         判据来源：经验标定（本件 #426），仓内无规定视觉锚点数上限的理论章节。
         边界（削掉的判别力）：第 K+1 个起的锚点不进关系计算（本件只设上限，
         不引入「按置信度/距离择优取 K 个」的替代口径）。
+
+        #718：扫描形态取自 `vprim.ANCHOR_SCAN_PATTERN`（**单一真源**，与
+        `parse_anchor` 共用坐标组常量 `ANCHOR_COORD_PATTERN`）。此前本函数
+        **内联了第二份坐标组副本**（写死 `\\d+`）⇒ 负坐标锚点在 `finditer`
+        阶段就被滤掉（`regex_hits=0`），`parse_anchor` 侧的负号放宽（#730）
+        够不着这里，全负坐标 claim 的空间关系表整体静默失效（返回 None、
+        不报错）。修复只放宽坐标收负号，**不动**上限、截断上报语义、
+        关系计算与返回体形状。
         """
         try:
-            from ..world.vprim import parse_anchor, spatial_relation
+            from ..world.vprim import (ANCHOR_SCAN_PATTERN, parse_anchor,
+                                       spatial_relation)
         except ImportError:
             try:
-                from ..world.vprim import parse_anchor, spatial_relation
+                from ..world.vprim import (ANCHOR_SCAN_PATTERN, parse_anchor,
+                                           spatial_relation)
             except Exception:
                 return None
         anchors = []
         import re as _re
         total_matches = 0
         truncated = False
-        for m in _re.finditer(r"[\w\-]+@\(\d+,\d+,\d+,\d+\)", claim):
+        for m in _re.finditer(ANCHOR_SCAN_PATTERN, claim):
             total_matches += 1
             if len(anchors) >= self.MAX_VPRIM_ANCHORS:
                 truncated = True
@@ -9734,7 +10714,35 @@ class SpacetimeMemoryEngine:
 
     def _terminal_judgment(self, claim: str, verification: dict,
                            impact: dict) -> dict:
-        """三级 终裁（维生系统）：可逆性优先 + 结构一致性（3.12 三级）。"""
+        """三级 终裁（维生系统）：可逆性优先 + 结构一致性（3.12 三级）。
+
+        #130（路 B · 裁定帖原文）：`needs_designer=True` 时，此前只把
+        `action` 写成文案「升级设计者裁决（`designer_decide`）」——而
+        `def designer_decide` **全仓无定义**（唯一命中就是这行字符串），
+        且**没有任何位置**因这次升级而落库/留痕 ⇒ `needs_designer` 是一个
+        「已置位、无人读」的标志。现按路 B 两处最小接线：
+        ① 按 `ESC-00x` **直查**升级点（`store.get_escalation_point_by_code`，
+           精确匹配、不经 `check_escalation` 的子串/双向包含面——分词与信号写法
+           都不再影响命中）；
+        ② 把这次升级登记成一行**待办**（`store.add_designer_todo`，
+           `designer_todos` 表），`action` 文案改为指向该待办 id。
+        ★**不新造 `designer_decide` 函数**（裁定帖理由：本仓设计者终裁已有唯一
+        合规通路 `propose → verify → adjudicate`；另造一个等于给结构层开第二条
+        终裁入口）。★`high` 级**只记录不阻断**：本方法**不**因升级而改变返回值
+        语义、不新增阻断分支（`needs_designer` 的判定与取值逐字不变）。
+        选 `ESC-002`（P0保护触发：结构威胁/信任崩溃）为直查目标——本方法触发升级
+        的判据正是「不可逆 + 结构/存在级影响」，与 `ESC-002` 的 trigger/condition
+        同面；**不**取 `ESC-006`（设计者预备变更，指设计者位置/权责分离，与本处
+        判据不同面）。若 `ESC-002` 不在场（表被清空且未补齐）⇒ 登记仍发生、
+        `escalation` 记 `None`，**不**抛（升级登记不依赖升级点表在场）。
+        边界（削掉的判别力）：①直查取的是**该条升级点的 id/severity**（可审计的
+        引用），**不**据此判定是否需要升级（判定仍由可逆性 + 影响级给出，#154 的
+        词表边界不变）；②登记**不设**密钥闸（理由见 `add_designer_todo` docstring）；
+        ③待办登记失败（表缺失/库只读 ⇒ `sqlite3.OperationalError`）**不**阻断反思
+        ——只兜这一类可预期降级（**不**用宽 `except`，以免把真实缺陷一并吞掉），
+        并如实降级为「未登记」文案（反思链是既有公开 API，登记是新增观测面，
+        不得让它反噬主流程）。
+        """
         # 可逆性判定（工程代理：行为类型的可逆度）
         # #154：旧实现纯子串匹配 ⇒ 「不删除」「别覆盖」等**否定式**被误判为
         # 不可逆并升级设计者裁决（假阳性，且「不删除…只读查询」连可逆词都压不住）。
@@ -9766,13 +10774,29 @@ class SpacetimeMemoryEngine:
         # 重要决策升级：不可逆 + 结构/存在级影响 → 设计者终裁
         needs_designer = (reversibility == "不可逆"
                           and impact.get("impact_level") in ("结构", "存在"))
-        return {
+        verdict = {
             "principle": "可逆性优先 + 结构一致性（3.12 三级）",
             "reversibility": reversibility,
             "needs_designer": needs_designer,
-            "action": ("升级设计者裁决（designer_decide）" if needs_designer
-                       else "本次反思范围内可处理（可逆/半可逆）"),
+            "action": ("本次反思范围内可处理（可逆/半可逆）"),
         }
+        if needs_designer:
+            # #130 路 B：按 code 直查 + 登记待办（只记录不阻断）。
+            esc = self.store.get_escalation_point_by_code("ESC-002")
+            verdict["escalation_code"] = "ESC-002"
+            verdict["escalation_id"] = esc["id"] if esc else None
+            verdict["escalation_severity"] = esc["severity"] if esc else None
+            try:
+                todo_id = self.store.add_designer_todo(
+                    "ESC-002", claim, "设计者终裁（不可逆 + 结构/存在级影响）")
+            except sqlite3.OperationalError:
+                # 表缺失/库只读等**可预期的降级面**（见 docstring 边界③）：
+                # 只兜这一类（**不**宽 except——宽兜会把真实缺陷一并吞掉）。
+                todo_id = None
+            verdict["todo_id"] = todo_id
+            verdict["action"] = ("已登记待设计者裁决（待办 #%s）" % todo_id
+                                 if todo_id else "升级设计者裁决（待办登记失败）")
+        return verdict
 
     def _archive_reflection(self, report: dict) -> None:
         """记录单元归档：反思链 → 行为日志 + 记忆节点（reflection_chain）。"""
@@ -10047,10 +11071,18 @@ class SpacetimeMemoryEngine:
 
         注入的 set_weight 必须只改内存，不能执行外部 I/O。
         role='reflect' 沿用调用方复核/终裁责任。
+
+        #768：本方法**自开一句 `INSERT OR REPLACE INTO engine_meta`**，不经
+        `set_meta` ⇒ 只堵 `set_meta`/`merge_meta` 拦不住它（这正是「逐键补必再
+        漏」的实例）。故在 INSERT 之前过治理键角色闸：非 PRIMARY 实例在**跨进程
+        持久**的库上 ⇒ `PermissionError`，内存权重与 `engine_meta` 都不动（闸位
+        在 `policy.set_weight` 之前，连内存副本都不改；内存库按库归属分档放行，
+        见 `LayeredStore._assert_meta_key_writable`）。
         """
         policy = self._attention_policy
         if not policy or key not in policy.preference_weights:
             return False
+        self.store._assert_meta_key_writable("attention_weights")
         with self.store._lock:
             if self.store.conn.in_transaction:
                 raise RuntimeError("配置调整需要独立事务；请先结束调用方事务")
@@ -10189,6 +11221,59 @@ class SpacetimeMemoryEngine:
                           "confidence", "layer", "tags", "semantic_coordinates",
                           "state_attributes", "entity_id")
 
+    def _export_pending_promotions(self) -> List[Dict]:
+        """SUB 侧「待晋升副本」**单列分组**导出（#165 路 B 第 5 条 · 上行主方向）。
+
+        章程：上行（SUB → PRIMARY）是本通道的**主方向**。SUB 侧带
+        `SUB_PENDING_SYNC_TAG`（`pending_sync`）/ `external_anchor` 标签的副本落在
+        **本地知识层**（`_write_structure_record` / `register_external_anchor` 的 SUB
+        腿），而旧实现只导出共享层 ⇒ SUB 载荷恒 0 条，这些副本永远到不了父节点
+        （issue #165 标题主诉「SUB 上『待父节点同步』的终裁记录与外部锚点永远到不了
+        结构层」）。本组把它们**单列分组**导出。
+
+        为什么**不**混进 `sync_payload`：接收端 `apply_shared_sync` 只收共享层条目，
+        本地层条目一律 `rejected`（章程：本地层实例独立）⇒ 混进去会被整批拒收，等于
+        白推。故 `sync_payload` 的既有语义（**只含共享层**）**一字不动**，本组另立
+        顶层键。
+
+        分组口径：按**触发标签**分组（`pending_sync` 在前、`external_anchor` 在后，
+        组内按 `id` 升序 ⇒ 输出确定）。同一条副本同时带两个标签时**两组都出现**
+        （不是二选一——两组语义不同：一个是「待父节点同步」的通用标记，一个是
+        「外部校准输入」的来源标记）；每条以 `pending_group` 键标明来自哪一组，
+        **按 `id` 去重是消费侧的事**（本组如实保留两组的完整视图）。
+
+        边界（**未做**，如实声明）：本组**只有导出腿**——消费侧（PRIMARY 收到后走
+        `propose → verify → adjudicate` 三段式）**尚未接线**，属独立落地项；本件不替
+        它造第二条写入路径。载荷条目**不带**内容摘要哈希（#165 路 B 第 3 条
+        **暂缓落地**，见 `apply_shared_sync` docstring）。
+        """
+        cols = ", ".join(self.SHARED_SYNC_FIELDS)
+        shared = sorted(layer.value for layer in self.store.SHARED_LAYERS)
+        placeholders = ",".join("?" for _ in shared)
+        out: List[Dict] = []
+        for tag in (self.store.SUB_PENDING_SYNC_TAG, "external_anchor"):
+            c = self.store.conn.cursor()
+            # 标签列是 JSON 文本 ⇒ 按**带引号的整词**匹配（`"pending_sync"`），
+            # 不会把 `pending_sync_extra` 这类前缀相同的标签误收（B3 的判别力）。
+            c.execute(f"SELECT {cols} FROM nodes"
+                      f" WHERE layer NOT IN ({placeholders}) AND tags LIKE ?"
+                      f" ORDER BY id",
+                      shared + ['%"' + tag + '"%'])
+            for r in c.fetchall():
+                item = dict(zip(self.SHARED_SYNC_FIELDS, r))
+                item["spatial_coordinates"] = json.loads(
+                    item["spatial_coordinates"] or "{}")
+                item["semantic_coordinates"] = json.loads(
+                    item["semantic_coordinates"] or "{}")
+                item["state_attributes"] = json.loads(
+                    item["state_attributes"] or "{}")
+                item["condition_space"] = json.loads(
+                    item["condition_space"] or "{}")
+                item["tags"] = json.loads(item["tags"] or "[]")
+                item["pending_group"] = tag
+                out.append(item)
+        return out
+
     def prepare_shared_sync(self) -> Dict:
         """D-005 蜂群分层同步：导出**共享层**（锚点层 + 结构层）载荷供跨实例同步。
 
@@ -10204,14 +11289,40 @@ class SpacetimeMemoryEngine:
            无 `layer`/`confidence`/`condition_space`/`tags`/`state_attributes` ⇒
            接收端无法原样重建节点。现按 `SHARED_SYNC_FIELDS` 导出**全字段**
            （含完整 content），接收端 `apply_shared_sync` 可无损重建。
+
+        ★**#165 裁定路 B（本件只落 §4 + §5a）**：
+        ③ **§4 来源实例标识**——顶层加 `source_instance` 键，取本实例的
+           `self.self_model.identity`（★如实标注：裁定原文写「取 `self.identity`」，
+           但本引擎**没有** `identity` 属性——`identity` 是
+           `SpacetimeMemoryEngine.__init__` 的形参，唯一落点是 `self.self_model.identity`；
+           本线按唯一真源取值）。**无值时写显式 `None`**：键**必须在场**——
+           缺席是歧义源（消费侧分不清「旧版载荷」与「新版但没填」），`None` 才是
+           可机器判读的「我们知道这里没填」。
+        ④ **§5a 上行待晋升副本**——顶层加 `pending_promotions` 键
+           （见 `_export_pending_promotions`）。`sync_payload` 的语义（只含共享层）
+           **一字不动**。
+        ⚠**未落地（如实标注 · 与裁定帖有出入）**：路 B 第 1 条（新增 id 一律经
+        `propose → verify → adjudicate_promotion`、SQL 侧按 id 只 `INSERT OR IGNORE`）、
+        第 2 条（`overwrite=True` 必须过设计者密钥闸、无密钥 ⇒ `rejected`）、
+        第 3 条（载荷每条带内容摘要哈希、缺哈希即拒）**全部暂缓**——编排侧 2026-10-17
+        裁定：这三条与在-main 的既有守卫正面冲突（`tests/test_issue463_shared_sync_identity_guard.py`
+        的 C/D 组要求无密钥 `overwrite=True` 即 `applied`；`tests/test_issue771_778_import_atomicity_guard.py::test_g6c`
+        要求新 id 条目无密钥即 `applied`；两件守卫属对外面/设计者面，改它们须先回帖
+        征询），且本件自己的 P3/P6 也要求「首次 apply 即落库」。故本接收端**仍是共享层
+        的第三条写路径**（伪造载荷仍可直写共享层）——**这一面未收口**。
         判据来源：`LayeredStore` 类头 docstring（共享层/本地层划分）＋
-        `LayeredStore.SHARED_LAYERS`（core.py 内同款语义集）＋ 公开 issue #165。
+        `LayeredStore.SHARED_LAYERS`（core.py 内同款语义集）＋ 公开 issue #165
+        ＋ 本端 2026-10-16 对 #165 的裁定帖（`<!-- RULING-165 -->`）路 B 第 4/5 条。
         边界（削掉的判别力/未做项）：①只导出共享层——知识/情境/自我层**不进**
-           载荷（章程称其「实例独立」，导出属越界）；既有测试无一依赖旧载荷里的
+           `sync_payload`（章程称其「实例独立」，导出属越界）；既有测试无一依赖旧载荷里的
            knowledge 条目（grep `prepare_shared_sync|sync_payload` 在 `tests/` 0 命中）。
         ②接收端 `apply_shared_sync` 为**尽力而为**实现，未接入任何自动同步编排
            （无后台调度/网络传输）——「通道尚未建成」的其余部分**未做**，如实声明。
         ③本件**不动** `add_perception` 的 M5 去重吞第二次终裁记录（属另一件）。
+        ④`pending_promotions` **只有导出腿**，消费侧**尚未接线**（见其 docstring）。
+        ⑤载荷**不带边**、不带 `created_at` / `access_count`（issue 点名项）：裁定帖
+           「存疑」节把它列为**未定死**的设计细节（边的导出会连带 `source_evidence`
+           与验证态，面比节点大）⇒ 本件**未做**，如实声明。
         """
         c = self.store.conn.cursor()
         shared = sorted(layer.value for layer in self.store.SHARED_LAYERS)
@@ -10232,6 +11343,10 @@ class SpacetimeMemoryEngine:
             item["tags"] = json.loads(item["tags"] or "[]")
             payload.append(item)
         return {"sync_payload": payload,
+                # ★#165 路 B §5a：SUB 侧待晋升副本（单列分组；PRIMARY ⇒ 空表）
+                "pending_promotions": self._export_pending_promotions(),
+                # ★#165 路 B §4：来源实例标识（**键必在场**；无值 ⇒ 显式 None）
+                "source_instance": getattr(self.self_model, "identity", None),
                 "local_buffer_count": len(self._local_visual_buffer),
                 "layers": shared,
                 "note": "原始视觉数据不进共享层（盲区60/61）；仅共享层（锚点/结构）跨实例同步"}
@@ -10453,67 +11568,178 @@ class SpacetimeMemoryEngine:
         **尚未建成**；②`payload` 既可传 `prepare_shared_sync()` 的返回 dict，也可
         直接传其 `sync_payload` 列表。判据来源：`LayeredStore` 类头 docstring
         （共享层跨实例一致/本地层实例独立）＋ 公开 issue #165。
+
+        #771 ④（**整批原子**）：旧实现逐条 `store.add_node`（各自一条事务）⇒ 载荷
+        里混入**非 str content** 的条目时，前面合法条目**已落库**，坏条目在
+        `add_node` 的 #588/#594 闸处抛 `TypeError` 逃逸（本方法只捕
+        `PermissionError`）⇒ 「部分落库 + 未捕获异常」。另：`payload=None` 静默返回
+        空结果（调用方分不清「载荷为空」与「形态错」），`payload` 为字符串/整数时
+        分别以 `AttributeError` / `TypeError` 逃逸。
+        修法（最小 · 三条同向）：
+          ① **载荷形态前置判**：`None` / `str` / 非可迭代 ⇒ `TypeError`（可诊断
+             文案，不再静默返回空结果）；
+          ② **content 类型前置判**（与 `add_node` 的 #588/#594 **同源**判据）：
+             载荷任一 dict 条目带 `content` 键且非 str ⇒ 整批 `TypeError`、**零落库**
+             （在写任何一条之前判完，不靠回滚兜底）；
+          ③ **整批收进一条事务**（`self.store._tx()`；已在调用方事务中则自动降为
+             SAVEPOINT）⇒ 循环中途任何异常都回滚整批，不再出现「合法条目已落库」。
+        边界（如实标注 · 与既有契约的分界）：①**结构面**解析失败（缺字段 / 坏
+        JSON / 非法 layer）仍走 #165 既有契约 —— 逐条记入 `failed` / `rejected`、
+        **不**中断整批（本件不改该口径）；本件收口的是**内容类型面**（非 str
+        content）与**载荷形态面**，这两面取 fail-closed 整批拒绝。②`overwrite=True`
+        的覆盖语义、冲突上报形状、`identical` 判据（#463/#615）逐字不变。判据来源：
+        公开 issue #771 ④（「捕获范围改为逐条失败收集…并在整批提交前做类型预校验，
+        避免半截落库」）＋ `add_node` 的 #588/#594 content 类型闸（单一真源）。
+
+        ★**#165 裁定路 B §4（本件落地面）· 落库留痕**：本方法在**真的发生落库**时
+        （`applied` 非空）向 `action_logs` 追加一行
+        （`action_type='shared_sync_applied'`，见 `_audit_shared_sync_apply`），
+        使「这条是谁推上来的 / 推了几条 / 是不是覆盖」可查——旧实现零留痕（本线
+        实测 `shared_sync*` 行数 0）。**纯旁路**：不新增/不改任何返回键，不改任何
+        既有判定语义；全 `identical` 的幂等重放（零落库）**不**新增审计行。
+        ⚠**未落地（如实标注 · 与裁定帖有出入）**：路 B 第 1 条（新增 id 一律经
+        `propose → verify → adjudicate_promotion`、按 id 只 `INSERT OR IGNORE`）、
+        第 2 条（`overwrite=True` 须过设计者密钥闸、无密钥 ⇒ `rejected`）、
+        第 3 条（载荷每条带内容摘要哈希、缺哈希即拒）**全部暂缓**——编排侧
+        2026-10-17 裁定：与在-main 的既有守卫正面冲突
+        （`tests/test_issue463_shared_sync_identity_guard.py` C/D 组要求无密钥
+        `overwrite=True` 即 `applied`；`tests/test_issue771_778_import_atomicity_guard.py::test_g6c`
+        要求新 id 条目无密钥即 `applied`；两件属对外面/设计者面，改它们须先回帖征询），
+        且本件自己的 P3/P6 也要求「首次 apply 即落库」。⇒ **本接收端仍是共享层的
+        第三条写路径，伪造载荷仍可直写共享层——这一面未收口**（本线实测：
+        伪造新 id 锚点条目 `applied=['forged_new_anchor_147A']`、落库 `('anchor', ...)`）。
         """
         items = payload.get("sync_payload") if isinstance(payload, dict) else payload
-        items = items or []
+        if items is None:
+            raise TypeError(
+                "#771 ④ apply_shared_sync 载荷为空：`payload=None` 或 dict 缺 "
+                "`sync_payload` 键——旧实现静默返回空结果，调用方无法区分"
+                "「载荷为空」与「载荷形态错」（现 fail-closed）")
+        if isinstance(items, (str, bytes, bytearray)):
+            raise TypeError(
+                "#771 ④ apply_shared_sync 载荷形态非法：期望 list（或 "
+                "`{'sync_payload': [...]}`），收到 %s——旧实现以 AttributeError 逃逸"
+                % type(items).__name__)
+        try:
+            items = list(items)
+        except TypeError:
+            raise TypeError(
+                "#771 ④ apply_shared_sync 载荷形态非法：期望 list（或 "
+                "`{'sync_payload': [...]}`），收到不可迭代的 %s" % type(items).__name__)
+        # ② content 类型前置判（写之前判完 ⇒ 整批零落库，不靠回滚兜底）。
+        _bad_content = [(it.get("id"), type(it.get("content")).__name__)
+                        for it in items
+                        if isinstance(it, dict) and "content" in it
+                        and not isinstance(it.get("content"), str)]
+        if _bad_content:
+            raise TypeError(
+                "#771 ④ apply_shared_sync 整批拒绝：载荷含非 str content 条目 %d 条"
+                "（例：id=%r 类型=%s）——本方法整批原子写入，任一条目非法即零落库"
+                "（与 add_node 的 #588/#594 同源判据）"
+                % (len(_bad_content), _bad_content[0][0], _bad_content[0][1]))
         shared = self.store.SHARED_LAYERS
         applied, identical, conflicts, rejected, failed = [], [], [], [], []
-        for item in items:
-            nid = (item or {}).get("id")
-            try:
-                layer = MemoryLayer(item["layer"])
-                cs = ConditionSpace.from_json(json.dumps(item["condition_space"]))
-                node = STNode(
-                    id=nid, content=item["content"], modality=item["modality"],
-                    spatial_coordinates=item.get("spatial_coordinates") or {},
-                    temporal_coordinate=item["temporal_coordinate"],
-                    condition_space=cs,
-                    importance=item.get("importance", 0.5),
-                    confidence=item.get("confidence", 0.5),
-                    layer=layer,
-                    tags=list(item.get("tags") or []),
-                    semantic_coordinates=item.get("semantic_coordinates") or {},
-                    state_attributes=item.get("state_attributes") or {},
-                    entity_id=item.get("entity_id"))
-            except (KeyError, TypeError, ValueError) as exc:
-                failed.append({"id": nid, "reason": "%s: %s"
-                               % (type(exc).__name__, exc)})
-                continue
-            if layer not in shared:
-                rejected.append({"id": nid, "layer": layer.value,
-                                 "reason": "本地层不入共享层（章程：实例独立）"})
-                continue
-            # ★#463（本笔）：判同**按声明字段面**逐字段比对 —— 不再只比 `layer`+`content`。
-            # 旧口径只比两列 ⇒ 源端改了 `tags`/`confidence`/`importance`/
-            # `state_attributes` 等**内容以外**的字段后重放，接收端判为"完全一致"、
-            # 进 `identical` 且**不落库** ⇒ 元数据变化被吞掉却回报成功，两实例
-            # **静默分叉**（issue #463 的最小复现即此）。
-            # 取数：一条 `SELECT`，列 = `SHARED_SYNC_FIELDS`（与 `prepare_shared_sync`
-            # 同一常量 ⇒ 与写入字段同口径；不是 `SELECT *`，也不随条目数变 N+1）。
-            _erow = self._shared_sync_existing_row(nid)
-            if _erow is not None:
-                _xl = MemoryLayer(_erow["layer"])
-                _diffs = self._shared_sync_field_diffs(_erow, item)
-                if not _diffs:
-                    identical.append(nid)
+        # ③ 整批一条事务（#771 ④）：中途任何异常 ⇒ 整批回滚（不再半截落库）。
+        # 复用 `LayeredStore._tx` 的嵌套感知（已在事务中则只开 SAVEPOINT，不越权
+        # 提交调用方事务）；`add_node` 在事务内自动降为 SAVEPOINT，提交权留在本层。
+        with self.store._tx():
+            for item in items:
+                nid = (item or {}).get("id")
+                try:
+                    layer = MemoryLayer(item["layer"])
+                    cs = ConditionSpace.from_json(json.dumps(item["condition_space"]))
+                    node = STNode(
+                        id=nid, content=item["content"], modality=item["modality"],
+                        spatial_coordinates=item.get("spatial_coordinates") or {},
+                        temporal_coordinate=item["temporal_coordinate"],
+                        condition_space=cs,
+                        importance=item.get("importance", 0.5),
+                        confidence=item.get("confidence", 0.5),
+                        layer=layer,
+                        tags=list(item.get("tags") or []),
+                        semantic_coordinates=item.get("semantic_coordinates") or {},
+                        state_attributes=item.get("state_attributes") or {},
+                        entity_id=item.get("entity_id"))
+                except (KeyError, TypeError, ValueError) as exc:
+                    failed.append({"id": nid, "reason": "%s: %s"
+                                   % (type(exc).__name__, exc)})
                     continue
-                conflicts.append({"id": nid, "incoming_layer": layer.value,
-                                  "existing_layer": _xl.value,
-                                  "fields": [d["field"] for d in _diffs],
-                                  "diff": _diffs})
-                if not overwrite:
+                if layer not in shared:
+                    rejected.append({"id": nid, "layer": layer.value,
+                                     "reason": "本地层不入共享层（章程：实例独立）"})
                     continue
-            try:
-                self.store.add_node(node)
-            except PermissionError as exc:
-                # 共享层仅 PRIMARY 可写（章程）⇒ SUB 接收端写共享层被拒，
-                # 如实记入 failed，不让整批中断。
-                failed.append({"id": nid, "reason": "PermissionError: %s" % exc})
-                continue
-            applied.append(nid)
+                # ★#463（本笔）：判同**按声明字段面**逐字段比对 —— 不再只比 `layer`+`content`。
+                # 旧口径只比两列 ⇒ 源端改了 `tags`/`confidence`/`importance`/
+                # `state_attributes` 等**内容以外**的字段后重放，接收端判为"完全一致"、
+                # 进 `identical` 且**不落库** ⇒ 元数据变化被吞掉却回报成功，两实例
+                # **静默分叉**（issue #463 的最小复现即此）。
+                # 取数：一条 `SELECT`，列 = `SHARED_SYNC_FIELDS`（与 `prepare_shared_sync`
+                # 同一常量 ⇒ 与写入字段同口径；不是 `SELECT *`，也不随条目数变 N+1）。
+                _erow = self._shared_sync_existing_row(nid)
+                if _erow is not None:
+                    _xl = MemoryLayer(_erow["layer"])
+                    _diffs = self._shared_sync_field_diffs(_erow, item)
+                    if not _diffs:
+                        identical.append(nid)
+                        continue
+                    conflicts.append({"id": nid, "incoming_layer": layer.value,
+                                      "existing_layer": _xl.value,
+                                      "fields": [d["field"] for d in _diffs],
+                                      "diff": _diffs})
+                    if not overwrite:
+                        continue
+                try:
+                    self.store.add_node(node)
+                except PermissionError as exc:
+                    # 共享层仅 PRIMARY 可写（章程）⇒ SUB 接收端写共享层被拒，
+                    # 如实记入 failed，不让整批中断。
+                    failed.append({"id": nid, "reason": "PermissionError: %s" % exc})
+                    continue
+                applied.append(nid)
+            # ★#165 路 B §4（本件落地面）：**发生落库才留痕**（零落库 ⇒ 零审计，
+            # 见下方 A3：幂等重放全是 `identical`、不进这里 ⇒ 不产生噪声行）。
+            # 纯旁路：不改任何返回键、不改任何既有语义（判定结果已在上面算完）。
+            if applied:
+                self._audit_shared_sync_apply(
+                    source_instance=(payload.get("source_instance")
+                                     if isinstance(payload, dict) else None),
+                    applied=applied, overwrite=overwrite)
         return {"applied": applied, "identical": identical,
                 "conflicts": conflicts, "rejected": rejected, "failed": failed,
                 "overwritten": overwrite}
+
+    def _audit_shared_sync_apply(self, source_instance, applied: List[str],
+                                 overwrite: bool) -> None:
+        """共享层同步**落库**的 `action_logs` 留痕（#165 路 B §4 · 单一落点）。
+
+        口径：与 `set_escalation_enabled` 同族——同步通道是**治理写入**（写的是
+        不可遗忘、不可删的共享层），故「这条是谁推上来的、推了几条、是不是覆盖」
+        必须可查（旧实现零留痕：本线实测 `SELECT COUNT(*) FROM action_logs
+        WHERE action_type LIKE 'shared_sync%'` ⇒ 0）。
+
+        字段面：`summary` 记条数；`node_ids` 记本次落库的 id 列表；
+        `outcome` 记 `source_instance`（来源实例标识，**自述**）/ `applied_count` /
+        `overwrite`。来源标识取载荷顶层 `source_instance`（`prepare_shared_sync`
+        的导出键）；载荷**不带**该键（旧版载荷 / 直接传 list）⇒ 记显式 `None`
+        （「我们知道这里没填」，不是缺席）。
+
+        边界（如实标注）：①来源是**实例自述**、**不是**身份认证——来源可信属路 C
+        （签名/凭据）面，**未落地**；②审计是**旁路**，其失败不得改判调用方的
+        判定结果（故此处捕获并 `warnings.warn` 上报，不向外抛）；③本方法**只**在
+        真的发生落库时被调用（`applied` 非空）⇒ 全 `identical` 的幂等重放
+        **不**新增审计行。
+        """
+        try:
+            self.store.log_action(
+                "shared_sync_applied",
+                "共享层同步落库：%d 条（overwrite=%s）" % (len(applied),
+                                                           bool(overwrite)),
+                node_ids=list(applied),
+                outcome={"source_instance": source_instance,
+                         "applied_count": len(applied),
+                         "overwrite": bool(overwrite)})
+        except Exception as exc:          # 审计旁路：不得改判调用方结果
+            warnings.warn("shared_sync_audit_failed: %s" % exc)
 
     # ==================== v1.6 语义空间与备份（M11/M13 · REV1） ====================
 
@@ -10554,10 +11780,25 @@ class SpacetimeMemoryEngine:
         `migrate_v17_coordinates` 的 D-003 映射先例。
         边界（削掉的判别力）：写入前**不**校验 provider 输出是否为合法语义结构
         （非 dict 由 `_flat_semantic_to_nested` 的 `dict(flat or {})` 归一为 `{}`）。
+
+        ★本笔（治理写面「同列两套口径」收口 · P1）：写前补**角色闸**——非 PRIMARY
+        且目标行属共享层（`SHARED_LAYERS`）⇒ `PermissionError`（零落库）。判据复用
+        `LayeredStore.assert_node_writable_by_role` 单点（不另造第二份判据）；
+        闸落在 UPDATE 之前、且在既有的「无节点 / 无 provider ⇒ False」早退之后
+        ⇒ 返回值契约（`bool`）与早退语义逐位不变。未覆盖面（如实标注）：本闸只判
+        「层 × 角色」，不判调用方身份真伪（同进程伪造角色属 #779 威胁模型边界）。
         """
         node = self.store.get_node(node_id)
         if not node or not self._semantic_provider:
             return False
+        # ★本笔（治理写面「同列两套口径」收口 · P1）：本写点此前对
+        # `nodes.semantic_coordinates` **零角色闸** ⇒ SUB 可改写 PRIMARY 建的
+        # 锚点/结构层行的语义坐标（实测 `{}` → `{"protocol":{"concept":{"object":0.75}}}`，
+        # PRIMARY 跨实例读回同值）；而同列经 `add_node` / `update_node_confidence`
+        # 等路径受共享层角色闸约束 ⇒ 同一列两套口径。闸取 `store` 侧既有单点
+        # （`layer_writable_by_role` 的写前查旧行形态，`#127` D-07），落在 UPDATE 之前。
+        self.store.assert_node_writable_by_role(
+            node_id, action="改写共享层节点的 semantic_coordinates")
         coords = self._semantic_provider.to_coordinates(node.content)
         merged = dict(node.semantic_coordinates or {})
         for bucket, val in _flat_semantic_to_nested(coords).items():
@@ -10607,10 +11848,15 @@ class SpacetimeMemoryEngine:
     #: #691 P0-b：清单此前漏掉运行时建的 `flywheel_reuse`（复用观测），
     #: 「全库备份」不覆盖它 ⇒ 重启即丢；现该表已收进 `_init_tables`
     #: （构造期即建）并补进本清单与 `_SCHEMA_TABLES`。
+    #: #130（路 B）：`designer_todos` 同款——它由 `_init_tables` 构造期建出
+    #: （见该表 DDL 段注释），故必须同进两处清单，否则「全库备份」不含待办、
+    #: 且 `test_issue270_m13_table_coverage_guard` 的
+    #: `_SCHEMA_TABLES ⊆ M13_TABLES` 不变量当场红。
     M13_TABLES = ("nodes", "edges", "blindspots", "skills", "promotion_proposals",
                   "protections", "rejected_paths", "verifier_standards",
                   "escalation_points", "entities",
-                  "action_logs", "engine_meta", "gap_history", "flywheel_reuse")
+                  "action_logs", "engine_meta", "gap_history", "flywheel_reuse",
+                  "designer_todos")
 
     def _existing_tables(self) -> Set[str]:
         """当前库实际存在的表名（以 sqlite_master 为准，不假设 DDL 全集）。"""
@@ -10656,15 +11902,22 @@ class SpacetimeMemoryEngine:
         非缺陷：本方法自称「灾备基础」，重做备份必须能覆盖上一份；
         `tests/test_issue330_export_all_atomic_guard.py` 的 D 用例即锁定「二次导出到
         同一路径 ⇒ 覆盖」（本件**不改**该语义、不加拒覆盖、不动默认）。
-        `path` 由**调用方**给出、**不过** `_confine_*` 根闸——那两个闸的适用面是
-        world3d render / wm_simloop flush 的受保护产物，不是「凡签名含路径参数」；
-        灾备/迁移场景的目标本就在任意卷上，一律套根闸会直接打掉灾备能力。
+        `path` 由**调用方**给出，但**会过** `_confine_export_out_path` 根闸（#746）：
+        未显式配置 `LINGSHU_EXPORT_OUT_ROOT` 时**不限制**（保持既有行为——灾备/
+        迁移场景的目标照旧可在任意卷上）；显式配置后越界即 fail-closed 抛
+        `ValueError`（该闸与本方法的 `#698` 面正交：只判落点，不改覆盖语义）。
         本件只把「**静默**覆盖」改为**显式上报**：覆盖与否经返回值
         `overwrote_existing`（bool）回报，不再静默。
         边界（如实标注）：`overwrote_existing` 是**判定—替换之间**的一次
         `os.path.exists` 读数，只要求「上报」，**不**提供排他创建/并发排他
         （判定与 `os.replace` 之间存在竞态窗口；本件不引入先查后建语义）。
+        源库保护：当前连接的 SQLite 数据库及 WAL/SHM/journal 不可作为导出目标，
+        即使位于配置的白名单根内也拒绝；普通备份覆盖语义不变。
         """
+        # 旧备份仍可覆盖（#698）；源库及 WAL/SHM/journal 即使落在白名单根内也须拒绝。
+        output_path = self._confine_export_out_path(output_path)
+        target_path = os.path.realpath(output_path)
+        self._guard_export_source_path(target_path)
         c = self.store.conn.cursor()
         # #383：整趟导出必须**共用一个读快照**。旧实现逐表各发一条
         # `SELECT * FROM <t>`，Python sqlite3 对 SELECT 不隐式开事务 ⇒ 每条语句
@@ -10701,6 +11954,10 @@ class SpacetimeMemoryEngine:
             for table in self.M13_TABLES:
                 if table in existing:
                     data[table] = rows(table)
+            # #778-F4：孤儿保护行读数取在**同一读快照内**（与上方逐表读同事务），
+            # 否则「备份里有孤儿保护行」与「上报的孤儿数」可能跨时刻不一致。
+            _orphan_prot = (self.store.orphan_protection_rows()
+                            if "protections" in existing else [])
         finally:
             if own_tx:
                 self.store.conn.commit()
@@ -10723,9 +11980,6 @@ class SpacetimeMemoryEngine:
         # 边界（如实标注）：只搬**权限位**，不搬属主/属组（`chown` 需特权，未做）；
         # 目标不存在时行为与改前逐字一致（umask 默认）；不引入目录 fsync（#330
         # 面边界不变）；返回值 `path` 仍是**调用方给的**路径（对外契约不变）。
-        # #746：落点根闸（越界 fail-closed）。
-        output_path = self._confine_export_out_path(output_path)
-        target_path = os.path.realpath(output_path)
         tmp_path = "%s.tmp-%s" % (target_path, uuid.uuid4().hex[:8])
         # #698：覆盖已存在目标 ⇒ 显式上报（不改覆盖语义，只让「静默」消失）。
         # 读数取在 `os.replace` **之前**——replace 之后目标必在，届时再查恒为 True。
@@ -10757,7 +12011,16 @@ class SpacetimeMemoryEngine:
             raise
         return {"exported_nodes": len(data.get("nodes", [])), "path": output_path,
                 "tables": len(data) - 1, "skipped_tables": skipped,
-                "overwrote_existing": overwrote_existing}
+                "overwrote_existing": overwrote_existing,
+                # #778-F4：导出面**同时上报** `protections` 孤儿行——该表无外键声明
+                # （对照 `edges` 的 #93 孤儿预筛），孤儿保护行会**随本备份继续传播**
+                # （导入侧无对称预筛，见 `verify_integrity` docstring）。判据真源
+                # `LayeredStore.orphan_protection_rows`。**只上报、不清理**：备份内容
+                # 逐字不变（不静默丢弃保护行），孤儿行是否回收属设计取向（本件不引入
+                # 回收入口）。键为**追加**（与 #698 的 `overwrote_existing` 同例），
+                # 既有键与取值均不变。
+                "orphan_protections": len(_orphan_prot),
+                "orphan_protections_sample": _orphan_prot[:20]}
 
     @_transactional
     def import_all(self, input_path: str, designer_key: str = None) -> Dict:
@@ -10845,6 +12108,86 @@ class SpacetimeMemoryEngine:
         的 `orphan_edges`（按边×端点累加）**同名不同义**，读者勿混用。
         另注：`dangling_rows` 覆盖**全部**声明外键的表，本方法 `orphan_edges` 与
         `verify_integrity()` 的 `orphan_edges` 都只统计 `edges` 表。
+
+        #125 增量复现 · `escalation_points` 同 id 覆写面（本件）：
+        **来源**：公开 issue #125 的第三方增量复现（Yinfeng818，
+        2026-10-16T06:52:15Z），本端已发 `<!-- VERIFY-125-INC -->` 核验帖确认成立。
+        **根因**：`M13_TABLES` 含 `escalation_points`（该表 DDL 首列
+        `id TEXT PRIMARY KEY`），而本方法的三集合密钥判据（`immutable_rows` /
+        `guarded_meta` / `id_log_rows`）**无一含该表** ⇒ 它落**通用腿**
+        `INSERT OR REPLACE`：无密钥、无闸、无审计。最重形态是**同 id 覆写**——
+        备份以**既有种子 id** 写入 ⇒ 整行替换 ⇒ 不止能关升级点，还能**反转触发
+        语义、替换处置动作**（原 `action` 无副本），且走完 `action_logs` 增量 0。
+        同表 API 写面 `add_escalation_point` 已在 #749（`a7d1596`）接
+        `verify_designer` fail-closed + `log_action("escalation_add", …)` ⇒
+        同一张表两个治理写入面口径矛盾。
+        **本件修法（只收窄覆写面）**：该表写腿改为「既有 id 行不写、新 id 行才
+        写」——库内已有同 id ⇒ **跳过**并计入返回值 `skipped_existing_rows`
+        （按表计数，**显式上报、不静默丢弃**；与 `skipped_rows` / `missing_columns`
+        同形：非空才出现该表键）；SQL 侧同步由 `INSERT OR REPLACE` 换为
+        `INSERT OR IGNORE`（兜底备份自身含重复 id，取首条）⇒ 本表上不再存在任何
+        整行替换路径。`imported["escalation_points"]` 的口径仍是**实际写入行数**
+        （被跳过的既有行不计入，与 #721 的 `skipped_rows` 同步扣除同例）。
+        **为什么只收窄覆写面、不同时「要求密钥」**：`export_all` 产物**必然**携带
+        种子行（该表在 `M13_TABLES`、构造期即建表并播种 6 条），而「无密钥导入
+        export 产物照旧通过」由 `tests/test_issue125_import_boundary_guard.py::
+        test_e_knowledge_roundtrip_unaffected` 钉住（断言 `imported.nodes == 1`
+        且 `requires_review is False`）⇒ 若把该表并入密钥判据，每次知识层往返都要
+        密钥、该组当场转红，且打破既有承诺。
+        **未收窄的那一半（遗留，如实标注）**：无密钥仍可**新增**任意
+        `escalation_points` 行（新 id），注入的 `trigger`/`condition` 会参与
+        `check_escalation` 终裁匹配。这一半是**设计取舍**（要动上述既有契约），
+        属决策面，本件**不动**——`imported["escalation_points"]` 对新 id 行的口径
+        与修前逐字一致。守卫：
+        `tests/test_issue125_escalation_import_overwrite_guard.py`（含 `--mutate`
+        变异自证：改回 `INSERT OR REPLACE` ⇒ 恰好点红断言 A）。
+
+        #771 ②③（**同 id 换层闸 ＋ content 类型闸**，两闸均「先判后写、零落库」）：
+        ② 旧实现的换层判据（`immutable_rows` / `relayer_rows`）都要求「任一侧属
+        IMMUTABLE」⇒ **本地层之间**的换层（`context` → `knowledge`）不进任何闸，
+        备份可无密钥把既有情境层节点改成知识层并替换正文（无审计）；而同一换层经
+        `store.add_node` 必被 #127 拦（判据与层集合无关）⇒ 两条入口不对称。现补
+        `local_relayer_rows` 闸：既有 id 且两侧均不属 IMMUTABLE 而声明层不同 ⇒
+        `PermissionError`（涉 IMMUTABLE 的换层仍由上方 D-007 双列闸处理，持密钥
+        放行契约逐位不变）。③ 旧实现按备份行原样绑 SQL ⇒ 非 str `content` 全部落库
+        （`dict`/`list` 经 #721 归一为 JSON 文本、`int`/`bool` 由 TEXT 列亲缘性静默
+        转文本、`None` 落 NULL），而同一输入经 `add_node` **全部 `TypeError`**
+        （#588/#594 唯一写入汇聚点）。现补 `bad_content` 闸：`nodes` 行带 `content`
+        键而值非 str ⇒ `TypeError`（fail-closed，零落库，不做 `str()` 强转）。
+        边界：缺 `content` 键的行仍按 #652② 落 NULL 并计入 `missing_columns`（不抢该面）。
+
+        #778 F1/F2（**保护标记保真**）：旧实现走通用逐表 `INSERT OR REPLACE`，缺
+        `add_node` 的 #659 判据 ⇒ 备份行漏带 `no_forget` 时旧行的保护标签被**静默
+        抹掉**（无报错、无需密钥、无审计、`integrity_ok` 仍 True），而 `no_forget` ∈
+        tags 是 `_is_forget_protected`（#36 唯一真源）的两个真源之一 ⇒ 节点随即变可删。
+        现按 `add_node` 同款判据收口：① 旧行 tags 含 `no_forget` 而新行不含 ⇒ **并入**
+        新行 tags（只在旧行确有该标签时并入，`protections` 行登记的节点不据此新造标签）；
+        ② 旧行受保护 ⇒ 落 `protected_node_overwritten` 审计（同款 action_type）。
+        **不**拒绝覆盖（保住灾备恢复语义；与 #659 取舍逐字一致）。F2 的「行在、标签被抹」
+        由 ① 一并收口。新增返回键 `protected_tags_kept` / `protected_rows_overwritten`
+        供观测（与 #652②/#721 的「新增上报键」同例）。
+
+        #378（**回灌面**，外部报告人 @hawkongz 2026-10-12 追加评论）：写侧
+        `add_perception` / `add_node` / `tag_node` 的 `tags` 列已过 `_dumps_tags` 的
+        代理码点判据（含 U+D800–U+DFFF ⇒ `ValueError`），而**回灌面**此前绕过该判据：
+        备份里 tags 列是**转义后的 ASCII 文本**（存量行形态即字面量 `\\ud83d`），经本
+        方法 `json.loads` 回来仍是含真代理码点的 str ⇒ 毒行**重新造出**，实测无异常、
+        `integrity_ok=true`、列内含转义代理、库仍可继续写入（**零信号**）。该毒行随后
+        会让 `longterm_gate.write_snapshot` 的「已存在分支」UPDATE 抛
+        `UnicodeEncodeError` ⇒ 该行三列全未变（写入失效）。
+        修法：落库前**整批**判 `nodes` 行的 `tags` 列——经 `_json_tags` 归一后过
+        `_dumps_tags` 的**同一判据**（单一真源，不另造第二套扫描）；带代理码点 ⇒
+        `ValueError`（点名行 id）、fail-closed、零落库。
+        取向＝**拒收**而非「清洗后收」，理由三条（详见闸位注释）：①`_dumps_tags` 明写
+        「不做静默替换（替换会把污染源洗白）」；②与本方法既有整批判闸（#586/#478/#771）
+        同形；③合法备份零影响（本端实测往返逐位不变）。
+        边界（如实标注）：①只判 `nodes.tags`；`state_attributes` /
+        `semantic_coordinates` / `spatial_coordinates` 的回灌面同样绕过（#494 只加了
+        写侧闸），**不在本件范围**（另立件）；②`edges` / `entities` 等表的同类列未判
+        （报告人自陈未测）；③缺 `tags` 键的行不抢（仍走 #652② 的 `missing_columns`）；
+        ④非法 JSON / 非 list 形态的 `tags` 值不抢（`_json_tags` 容错口径）；⑤**不**迁移
+        本库既有存量毒行（`_dumps_tags` 边界①不变）；⑥含毒行的老备份回灌**整批失败**
+        （与 #586/#478/#771 的「整批拒」取舍逐字一致，不提供自动清洗）。
         """
         # #789：utf-8-sig 对无 BOM 备份逐字节等价、BOM 在场时剥掉（见 docstring）。
         with open(input_path, "r", encoding="utf-8-sig") as f:
@@ -10857,8 +12200,13 @@ class SpacetimeMemoryEngine:
         c = self.store.conn.cursor()
         existing = self._existing_tables()
         prior_layer = {}
+        prior_tags = {}
         if "nodes" in existing:
             prior_layer = {rid: lyr for rid, lyr in c.execute("SELECT id, layer FROM nodes")}
+            # #778 F1/F2：库内旧行 `tags` 列（JSON 文本）一次性读出——保护标记保真
+            # 判据要用它，且**不随行数变 N+1**（与 `prior_layer` 同一次批量读）。
+            prior_tags = {rid: tgs for rid, tgs in c.execute("SELECT id, tags FROM nodes")}
+        valid_layers = {m.value for m in MemoryLayer}
         immutable_rows = [r.get("id") for r in data.get("nodes", [])
                           if r.get("layer") in imm_values or prior_layer.get(r.get("id")) in imm_values]
         # #478（编排侧裁定 2026-10-15，二次校正）：换层行的**攻击面**已由上方双列闸闭合
@@ -10899,6 +12247,117 @@ class SpacetimeMemoryEngine:
                 f"role={self.role.value} 无权导入共享层（anchor/structure）行"
                 f"（{len(shared_rows)} 条）：共享层由父节点主控，即便持设计者密钥"
                 "亦不放行（#586，fail-closed，零落库）")
+        # #771 ②：同 id **换层**闸（复用 `add_node` 的 #127 判据，不另造第二套）。
+        # 旧实现的 `immutable_rows` / `relayer_rows` 判据都要求「任一侧属
+        # IMMUTABLE」⇒ **本地层之间**的换层（`context` → `knowledge`）不进任何闸：
+        # 备份可无密钥把既有情境层节点改成知识层并替换正文（#771 实测，且无审计）。
+        # 同一换层经 `add_node` 必被 #127 拦（`existing.layer != node.layer` ⇒
+        # `PermissionError`，**与层集合无关**，本地层之间照样拦）⇒ 两条入口同语义
+        # 却不对称，本闸把导入面接回同一真源。
+        # 口径：既有 id 且**声明层合法**、与库内旧行层不同、且**两侧均不属
+        # IMMUTABLE** ⇒ `PermissionError`（先判后写、fail-closed、零落库）。
+        # 涉 IMMUTABLE 的换层**不在此闸**——由上方 D-007 双列闸处理（无密钥拒；
+        # 持密钥放行并 labeled＋audited＋requires_review），该契约逐位不变
+        # （`tests/test_issue478_479_import_governance_guard.py::test_g1_keyed_relayer_allowed_but_labeled`）。
+        # 声明层非法（缺失/NULL/未知名）的行仍走下方 `rejected_invalid_layer` 逐行
+        # 拒行上报（#478 变体口径不变），不被本闸抢走。
+        # 边界（如实标注）：①本闸只堵**换层**；「同 id 同层替换正文」仍放行——与
+        # `add_node` 的 #127 边界逐字一致（同层覆盖只受 #659 保护标记保真约束）；
+        # ②拒整批而非逐行拒（与 #586/#478/#674 同取整批拒口径）；③不额外落审计
+        # （被拒即零状态变更，与 `add_node` 的 #127 同款；issue 建议的「并记审计」
+        # 未采纳，理由见回帖）。
+        local_relayer_rows = [(r.get("id"), prior_layer.get(r.get("id")), r.get("layer"))
+                              for r in data.get("nodes", [])
+                              if r.get("id") in prior_layer
+                              and r.get("layer") in valid_layers
+                              and r.get("layer") != prior_layer[r.get("id")]
+                              and prior_layer.get(r.get("id")) not in imm_values
+                              and r.get("layer") not in imm_values]
+        if local_relayer_rows:
+            _rid, _old, _new = local_relayer_rows[0]
+            raise PermissionError(
+                f"禁止同 id 换层（#127）：id={_rid} 现为 {_old}，备份声明为 {_new}"
+                f"（本地层换层行 {len(local_relayer_rows)} 条）（fail-closed，零落库）")
+        # #771 ③：`nodes.content` 的**类型闸**（与 `add_node` 的 #588/#594 **同源**判据）。
+        # 旧实现按备份行原样绑 SQL ⇒ 非 str 全部落库：`dict`/`list` 经 #721 归一成
+        # JSON 文本、`int`/`bool` 由 SQLite TEXT 列**亲缘性静默转文本**（`'12345'` /
+        # `'1'`）、`None` 落 SQL NULL —— 而同一输入经 `store.add_node` **全部
+        # `TypeError`**（#588/#594 的闸在唯一写入汇聚点）。两条入口同语义不对称，
+        # 且 `int`/`bool` 的静默转文本正是 #588 docstring 明令「比拒绝更坏」的形态。
+        # 修法：写前**整批**判（先判后写）——备份 `nodes` 行中凡**带 `content` 键**
+        # 而值非 str ⇒ `TypeError`（可诊断文案点名行 id 与实收类型）、fail-closed、
+        # 零落库。**不**做 `str()` 静默强转（同 #331/#588 口径）。
+        # 边界（如实标注）：①只判「存在 content 键且非 str」——**缺** content 键的行
+        # 仍按 #652② 既有契约落 NULL 并计入 `missing_columns`（本闸不抢该面）；
+        # ②本闸在 `nodes` 表上**优先于** #721 的 TEXT 列容器值归一：容器 content
+        # 此前走归一落 JSON 文本，现按 #588/#594 同源闸整批拒（属**收紧**，与
+        # #771 ③「复用 add_node 的类型闸、非 str 一律拒绝」一致）；③其余表（含
+        # `promotion_proposals.content_hash` 等非 content 语义列）不受影响——判据
+        # 只落在 `nodes` 表的 `content` 列上。
+        bad_content = [{"id": r.get("id"), "content_type": type(r.get("content")).__name__}
+                       for r in data.get("nodes", [])
+                       if "content" in r and not isinstance(r.get("content"), str)]
+        if bad_content:
+            raise TypeError(
+                "#771 ③ import_all 拒绝非 str content（收到 %s，共 %d 行，例 id=%r）："
+                "非 str 会以 BLOB/亲缘性转文本/NULL 静默落库，绕过 add_node 的 "
+                "#588/#594 类型闸（与 #331 同口径，fail-closed，零落库）"
+                % (bad_content[0]["content_type"], len(bad_content),
+                   bad_content[0]["id"]))
+        # #378（**回灌面**）：写侧 `add_perception` / `add_node` / `tag_node` 的
+        # tags 列已过 `_dumps_tags` 的代理码点判据（含 U+D800–U+DFFF ⇒ ValueError，
+        # fail-closed）⇒ 公开写侧不再产出毒行。但**回灌面**此前是绕过的：
+        # `export_all` 落盘的 tags 列是**转义后的 ASCII 文本**（`_dumps_tags`
+        # 旧默认/存量行形态即字面量 `\ud83d`），备份里这类行经本方法 `json.loads`
+        # 回来仍是**含真代理码点的 str**，再经 `_dumps_tags` 写回（或按 #721 归一）
+        # ⇒ 毒行**重新造出**，而写侧闸一次都没经过：实测无异常、`integrity_ok=true`、
+        # 列内含转义代理、且库仍可继续写入（**零信号**）。
+        # 这条之所以要堵：`export_all → import_all` 是仓内**自带的灾备/迁移路径**，
+        # 若回灌面被视作「存量面」而豁免，则 `_dumps_tags` 边界①「不迁移存量转义行」
+        # 隐含的前提「存量行只存在于本库、不可经备份传播」被这条路径推翻——毒行可
+        # 在库之间无限往返；且该毒行会让后续**正常写入路径**在该行上失效（
+        # `write_snapshot` 已存在分支的 UPDATE 抛 `UnicodeEncodeError`，三列全未变）。
+        # 修法（**取向＝拒收**，与写侧同口径、**单一真源不另造第二套校验**）：
+        # 落库前**整批**判——备份 `nodes` 行中凡**带 `tags` 键**且其值（经
+        # `_json_tags` 归一为 list：JSON 文本 / 真 list / None 三形态）含代理码点
+        # ⇒ `ValueError`（文案点名行 id 与首条拒绝理由）、fail-closed、零落库。
+        # 判据**复用** `_dumps_tags` 本体（只借其拒绝判据、丢弃其返回值），不在此
+        # 处手写第二份 `0xD800 <= ord(ch) <= 0xDFFF` 扫描。
+        # 为什么取「拒收」而非「清洗后收」（如实标注取舍）：
+        #   ① `_dumps_tags` 判据明写「**不**做静默替换（替换会把污染源洗白、掩盖
+        #      上游解码错误）」——回灌时剔除/替换代理等于在同一列上开一个洗白口，
+        #      与唯一真源的口径直接冲突；
+        #   ② 本方法既有的整批判闸（#586 共享层行 / #478 双列层闸 / #771 ②③ 换层
+        #      与 content 类型闸）**一律**取「先判后写、整批拒、零落库」⇒ 本闸与
+        #      之同形，不引入第四种处置口径；
+        #   ③ 合法备份零影响：判据只在备份行**确实**带代理码点时触发（本端实测
+        #      合法往返逐位不变），故灾备路径的正常用法不被收窄。
+        # 代价（如实标注）：真有一份**含毒行**的老备份时，回灌会**整批失败**而非
+        # 「恢复其余行」——与 #586/#478/#771 的取舍逐字一致（要恢复须先清洗该备份；
+        # 仓内**不**提供自动清洗，因为清洗＝洗白）。**不**迁移本库既有存量毒行
+        # （`_dumps_tags` 边界①不变，那是另一条面）。
+        # 边界（如实标注）：①只判 `nodes` 表的 `tags` 列；`state_attributes` /
+        # `semantic_coordinates` / `spatial_coordinates` 三列的回灌面同样绕过
+        # （#494 只加了写侧闸），**不在本件范围**（另立件）；②`edges` / `entities`
+        # 等其它表的同类列未判（报告人自陈未测，另议）；③只判「带 `tags` 键」的行
+        # ——缺 `tags` 键的行仍按 #652② 落 NULL 并计入 `missing_columns`（不抢该面）；
+        # ④非法 JSON 文本 / 非 list 形态的 `tags` 值仍按既有路径原样落库
+        # （`_json_tags` 的容错口径，本闸不扩到「tags 形状」面）。
+        bad_tags = []
+        for r in data.get("nodes", []):
+            if "tags" not in r:
+                continue
+            try:
+                _dumps_tags(_json_tags(r.get("tags")))
+            except ValueError as exc:
+                bad_tags.append({"id": r.get("id"), "reason": str(exc)})
+        if bad_tags:
+            raise ValueError(
+                "#378 回灌面拒绝含 UTF-16 代理码点的 tags 行（共 %d 行，例 id=%r；"
+                "理由：%s）：毒标签无法 UTF-8 编码，回灌后该行会让后续正常写入"
+                "（如 write_snapshot 已存在分支）静默失效，并随备份继续传播"
+                "（fail-closed，零落库）"
+                % (len(bad_tags), bad_tags[0]["id"], bad_tags[0]["reason"]))
         counts = {}
         skipped = []
         discarded = {}
@@ -10908,6 +12367,18 @@ class SpacetimeMemoryEngine:
         # #721：值形状面上报（容器值经 JSON 文本归一 / 无法容纳而跳过的行）。
         normalized_values = {}
         skipped_rows = {}
+        # #125 增量复现（同 id 覆写面）：`escalation_points` 上「库内已有同 id ⇒
+        # 不覆写」被跳过的行数，按表计数（与 `skipped_rows` / `missing_columns`
+        # 同形：只在非空时出现该表键）。**不许静默丢弃**是本仓既有口径。
+        skipped_existing_rows = {}
+        # #778 F1/F2：保护标记保真的两个收集面——①受保护节点被导入覆写的留痕
+        # （循环后统一落 `protected_node_overwritten` 审计，与 `add_node` 同款）；
+        # ②保护标记被并回的节点 id（供返回值与守卫观测）。`_protected_ids` 取一次
+        # （`protections` 行登记集，与 `add_node` 的 `_is_forget_protected` 同真源，
+        # 不随行数变 N+1）。
+        _overwrite_protected = []
+        _kept_no_forget = []
+        _protected_ids = set(self.store.get_protected_nodes())
         for table in self.M13_TABLES:
             if table not in existing:
                 skipped.append(table)
@@ -10916,6 +12387,28 @@ class SpacetimeMemoryEngine:
             if not rows:
                 counts[table] = 0
                 continue
+            # #125 增量复现（第三方 Yinfeng818 2026-10-16T06:52:15Z；本端
+            # `VERIFY-125-INC` 核验成立）：`escalation_points` 此前与其它表同走
+            # 通用腿 `INSERT OR REPLACE`，而该表**不在**三集合密钥判据内
+            # （`immutable_rows` / `guarded_meta` / `id_log_rows`）⇒ 无密钥、无闸、
+            # 无审计。最重形态是**同 id 覆写**：备份以**既有种子 id** 写入 ⇒ 整行
+            # 替换 ⇒ 不止能关升级点，还能**反转触发语义、替换处置动作**（原
+            # `action` 无副本），且走完零审计（`action_logs` 增量 0）。
+            # 修法（**只收窄覆写面**）：本表写腿改为「既有 id 行不写、新 id 行才写」
+            # ——库内已有同 id ⇒ **跳过并计数上报**（`skipped_existing_rows`）；
+            # 新 id 行照旧落库（无密钥新增面是设计取舍，本件不动，见 docstring）。
+            # 预筛置于列白名单计算之前 ⇒ `discarded_keys` / `missing_columns` /
+            # `normalized_values` 只统计**实际写入**的行（不把被跳过的既有行算进去）。
+            if table == "escalation_points":
+                existing_ids = {r[0] for r in c.execute("SELECT id FROM escalation_points")}
+                kept = [r for r in rows if r.get("id") not in existing_ids]
+                n_existing = len(rows) - len(kept)
+                if n_existing:
+                    skipped_existing_rows[table] = n_existing
+                rows = kept
+                if not rows:
+                    counts[table] = 0
+                    continue
             # ② 列名白名单（PRAGMA table_info）：非白名单键丢弃并计数。
             # #652②：键集合按**全部行**的并集计算，顺序＝跨行首次出现序（确定性
             # ——`_table_columns` 回的是 set，直接迭代会引入非确定列序，故显式
@@ -11015,6 +12508,35 @@ class SpacetimeMemoryEngine:
                         rejected_layer.append({"id": r.get("id"),
                                                "layer": repr(r.get("layer"))[:40]})
                         continue
+                    # #778 F1/F2：**保护标记保真**（复用 `add_node` 的 #659 判据，
+                    # 不另造第二套）。旧实现走通用逐表 `INSERT OR REPLACE` ⇒ 备份行
+                    # 漏带 `no_forget` 时，旧行的保护标签被**静默抹掉**（无报错、无需
+                    # 密钥、无审计、`integrity_ok` 仍 True），而 `no_forget` ∈ tags 是
+                    # `_is_forget_protected`（#36 唯一真源）的两个真源之一 ⇒ 节点随即
+                    # 变可删（`delete_node` 返回 True）。F2 是同一缺口的弱化形态：
+                    # `protections` 行仍在（仍拒删），但标签源被抹 ⇒ 双源背离。
+                    # 口径与 `add_node` 逐字同构：
+                    #   ① 旧行 tags 含 `no_forget` 而新行不含 ⇒ **并入**新行 tags
+                    #      （只在旧行**确有**该标签时并入——`protections` 行登记的节点
+                    #      另有真源，不据此新造标签，避免把「仅经 protections 行保护」
+                    #      的节点语义悄悄改写成带标签）；
+                    #   ② 旧行受保护（`_is_forget_protected`）⇒ 落
+                    #      `protected_node_overwritten` 审计，使「受保护节点被导入覆写」
+                    #      不再静默（审计在本次导入事务内一并提交）。
+                    # **不**拒绝覆盖（保住灾备恢复语义）：内容仍按备份落库，只保
+                    # 标记与可审计——与 #659 的取舍逐字一致。
+                    _old_tags = _json_tags(prior_tags.get(r.get("id")))
+                    _new_tags = _json_tags(r.get("tags"))
+                    if "no_forget" in _old_tags and "no_forget" not in _new_tags:
+                        _new_tags = list(_new_tags) + ["no_forget"]
+                        r["tags"] = _dumps_tags(_new_tags)
+                        _kept_no_forget.append(r.get("id"))
+                    if self.store._is_forget_protected(
+                            None, _protected_ids, node_id=r.get("id"), tags=_old_tags):
+                        _overwrite_protected.append({
+                            "id": r.get("id"), "old_tags": list(_old_tags),
+                            "new_tags": list(_new_tags),
+                            "protections_row": r.get("id") in _protected_ids})
                     # #574：importance 值域钳制（与 add_node 同款）
                     # 旧实现绕过 add_node 直接 INSERT，越界值原样落库
                     if "importance" in r:
@@ -11071,9 +12593,32 @@ class SpacetimeMemoryEngine:
                 if _skip_row:
                     skipped_rows[table] = skipped_rows.get(table, 0) + 1
                     continue
-                c.execute(f"INSERT OR REPLACE INTO {table} ({col_sql}) VALUES ({placeholders})",
+                # #125 增量复现：`escalation_points` 用 `INSERT OR IGNORE`——上方预筛
+                # 已把「库内既有 id」的行摘掉并计数，此处 OR IGNORE 只作**备份自身
+                # 含重复 id** 时的兜底（取首条），使本表上**不再存在任何整行替换
+                # 路径**（OR REPLACE 的 delete+insert 语义在本表被彻底关掉）。
+                # 其它表逐字不变（仍走通用腿 `INSERT OR REPLACE`）。
+                _verb = ("INSERT OR IGNORE" if table == "escalation_points"
+                         else "INSERT OR REPLACE")
+                c.execute(f"{_verb} INTO {table} ({col_sql}) VALUES ({placeholders})",
                           tuple(r.get(col) for col in cols))
             counts[table] = len(rows) - skipped_rows.get(table, 0)
+        # #778 F1/F2 硬配套：受保护节点被导入覆写 ⇒ 审计只追加（与 `add_node` 的
+        # #659 同款 action_type / 字段面）。**不**拒绝覆盖（灾备恢复语义不动）。
+        # 按 id 去重（备份自身可含重复 id 行 ⇒ 同一次导入只落一条审计）。
+        _seen_ow = []
+        for _ow in _overwrite_protected:
+            if _ow["id"] in _seen_ow:
+                continue
+            _seen_ow.append(_ow["id"])
+            self.store.log_action(
+                "protected_node_overwritten",
+                f"受保护节点 {_ow['id']} 被同 id 导入覆写（#778）：no_forget 标签已保真、"
+                f"protections 行不受影响，保护语义（拒删/免衰减）仍生效",
+                node_ids=[_ow["id"]],
+                outcome={"no_forget_in_new_tags": "no_forget" in _ow["new_tags"],
+                         "protections_row": _ow["protections_row"],
+                         "old_tags": _ow["old_tags"]})
         # ③ 硬配套：审计只追加（`action_logs` 无更新/删除路径）。
         if guarded_meta or id_log_rows:
             self.store.log_action(
@@ -11121,7 +12666,17 @@ class SpacetimeMemoryEngine:
                                            "sample": rejected_layer[:20]},
                 # #721：值形状面上报（新增键，与 #652② 加 `missing_columns` 同例）。
                 "normalized_values": normalized_values,
-                "skipped_rows": skipped_rows}
+                "skipped_rows": skipped_rows,
+                # #125 增量复现（同 id 覆写面）：`escalation_points` 上「库内已有同
+                # id ⇒ 不覆写」被跳过的**既有行数**（按表计数，非空才出现该表键）。
+                # 新增键，与 #652② `missing_columns` / #721 `skipped_rows` 同例。
+                "skipped_existing_rows": skipped_existing_rows,
+                # #778 F1/F2：保护标记保真的可观测量（新增键，同例）——
+                # `protected_tags_kept` 列出「旧行 tags 含 no_forget 而备份行不含 ⇒
+                # 已并入」的节点 id；`protected_rows_overwritten` 列出「受保护节点被
+                # 本次导入覆写（已落 protected_node_overwritten 审计）」的节点 id。
+                "protected_tags_kept": list(dict.fromkeys(_kept_no_forget)),
+                "protected_rows_overwritten": _seen_ow}
 
     def verify_integrity(self) -> Dict:
         """M13：完整性校验（边引用节点存在性 + 表计数）
@@ -11133,15 +12688,29 @@ class SpacetimeMemoryEngine:
         条两端全悬挂的边只计 1）。故上述最小场景下本指标给 **2**、那边给 **1**。
         两者各自都有 `integrity_ok` 判「不通过」，但**不是同一个指标**，勿混用
         （该关系的守卫见 `tests/test_core_dangling_metric_parity.py`）。
+
+        #778-F4：本面**同时**上报 `protections` 表的孤儿行（`orphan_protections`
+        ＋ 前 20 条样本 `orphan_protections_sample`，判据真源
+        `LayeredStore.orphan_protection_rows`）并纳入 `integrity_ok`——`protections`
+        表无外键声明（对照 `edges`），`PRAGMA foreign_key_check` 覆盖不到它，故
+        「保护登记指向不存在节点」这一损坏形态此前在本面**完全不可见**。
+        边界（如实标注）：`orphan_protections` 与 `orphan_edges` 是**两个独立指标**
+        （不同表、不同口径：前者按行、后者按「边×端点」），本面只把两者一并纳入
+        `integrity_ok`；`import_all()` 的 `integrity_ok`（经 `PRAGMA foreign_key_check`）
+        **仍看不到** `protections`（该表无外键）——导入侧对称预筛落在 `import_all`
+        内，属另一条修复线。
         """
         c = self.store.conn.cursor()
         c.execute("SELECT COUNT(*) FROM edges e LEFT JOIN nodes n ON e.source_id=n.id WHERE n.id IS NULL")
         orphan_source = c.fetchone()[0]
         c.execute("SELECT COUNT(*) FROM edges e LEFT JOIN nodes n ON e.target_id=n.id WHERE n.id IS NULL")
         orphan_target = c.fetchone()[0]
+        orphan_prot = self.store.orphan_protection_rows()
         return {"orphan_edges": orphan_source + orphan_target,
+                "orphan_protections": len(orphan_prot),
+                "orphan_protections_sample": orphan_prot[:20],
                 "stats": self.store.get_stats(),
-                "integrity_ok": (orphan_source + orphan_target) == 0}
+                "integrity_ok": (orphan_source + orphan_target) == 0 and not orphan_prot}
 
     # ==================== v1.5 认知增强（A-1~A-5 · ANALYSIS-ARGUS-REV1） ====================
 
@@ -11216,13 +12785,32 @@ class SpacetimeMemoryEngine:
         §2（`#139` 子缺陷 ①②③⑤）＋ 待裁清单 **B-1**（保护判定沿用既有角色闸、
         不另加密钥）/ **S-2=(a)**（保护命中 ⇒ 整体拒绝，全有或全无）/
         **S-3**（范围校验）。
-        削掉的判别力（边界，如实标注）：**未**引入真正的事务原子性——仓内
-        `delete_node` / `add_perception` 各自 `commit()`，而 `conn.commit()`
-        会释放（销毁）SAVEPOINT（本机实测 `ROLLBACK TO` 报 `no such savepoint`），
-        故无法在不改写入原语的前提下做到「任一步失败即整体回滚」；本件以
-        「A 前置校验 ＋ B 先挂后删」把**可预见的失败**全部提到写入之前。仍
-        **未**覆盖：`_attach` 中途的库级异常（会留下部分新节点，但旧子树无损）；
-        旧子树 `traverse` 的 `max_nodes=500` 截断（#139-G，本件不收口）。
+
+        #139 追评（字段类型类失败仍半截落库）：A 段校验只查「是 dict 且有 `id`」，
+        而 `_attach` 还会对 `importance` / `confidence` / `spatial_coordinates.
+        image2d` 分量做 `float()`、对 `node["id"]` 做字符串拼接、对 `content` 做
+        `json.dumps`。新子树里任一**非首个**节点带非数值字段（如
+        `"importance": "high"`、坐标分量为 `null`、`"confidence": "0.5x"`）时，
+        `_attach` 在**挂入中途**抛 `ValueError` / `TypeError`，而此前已挂的节点
+        各自落库 ⇒ parent 下留下半棵无主新子树、旧子树同时还在；调用方按
+        「抛错 = 没改动」重试，每次再多挂半棵（报告人最小复现：两次调用后
+        parent 的 hierarchical 后代数 1 → 5）。
+        修法（取向选择 · **事务边界**，不选「把 `float()` 全提到校验阶段」）：
+        把 ②③ 段（`_attach` 递归挂入 ＋ 旧子树删除）整体收进单一
+        `self.store._tx()` 事务边界。理由：① 枚举式校验须逐个追平 `_attach`
+        里的每一处 `float()` / 字符串拼接 / `json.dumps`，日后往 `_attach` 加字段
+        即静默重现本缺口；事务边界是**机械完备**的——凡写入中途抛错一律整体回滚。
+        ② 旧 docstring 曾断言「无法在不改写入原语的前提下做到整体回滚」，该断言
+        在 **#665** 之后已失效：`_commit_locked()` 具备嵌套感知（depth>1 时不提交、
+        不销毁外层 SAVEPOINT），故最外层 `self.store._tx()` 是**真事务**（本机实测：
+        边界内 `add_perception` 两次后抛错 ⇒ 库内 0 节点）。③ 嵌套调用安全：
+        `_tx()` 在 `conn.in_transaction` 为真时降级为 SAVEPOINT（实测已在
+        `store._tx()` 内调用本方法不报 `cannot start a transaction within a
+        transaction`，`tests/test_issue665_nested_tx_savepoint.py` 同面）。
+        边界（削掉的判别力，如实标注）：① 事务回滚只覆盖**库内**副作用——进程内
+        计数（`self._interaction_count`）与「本轮已计数」等内存态不随之回退
+        （既有语义，非本件引入；本件只消「半截落库」）。② 旧子树 `traverse` 的
+        `max_nodes=500` 截断（#139-G）仍不收口。
         """
         import json as _json
         # ---- A 前置校验（先判后动）：任一条不满足即整体拒绝，零改动 ----
@@ -11290,9 +12878,15 @@ class SpacetimeMemoryEngine:
                 _attach(sub, nid)
             return nid
 
-        new_root_id = _attach(new_subtree, parent_id)
-        # ③ 移除旧子树节点（关联边随删除级联清理）——挂入成功后执行；计数如实
-        deleted = sum(1 for nid in removed if self.store.delete_node(nid))
+        # ②③ 单一事务边界（#139 追评）：递归挂入新子树 ＋ 移除旧子树收进**同一**
+        # 事务。任一步抛错（含 `_attach` 中途的字段类型 `ValueError`/`TypeError`
+        # 与库级异常）⇒ 整体回滚、零残留、旧子树完好 ⇒ 「抛错 = 没改动」成立，
+        # 调用方重试不再多挂半棵。`_tx()` 具备嵌套感知：已在调用方事务中时只开
+        # SAVEPOINT（不越权提交），见 `_commit_locked` / `_tx` 的 #665 说明。
+        with self.store._tx():
+            new_root_id = _attach(new_subtree, parent_id)
+            # ③ 移除旧子树节点（关联边随删除级联清理）——挂入成功后执行；计数如实
+            deleted = sum(1 for nid in removed if self.store.delete_node(nid))
         return {"new_root_id": new_root_id, "new_nodes": counter["n"],
                 "removed_nodes": deleted}
 
@@ -11325,6 +12919,22 @@ class SpacetimeMemoryEngine:
         钳制）。#429：裁决、`engine_meta` 持久化与留史收进同一工作单元；任一步失败 ⇒
         盘上回滚**且**内存配置回退（否则「留史失败」会留下一个盘上没有、内存里生效的
         配置——正是本件要消的不一致）。
+
+        ★本笔（治理写面「同键两套口径」收口 · P2）：`approved` 分支在**改内存配置与
+        写 `engine_meta` 之前**补 `store._assert_meta_key_writable("verifier_config")`
+        ——`verifier_config` ∈ `ENGINE_META_GUARDED_KEYS`，非 PRIMARY（且非 `:memory:`
+        自有库）⇒ `PermissionError`。判据复用 `#768` 的既有单点（不另造第二份）。
+        边界（如实标注）：本闸只判「实例角色 × 库归属」，不判 `designer_key` 的持有
+        者身份——A-2 的密钥闸取自进程环境变量，同部署下 SUB 天然持有（`#586` 已就
+        同一理由判定「密钥闸不构成角色隔离」），故本闸是本写点唯一的角色隔离面。
+
+        #130（路 B · 裁定帖原文）：「`_terminal_judgment` 与 `adjudicate_verifier_standard`
+        按 `ESC-00x` 直查升级点，不再走子串匹配」。本方法即那两处调用点之一——`approved`
+        分支按 `ESC-005`（「验证标准终裁 / 验证标准变更四步制衡第④步」，与本方法同面）
+        **直查**（`store.get_escalation_point_by_code`，`WHERE code=?` 精确等值，不经
+        `check_escalation` 的双向包含面），并把该升级点的 id/severity 记进结构记录
+        metadata。★**只记录不阻断**：升级点缺席 ⇒ 记 `None`、不抛；`enabled` 不参与
+        判定；终裁的返回契约与事务边界**逐字不变**。
         """
         # 提交与发布都持锁，后续终裁才能基于刚提交的配置继续修改。
         with self.store._lock:
@@ -11339,6 +12949,15 @@ class SpacetimeMemoryEngine:
                     if not result:
                         return False
                     if result["status"] == "approved":
+                        # ★本笔（治理写面「同键两套口径」收口 · P2）：本方法此前
+                        # 自开一句 `INSERT OR REPLACE INTO engine_meta` 写治理键
+                        # `verifier_config` **无角色闸** ⇒ SUB 走完 A-2 四步即把
+                        # `dedup_static` 写穿库（实测 0.85 → 0.5，PRIMARY 重启回读
+                        # 生效）；而**同一键**经 `store.set_meta` 必被 `#768` 单点
+                        # 拒（实测 `PermissionError`）⇒ 同键两套口径。闸取 `store`
+                        # 侧既有单点，落在改内存配置与 INSERT **之前**（被拒时内存
+                        # 配置由下方 `except BaseException` 一并回退，零分叉）。
+                        self.store._assert_meta_key_writable("verifier_config")
                         self._apply_verifier_standard(result["param"], result["value"])
                         cursor.execute(
                             "INSERT OR REPLACE INTO engine_meta(key,value) VALUES (?,?)",
@@ -11346,11 +12965,25 @@ class SpacetimeMemoryEngine:
                         record = (f"{result['param']}="
                                   f"{self._verifier_config.get(result['param'], result['value'])}"
                                   f" 终裁通过（{adjudicator}）")
+                        # #130（路 B · 裁定帖原文）：本调用点此前与升级点表**零接触**
+                        # ——「验证标准变更四步制衡第④步」正是内置 `ESC-005` 的
+                        # condition，却从无代码按 code 去查它（`check_escalation` 的
+                        # 子串面也够不着：调用方手里的是 vid/param，不是信号文本）。
+                        # 现按 `ESC-00x` **直查**（精确、可审计、不受分词影响），
+                        # 把该升级点的 id/severity 记进本次结构记录 metadata ⇒
+                        # 「终裁发生了、它对应哪条升级点」成为库内可查的事实。
+                        # ★**只记录不阻断**：不因升级点缺席/被停用而改变终裁行为
+                        # （缺席 ⇒ 记 None，不抛；`enabled` 不参与判定）。
+                        _esc = self.store.get_escalation_point_by_code("ESC-005")
+                        _meta = {"standard_id": vid, "param": result["param"],
+                                 "value": self._verifier_config.get(result["param"],
+                                                                    result["value"]),
+                                 "escalation_code": "ESC-005",
+                                 "escalation_id": _esc["id"] if _esc else None,
+                                 "escalation_severity": _esc["severity"] if _esc else None}
                         self._write_structure_record(
                             record, "verifier_standard", source=adjudicator,
-                            metadata={"standard_id": vid, "param": result["param"],
-                                      "value": self._verifier_config.get(result["param"],
-                                                                         result["value"])},
+                            metadata=_meta,
                             _cursor=cursor)
             except BaseException:
                 # 盘上已随工作单元回滚；内存配置必须一并回退（见 docstring）。
@@ -11407,16 +13040,37 @@ class SpacetimeMemoryEngine:
     # ---- A-3 升级点清单化 ----
 
     def _seed_escalation_points(self):
-        """A-3 默认升级点（对齐 3.15/3.16/12.1；仅空表时播种）
+        """A-3 默认升级点（对齐 3.15/3.16/12.1；按 code 校验**补齐**）
 
         #749：播种走 `store._insert_escalation_point` **裸写**，不经带
         `verify_designer` 闸的 `store.add_escalation_point`——6 条是源码常量、
         属构造期初始化（`__init__` 调用本方法），不能要求部署方为「程序自带的
         默认值」配置密钥。守卫 `tests/test_issue749_escalation_write_gate.py`
         的 E 组锁住这条分离（改回带闸方法 ⇒ 未配置密钥的构造即抛 ⇒ 红）。
+
+        #130（路 B · 裁定帖原文）：「`_seed_escalation_points` 由『仅空表播种』
+        改为『按 code 校验补齐』：表非空但**缺某条内置 code** 时须补上该条；
+        已有 code 的行**不动**（不覆盖、不改写）」。旧口径（`if 表非空: return`）
+        把「表非空」当作「播种已完成」的证据，而两者不等价：任何一次运行期
+        `add_escalation_point`（或 `import_all` 回灌新 id 行）都会让表非空，此后
+        内置 6 条**永久补不齐**——危机响应面上静默缺格，且无任何信号。
+        新口径按**内置 code 集合**逐条校验（判据＝本方法内的 `seeds` 常量，
+        与表内容无关），缺哪条补哪条。
+
+        边界（削掉的判别力，如实标注）：
+        ① 只判「内置 code 在不在」，**不**校验已有行的 trigger/condition/action/
+           severity 是否被改写（裁定帖明写「已有 code 的行不动」，故**不**回写、
+           不「修正」——即便某行被改成了别的语义，本方法也不覆盖）；
+        ② 同 code 重复行（`add_escalation_point` 不禁止）视为「该 code 在场」，
+           不删除、不合并（去重属另一条面）；
+        ③ `enabled` 状态不在校验面内：内置 code 存在但被停用 ⇒ 视为在场、
+           不重新启用（启停是治理动作，构造期无权代作）。
         """
-        if self.store.list_escalation_points(enabled_only=False):
-            return
+        # #130：判据取「**按 code 直查**已播种集合」而非「表是否非空」。
+        # 走 `list_escalation_points` 一次取回（只读、常数代价：内置 6 行 +
+        # 运行期新增行），不逐条发 6 次点查。
+        present = {(p.get("code") or "") for p in
+                   self.store.list_escalation_points(enabled_only=False)}
         seeds = [
             ("ESC-001", "自维持迹象", "自主目标生成/存在危机感知", "立即上报维生系统", "high"),
             ("ESC-002", "P0保护触发", "结构威胁/信任崩溃", "维生系统终裁：冻结/回滚/隔离", "high"),
@@ -11426,11 +13080,29 @@ class SpacetimeMemoryEngine:
             ("ESC-006", "设计者预备变更", "设计者位置/权责分离相关", "维生系统终裁（1.4.3）", "high"),
         ]
         for code, trigger, condition, action, severity in seeds:
+            if code in present:
+                continue          # 已有 code 的行**不动**（不覆盖、不改写）
             self.store._insert_escalation_point(code, trigger, condition, action,
                                                 severity)
 
     def list_escalation_points(self, enabled_only: bool = True) -> List[Dict]:
         return self.store.list_escalation_points(enabled_only)
+
+    def get_escalation_point_by_code(self, code: str) -> Optional[Dict]:
+        """按 `ESC-00x` 直查一条升级点（#130 路 B · 引擎门面，透传 store 单点）。"""
+        return self.store.get_escalation_point_by_code(code)
+
+    def list_designer_todos(self, status: str = None) -> List[Dict]:
+        """列「待设计者裁决」待办（#130 路 B · **只读**列举面）。
+
+        ★**消费方尚未接线**（如实标注）：本方法只列举、不推进状态——仓内**没有**
+        任何位置读 `designer_todos` 并把 `status` 由 `open` 推进到 `consumed`
+        （`consumed_at` 因此恒为 NULL）。推进方向按 #130 裁定帖对齐本仓既有的设计者
+        终裁唯一合规通路 `propose → verify → adjudicate`；**具体消费点与状态推进
+        语义属未决语义题**（裁定帖「存疑」节自陈未给出），故本件只提供这一只读接口，
+        不擅自接线（见 `LayeredStore.add_designer_todo` docstring）。
+        """
+        return self.store.list_designer_todos(status)
 
     def add_escalation_point(self, code: str, trigger: str, condition: str,
                              action: str, severity: str = "medium",
@@ -11586,9 +13258,13 @@ class SpacetimeMemoryEngine:
 
         issue #698（静默覆盖）：`output_path` 给出时本方法 `open(..., "w")` **直写**
         该路径，目标已存在即**覆盖**（无根闸、无拒覆盖、无原子写——#330 只改了
-        `export_all` 的落盘原语，未及本方法）。`output_path` 由**调用方**给出、
-        **不过** `_confine_*` 根闸（那两个闸的适用面是 world3d render / wm_simloop
-        flush 的受保护产物）。本件只把「**静默**覆盖」改为**显式上报**：
+        `export_all` 的落盘原语，未及本方法）。`output_path` 由**调用方**给出，但
+        **会过** `_confine_export_out_path` 根闸（#746）：未显式配置
+        `LINGSHU_EXPORT_OUT_ROOT` 时**不限制**（保持既有行为）；显式配置后越界即
+        fail-closed 抛 `ValueError`（与 `_confine_simloop_out_path` /
+        `_confine_world3d_out_path` 同三条口径；但那两个闸的适用面是 world3d render /
+        wm_simloop flush 的受保护产物，本闸专收本方法与 `export_all`）。本件只把
+        「**静默**覆盖」改为**显式上报**：
         **仅当 `output_path` 给出**（即真发生落盘）时，返回值在落盘内容之上**多带**
         一个键 `overwrote_existing`（bool，读数取在 `open(..., "w")` **之前**）；
         批量模式（`output_path is None`，无落盘）**不加键**，返回体形状与 #57 契约
@@ -11597,6 +13273,8 @@ class SpacetimeMemoryEngine:
         边界（如实标注）：该键是「判定—写入」之间的一次 `os.path.exists` 读数，
         只要求「上报」，**不**提供排他创建（存在竞态窗口）；也不改本方法
         `open(..., "w")` 的直写原语（#330 面，本件未动）。
+        当前连接的 SQLite 数据库及 WAL/SHM/journal 不可作为输出路径；
+        源库保护同 `export_all`，普通轨迹文件仍可覆盖。
         """
         if cycle_id:
             nodes = self.store.get_nodes_by_tag(f"cycle:{cycle_id}", limit=20)
@@ -11636,6 +13314,7 @@ class SpacetimeMemoryEngine:
             # #746：与 `export_all` 同款白名单根闸（越界 fail-closed）。本方法
             # 此前不过根闸（#698 只把「静默覆盖」改为显式上报，未及根判定）。
             output_path = self._confine_export_out_path(output_path)
+            self._guard_export_source_path(output_path)
             # #698：覆盖已存在目标 ⇒ 显式上报。读数取在写入**之前**（写后目标必在）。
             # 只进返回值、不进文件：落盘内容形状与 #57 契约逐字不变。
             overwrote_existing = os.path.exists(output_path)
@@ -11912,6 +13591,30 @@ class SpacetimeMemoryEngine:
         边界（削掉的判别力）：本件**不**按结果严重度加权（issue 允许「由同一函数按
         结果严重度计算」；那需先裁定严重度来源，本件不引入）；`recall` 的排序仍会
         用 confidence 等其它信号。
+
+        #216（成功分支读同序列 open 负记忆 · 读侧接线）：失败 N 次的序列一旦成功，
+        旧实现**完全不读**负记忆——技能照常提取/强化，调用方从返回值里看不到任何
+        失败信息（负记忆表在技能面上「只写不读」）。现成功分支在建/升技能**之前**
+        用既有 `find_rejected_paths` 查**同序列**的 open 负记忆
+        （`path_type='action_sequence'`），命中即把读数
+        `neg_memory_open:<N>` 追加为该节点的标签（节点增量，返回类型仍是
+        `Optional[STNode]`——零契约变更）。
+        查询串＝`"操作序列失败：" + " > ".join(actions[:5])`，与失败分支写入
+        `register_rejected_path` 的 `description` **逐字同拼法** ⇒ 同序列必然命中
+        （含单步短序列；实测同序列 5 步 = 0.66、单步 = 0.31，均 > 阈值 0.15）。
+        边界（削掉的判别力，如实标注）：①读数走 **tags** 而非 content——不动正文
+        ⇒ 对 M5 去重（#225 的极性闸比正文二元组）与 `recall` 的文本面无任何影响；
+        代价是同一节点被多次强化且 N 变化时会累积多个计数标签（只增不删）；
+        ②匹配仍是**文本相似**（`char_bigram_jaccard > 0.15`）而非精确序列比对，
+        且失败分支写入的 `description` 带固定前缀「操作序列失败：」，短串之间会
+        因共享前缀 bigram 而越过阈值（实测异序列 `backup > verify > upload` 对
+        `deploy` 相似度 0.1778 ⇒ **可能虚报条数**）；③**不**拒绝成功技能化
+        （取向保守：照常提取/强化，只把读数带出）——fail-closed 拒绝不在本件边界内；
+        ④**不**新增 `subject_key`/`count` 结构化列（须升 `SCHEMA_VERSION`，属另一条
+        面，本件一字未碰）。
+        判据来源：本端（zcode 值守）2026-10-16 对 issue #216 的补充裁定「一项『无争议、
+        可直接落地』的读侧接线」（`.tmp/prowatch/reply216_ruling.md`）＋ 先例
+        `propose_promotion` 的读侧接线（`find_rejected_paths` + `path_type` 过滤）。
         """
         node = self.add_perception(
             f"[action_seq] {'成功' if success else '失败'}：{' > '.join(actions[:5])}（{outcome[:40]}）",
@@ -11919,6 +13622,14 @@ class SpacetimeMemoryEngine:
             tags=["action_sequence", "success" if success else "failure"]
                  + ([f"hint:{skill_hint}"] if skill_hint else []))
         if success and skill_hint:
+            # #216：先读同序列 open 负记忆，把读数带出（见上方 docstring）。
+            seq_key = " > ".join(actions[:5])
+            prior_failures = [
+                p for p in self.find_rejected_paths("操作序列失败：" + seq_key)
+                if p.get("path_type") == "action_sequence"]
+            if prior_failures:
+                self.store.tag_node(
+                    node.id, "neg_memory_open:%d" % len(prior_failures))
             # #200：绑定用**精确名称**（`get_skill_by_name`），不得用 `recall_skill`
             # 的 LIKE 子串召回——hint「备份」会命中「删除备份」并把备份步骤拼进
             # 删除技能、为删除技能增信（分诊表行 200 第 1 条）。
@@ -12044,11 +13755,38 @@ class SpacetimeMemoryEngine:
         return stats
 
     def run_maintenance_cycle(self, decay_factor: float = 0.02) -> Dict:
-        """P1-4 睡眠巩固：衰减 + 巩固 + 归纳（一次维护周期）"""
+        """P1-4 睡眠巩固：提升 + 衰减 + 巩固 + 归纳（一次维护周期）
+
+        #214（路 A · 接进维护周期）：本方法新增第一步
+        `promote_context_memories`——「短期先进情境层 → 睡眠巩固时再评估提升 → 不够格的自然遗忘」
+        这一三段式（`longterm_gate` 文件头与 `promote_context_memories` docstring 同款）
+        的第二步，此前在仓内**零生产调用方**——故「该提升的在同一批周期里
+        被删掉」。现把它接进维护周期，位置取**衰减之前**。
+
+        判据来源：公开 issue #214 的裁定（路 A）——「接进
+        `run_maintenance_cycle`，位置取衰减之前」与「不接进自动衰减线程」
+        （`start_auto_decay` 的线程体仍只调 `decay_cycle()`，本件未动）。
+
+        边界（如实标注 · 保守推理而非决定性读数）：裁定帖实测两种位置（decay 前 /
+        decay 后）在本例读数**相同**（都在 200 轮内提升成功，因够格节点在被删之前
+        先被救走）；取「之前」的理由是**保守推理**——若某节点进周期时
+        importance 已在删除线之下（历史库遗留 / 异常输入），衰减在**同一轮**就把它
+        删掉，删除不可逆，promote 放在之后便永远看不到它。**该推理未做独立实测。**
+
+        边界（成本）：每轮多一趟情境层遍历 + 逐候选评估，上界 = 情境层 FIFO
+        上限（默认 200 条）；`LongTermMemoryGate._known_grams` 已按**库签名**缓存全库
+        gram 表（#389 / #770②）⇒ 成本**不随全库正文量增长**。裁定帖把「按节点做
+        差集」列为**可选优化、非本件前置条件** ⇒ 本件不做。
+
+        不适用条件：需要「巩固只在显式调用时发生」的可控性时（裁定帖路 B）
+        ——本方法一旦被调用即自动提升，不再可选。
+        """
+        promoted = self.promote_context_memories()
         self.decay_cycle(decay_factor)
         cstats = self.consolidate_cycle()
         induced = self.induce_concepts()
-        return {"decay": decay_factor, "consolidation": cstats, "induced_concepts": len(induced)}
+        return {"promote": len(promoted), "decay": decay_factor,
+                "consolidation": cstats, "induced_concepts": len(induced)}
 
     # ==================== 衰减与维护 ====================
 
@@ -12078,6 +13816,14 @@ class SpacetimeMemoryEngine:
         决策：归档（tags 加 archived + importance 降至 archived_imp）——
         recall 的 importance 加权自然降权（可逆：恢复 importance 即解除）。
         锚点/结构层 no_forget 保护；KNOWLEDGE 层不动（长期知识）。
+
+        #781（口径声明 · **只声明现状、不改语义**）：本函数的跳过条件是
+        `"no_forget" in tags or "archived" in tags` ⇒ **认 `archived`**；而
+        `LayeredStore.decay_cycle` 的情境层删除段经 `_is_forget_protected` 判定，
+        只认 `no_forget` ∪ `protections` 行、**不认 `archived`**。故「归档即保护」
+        的直觉在两条路径上结论相反：仅带 `archived` 的情境节点被本函数跳过
+        （既不归档也不删），却仍被 `decay_cycle` 照常删除。本件**不**统一两者
+        （属设计面裁定，见 issue #781 回帖），只把分叉显式落到注释。
 
         #210（本函数三处错误，逐条修）：
           ① `if (imp or 0.5) < low_value` —— `0.0` 是假值，被 `or` 替换成 0.5，
@@ -12397,15 +14143,23 @@ class SpacetimeMemoryEngine:
         检索时命中相似节点会附「这两个的区别」提示——细化条件得到精确知识。"""
         try:
             import sys as _s
-            _kb = r'<local-path> Files\2_ai\knowledge-base'
+            # issue #10（② 在 core.py 的未收口子项）：原赋值是导出脱敏把**路径操作数**
+            # 改写成中性占位字面量后的残留——`os.path.isabs` 在 Windows/Linux 均恒
+            # False ⇒ 本注入在公开仓**恒不发生**（死代码），故该残留已删除。
+            # 现改为**环境变量驱动**（#10 §三.③ 的导出精修先例：本机字面量 → 环境变量）：
+            # 取值面 = 部署方显式声明的组件根 `LINGSHU_COMPONENT_ROOT`（`os.pathsep`
+            # 多根，与 `activation.py` 的 `LINGSHU_DATA_ROOT` 同款约定；真源即
+            # `component_resolver.configured_roots`，不另造第二份解析）。未声明 ⇒ 空表
+            # ⇒ **不做任何注入**（保持 #381 的 fail-safe 语义）。
             # issue #381：只接受**绝对**条目。相对条目（含空串 / `.`）的解析目标
             # 由判定时的 cwd 决定（判据同 `lingshu/_pathguard.py::_is_relative_entry`）
             # ⇒ 插进 `sys.path` 等于把本包 import 期刚消除的 cwd 面还给**普通**
             # import：cwd 下任何同名裸模块（含标准库名）可被抢先执行。白名单组件名
             # 由 `component_resolver` 的 meta_path finder 拦截、不受此影响；受影响的
             # 恰是非白名单裸名，故本处一律不插相对条目。
-            if os.path.isabs(_kb) and _kb not in _s.path:
-                _s.path.insert(0, _kb)
+            for _kb in reversed(_configured_component_roots()):
+                if os.path.isabs(_kb) and _kb not in _s.path:
+                    _s.path.insert(0, _kb)
             from pattern_separation import PatternSeparation
             ps = PatternSeparation(self)
             return ps.scan(limit=limit)
@@ -12420,11 +14174,14 @@ class SpacetimeMemoryEngine:
         不代表真实发生的过去就是如此（0.0.3 局部不可知）。"""
         try:
             import sys as _s
-            _kb = r'<local-path> Files\2_ai\knowledge-base'
-            # issue #381：同 `pattern_separation_scan`——只接受绝对条目，
-            # 相对条目的解析目标由 cwd 决定，不得插进 `sys.path`。
-            if os.path.isabs(_kb) and _kb not in _s.path:
-                _s.path.insert(0, _kb)
+            # issue #10：同 `pattern_separation_scan`——脱敏残留的字面量已删除，
+            # 改由 `LINGSHU_COMPONENT_ROOT`（`component_resolver.configured_roots`）
+            # 环境变量驱动；未声明 ⇒ 不做注入。
+            # issue #381：只接受**绝对**条目，相对条目的解析目标由 cwd 决定，
+            # 不得插进 `sys.path`。
+            for _kb in reversed(_configured_component_roots()):
+                if os.path.isabs(_kb) and _kb not in _s.path:
+                    _s.path.insert(0, _kb)
             from scene_reconstruction import SceneReconstruction
             sr = SceneReconstruction(self)
             return sr.reconstruct(clue, depth=depth, max_nodes=max_nodes)

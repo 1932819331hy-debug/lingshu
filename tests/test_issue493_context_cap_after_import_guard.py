@@ -242,6 +242,12 @@ def test_m7_return_shape_and_counts_unchanged(tmp_path, designer_key):
     那一行修法没有改返回体形状」——正确锚是「原有键一个不少、取值不变」，不是
     「键集合恰等于某一刻的快照」（后者会被任何合法的追加键打破）。
     故改为**超集**（`>=`）：下方全部取值断言逐字保留，另断旧键一个不缺。
+
+    同上（#130 跨批冲突）：内层 `ret["imported"]` 当时**漏改**、仍是「恰等」。
+    #130 给引擎新增治理表 `designer_todos`（进 `_SCHEMA_TABLES` / `M13_TABLES`，
+    随导出/导入参与备份），`import_all` 的 `imported` 计数因此多出该键——同属
+    **追加**。故内层与顶层同款重锚为**超集**；取值断言（nodes=600 /
+    engine_meta=2 / escalation_points=6）逐字保留。
     """
     bk, _ = _backup_with_context(tmp_path, n=600, cap=1000, name="m7.json")
     dst = _engine(tmp_path / "m7.db")
@@ -252,11 +258,11 @@ def test_m7_return_shape_and_counts_unchanged(tmp_path, designer_key):
         "orphan_edges_sample", "integrity_ok", "discarded_keys", "missing_columns",
         "immutable_rows", "requires_review", "rejected_invalid_layer",
     }, "M7 返回体缺了旧键（改名/删除）：%r" % (sorted(ret.keys()),)
-    assert set(ret["imported"].keys()) == {
+    assert set(ret["imported"].keys()) >= {
         "nodes", "edges", "blindspots", "skills", "promotion_proposals",
         "protections", "rejected_paths", "verifier_standards", "escalation_points",
         "action_logs", "engine_meta", "gap_history", "flywheel_reuse",
-    }, "M7 imported 形状变了：%r" % (sorted(ret["imported"].keys()),)
+    }, "M7 imported 缺了旧键（改名/删除）：%r" % (sorted(ret["imported"].keys()),)
     assert ret["imported"]["nodes"] == 600, "M7 nodes 计数：%r" % (ret["imported"],)
     assert ret["imported"]["engine_meta"] == 2, \
         "M7 engine_meta 计数（_schema_version + context_max）：%r" % (ret["imported"],)
