@@ -262,8 +262,17 @@ class ActivationEngine:
         except sqlite3.OperationalError:  # #714:无内容表 ⇒ 空图
             node_rows = []
         node_ids = [r[0] for r in node_rows]
+        # issue #521：抑制幅度要按边的 confidence 缩放（未复核 0.3 的 opposite
+        # 边不得满额否决）。旧 schema 可能没有 confidence 列——用 PRAGMA 探测，
+        # 缺列时按 0.3 兜底，避免把「列不存在」误判成「无内容表」而清空整图。
         try:
-            cur.execute("SELECT source_id, target_id, relation_type, condition_space FROM edges")
+            _edge_cols = {r[1] for r in cur.execute("PRAGMA table_info(edges)")}
+        except sqlite3.OperationalError:
+            _edge_cols = set()
+        _conf_expr = "confidence" if "confidence" in _edge_cols else "0.3 AS confidence"
+        try:
+            cur.execute("SELECT source_id, target_id, relation_type, condition_space, "
+                        + _conf_expr + " FROM edges")
             edges = cur.fetchall()
         except sqlite3.OperationalError:  # #714:无内容表 ⇒ 空图
             edges = []
@@ -278,7 +287,7 @@ class ActivationEngine:
                 cur_cs[nid] = {}
         rows, cols, decays = [], [], []
         inh_rows, inh_cols, inh_mags = [], [], []
-        for src, dst, rtype, cs_json in edges:
+        for src, dst, rtype, cs_json, edge_conf in edges:
             si, di = idx.get(src), idx.get(dst)
             if si is None or di is None:
                 continue
@@ -299,7 +308,16 @@ class ActivationEngine:
             except (TypeError, ValueError):
                 d = d * COND_MATCH_NEUTRAL
             if d < 0:  # 负记忆同价(第五篇):相反边走独立抑制通路,不进兴奋邻接(issue #229)
-                inh_rows.append(si); inh_cols.append(di); inh_mags.append(-d)
+                # issue #521：抑制幅度 × 边置信（未复核 0.3 不得满额否决）；
+                # 非有限/越界的存量值按 [0,1] 钳制，坏值不放大抑制。
+                try:
+                    _c = float(edge_conf) if edge_conf is not None else 0.3
+                except (TypeError, ValueError):
+                    _c = 0.3
+                if _c != _c:  # NaN
+                    _c = 0.3
+                _c = min(1.0, max(0.0, _c))
+                inh_rows.append(si); inh_cols.append(di); inh_mags.append(-d * _c)
             else:
                 rows.append(si); cols.append(di); decays.append(d)
         if csr_matrix is not None and rows:
@@ -463,12 +481,18 @@ class ActivationEngine:
             #   supp[dst] = max over src (act[src]·|decay|),act[dst] ← max(act[dst]−supp,0)。
             supp = np.zeros(n, dtype=np.float32)
             if self._adj_inh is not None:
-                supp = self._max_plus(self._adj_inh, act)
-            else:  # edge-list 降级
+                # issue #521：抑制按**对称**关系算——opposite 是互相矛盾，
+                # 不能只按存储方向（register_conflict 新→旧）让「后写者」单方面
+                # 否决「先写者」；双向取 max，结果与写入顺序无关。
+                supp = np.maximum(self._max_plus(self._adj_inh, act),
+                                  self._max_plus(self._adj_inh.T, act))
+            else:  # edge-list 降级（双向同口径）
                 inh_rows, inh_cols, inh_mags = self._inh_meta
                 for si, di, m in zip(inh_rows, inh_cols, inh_mags):
                     if act[si] > 0:
                         supp[di] = max(supp[di], act[si] * m)
+                    if act[di] > 0:
+                        supp[si] = max(supp[si], act[di] * m)
             if supp.any():
                 act = np.maximum(act - supp, 0.0)
             for i in np.nonzero(act >= act_floor)[0]:
