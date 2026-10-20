@@ -81,6 +81,11 @@ python -X utf8 tools/verify_manifest.py --strict --quiet
 - Windows 的 16 条 SKIP 全部因缺可选 SciPy 稀疏后端；逐条名称和原因见
   `related-results.json`，对应 Linux 稀疏后端实跑通过。
 - 指纹严格核验 64/64 MATCH；既有组件分类 D 组 6 条断言通过。
+- 时间核登记保持原 R3 条目和表达式，只将 activation.py 的登记行号 298→335。
+  新增事务代码使原位置移动；初轮 CI 因陈旧位置有 5 项相关失败，未跳过断言或新增豁免。
+  补同步后 `test_time_core_lint.py` 与 `test_issue607_time_core_shapes_guard.py`
+  合跑 74 passed in 161.96s (0:02:41)；全仓时间核扫描 new=0、registered=23、stale=0。
+  原始输出见 `time-core-related.log`，结构结果见 `time-core-results.json`。
 - 公开日志仅替换临时输出根、规范化行尾空白，并去掉 WSL 启动诊断；完整原始记录
   在本地保留。失败正文、读数、断言不改写。
 - 未验：本地全量门禁、DSH 宿主、生产记忆库、线上触发频率和磁盘满/断电。
