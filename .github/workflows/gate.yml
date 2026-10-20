@@ -76,6 +76,7 @@ env:
     tests/test_issue454_unpack_out_guard.py
     tests/test_issue481_snapshot_divergence.py
     tests/test_issue487b_launch_dir.py
+    tests/test_issue825_text_gates.py
 
 jobs:
   gate:
