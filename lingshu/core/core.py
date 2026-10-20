@@ -7503,17 +7503,32 @@ class SpacetimeMemoryEngine:
         改写时仍后写者胜（不对 `trust_history` / `value_evolution` 做逐条归并，那属
         语义裁定面）；且合并**不回填内存**（本实例内存保持原样，只是落库值不再抹掉
         他方字段）。跨写者的同字段语义合并留设计者裁。
-        """
-        self.store.merge_meta(self.SELF_MODEL_META_KEY, self._merge_self_model_value)
 
-    def _merge_self_model_value(self, raw: Optional[str]) -> str:
+        保存失败时不推进本地合并基线：待保存改动继续被视为本地改动，可随下一次
+        正常保存一起重试。先取得 SQLite 写事务，再进入原有 store 锁，保持锁顺序。
+        调用方已有事务时仍参与该事务；不新增对调用方稍后回滚的运行态同步保证。
+        """
+        # Reserve the SQLite write transaction before the existing store lock,
+        # matching merge_meta's lock order. Publish only the exact local input
+        # whose write succeeded; a rejected save must leave it dirty for retry.
+        with self.store._tx():
+            with self.store._lock:
+                local = self.self_model.to_dict()
+                self.store.merge_meta(
+                    self.SELF_MODEL_META_KEY,
+                    lambda raw: self._merge_self_model_value(raw, local))
+                self._commit_locked()
+                self._self_model_baseline = local
+
+    def _merge_self_model_value(self, raw: Optional[str], local: Optional[Dict] = None) -> str:
         """`LayeredStore.merge_meta` 的取值回调：读回库内快照，按字段判归属（#483）。
 
         三方合并：基线（`_self_model_baseline`，本实例上次同步时的内存快照）／本实例
         现值（local）／库内现值（disk）。字段归属判据＝**本实例是否改过**：
           · `local[k] == base[k]` ⇒ 本实例未改过 ⇒ 采纳 `disk[k]`（他方更新不丢）；
           · `local[k] != base[k]` ⇒ 本实例改过 ⇒ 保留 `local[k]`（本实例的变更不丢）。
-        基线在返回前更新为 `local`（**不是** merged）——内存未回填，故该字段仍处
+        本回调只计算载荷；基线由 `_save_self_model` 在写入成功后更新为 `local`
+        （**不是** merged）——内存未回填，故该字段仍处
         「本实例未改动」态；若把基线置成 merged，下一笔写入就会把刚采纳的他方值
         当成「本地改动」再覆写回去（第二笔写复活丢更新）。
 
@@ -7526,14 +7541,14 @@ class SpacetimeMemoryEngine:
                 disk = json.loads(raw)
             except (TypeError, ValueError):  # 坏快照：按「无他方更新」处置，不阻断写入
                 disk = None
-        local = self.self_model.to_dict()
+        if local is None:
+            local = self.self_model.to_dict()
         base = getattr(self, "_self_model_baseline", None)
         merged = dict(local)
         if isinstance(disk, dict) and isinstance(base, dict):
             for k, v in disk.items():
                 if k in merged and merged[k] == base.get(k):
                     merged[k] = v
-        self._self_model_baseline = local
         return json.dumps(merged, ensure_ascii=False)
 
     def _load_self_snapshot(self) -> Optional[Tuple[Dict, str]]:
@@ -8547,6 +8562,26 @@ class SpacetimeMemoryEngine:
         raise ValueError(
             "export 落点越界（%s）：须在 %s 任一白名单根内"
             % (out_path, roots))
+
+    def _guard_export_source_path(self, out_path: str):
+        """导出可覆盖旧备份，但不可覆盖本连接的数据库及事务辅助文件。"""
+        target = os.path.normcase(os.path.realpath(out_path))
+        # 使用连接报告的实际文件集合，而非只查初始化时的 db_path。
+        # 内存库的 file 为空；通过 ATTACH 增加的库也是正在使用的真源。
+        for _, _, database_path in self.store.conn.execute("PRAGMA database_list"):
+            if not database_path:
+                continue
+            for suffix in ("", "-wal", "-shm", "-journal"):
+                source = database_path + suffix
+                aliases_source = target == os.path.normcase(os.path.realpath(source))
+                if not aliases_source:
+                    try:
+                        # realpath 不合并硬链接；轨迹直写会经硬链接截断真源。
+                        aliases_source = os.path.samefile(out_path, source)
+                    except FileNotFoundError:
+                        pass
+                if aliases_source:
+                    raise ValueError("export 目标不可覆盖正在使用的 SQLite 数据库或辅助文件")
 
     WORLD3D_OUT_ROOT_ENV = "LINGSHU_WORLD3D_OUT_ROOT"
 
@@ -11842,7 +11877,13 @@ class SpacetimeMemoryEngine:
         边界（如实标注）：`overwrote_existing` 是**判定—替换之间**的一次
         `os.path.exists` 读数，只要求「上报」，**不**提供排他创建/并发排他
         （判定与 `os.replace` 之间存在竞态窗口；本件不引入先查后建语义）。
+        源库保护：当前连接的 SQLite 数据库及 WAL/SHM/journal 不可作为导出目标，
+        即使位于配置的白名单根内也拒绝；普通备份覆盖语义不变。
         """
+        # 旧备份仍可覆盖（#698）；源库及 WAL/SHM/journal 即使落在白名单根内也须拒绝。
+        output_path = self._confine_export_out_path(output_path)
+        target_path = os.path.realpath(output_path)
+        self._guard_export_source_path(target_path)
         c = self.store.conn.cursor()
         # #383：整趟导出必须**共用一个读快照**。旧实现逐表各发一条
         # `SELECT * FROM <t>`，Python sqlite3 对 SELECT 不隐式开事务 ⇒ 每条语句
@@ -11905,9 +11946,6 @@ class SpacetimeMemoryEngine:
         # 边界（如实标注）：只搬**权限位**，不搬属主/属组（`chown` 需特权，未做）；
         # 目标不存在时行为与改前逐字一致（umask 默认）；不引入目录 fsync（#330
         # 面边界不变）；返回值 `path` 仍是**调用方给的**路径（对外契约不变）。
-        # #746：落点根闸（越界 fail-closed）。
-        output_path = self._confine_export_out_path(output_path)
-        target_path = os.path.realpath(output_path)
         tmp_path = "%s.tmp-%s" % (target_path, uuid.uuid4().hex[:8])
         # #698：覆盖已存在目标 ⇒ 显式上报（不改覆盖语义，只让「静默」消失）。
         # 读数取在 `os.replace` **之前**——replace 之后目标必在，届时再查恒为 True。
@@ -13193,6 +13231,8 @@ class SpacetimeMemoryEngine:
         边界（如实标注）：该键是「判定—写入」之间的一次 `os.path.exists` 读数，
         只要求「上报」，**不**提供排他创建（存在竞态窗口）；也不改本方法
         `open(..., "w")` 的直写原语（#330 面，本件未动）。
+        当前连接的 SQLite 数据库及 WAL/SHM/journal 不可作为输出路径；
+        源库保护同 `export_all`，普通轨迹文件仍可覆盖。
         """
         if cycle_id:
             nodes = self.store.get_nodes_by_tag(f"cycle:{cycle_id}", limit=20)
@@ -13232,6 +13272,7 @@ class SpacetimeMemoryEngine:
             # #746：与 `export_all` 同款白名单根闸（越界 fail-closed）。本方法
             # 此前不过根闸（#698 只把「静默覆盖」改为显式上报，未及根判定）。
             output_path = self._confine_export_out_path(output_path)
+            self._guard_export_source_path(output_path)
             # #698：覆盖已存在目标 ⇒ 显式上报。读数取在写入**之前**（写后目标必在）。
             # 只进返回值、不进文件：落盘内容形状与 #57 契约逐字不变。
             overwrote_existing = os.path.exists(output_path)
