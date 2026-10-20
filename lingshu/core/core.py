@@ -4070,8 +4070,15 @@ class LayeredStore:
         return list(dict.fromkeys(frags))
 
     def search_content(self, query: str, layers: List[MemoryLayer] = None,
-                       limit: int = 20) -> List[Tuple[STNode, float]]:
-        """内容检索：多词 OR 预筛（含同义词扩展）+ 原查询二元组 Jaccard 相似度排序"""
+                       limit: int = 20, touch: bool = None) -> List[Tuple[STNode, float]]:
+        """内容检索：多词 OR 预筛（含同义词扩展）+ 原查询二元组 Jaccard 相似度排序
+
+        #787：`touch` 形参（缺省 None → `_retrieval_touches_recency()` 开关，既有
+        调用行为逐位不变）。显式传 False 的唯一调用方是 `recall`——它的打分公式
+        （0.5·sim + 0.3·importance + 0.2·recency）读的正是 `last_access`，而本方法
+        返回前会把命中节点的 `last_access` 刷成「现在」⇒ 同一节点的分数在两次调用
+        间漂移（issue 实测 ~1.9e-08），主排序键不稳定 ⇒ 排序翻转。打分路径不写回
+        打分输入（检索只计数、不刷新近因），分数即成为固定输入的纯函数。"""
         q = query.strip()
         if not q:
             return []
@@ -4079,7 +4086,7 @@ class LayeredStore:
         if getattr(self, "_fts", None) is not None:
             # #201：与 LIKE 路径同口径——未指定层时默认排除自我层
             fts_layers = layers or [l for l in MemoryLayer if l != MemoryLayer.SELF]
-            fts_hits = self._search_content_fts(q, terms, fts_layers, limit)
+            fts_hits = self._search_content_fts(q, terms, fts_layers, limit, touch=touch)
             if fts_hits is not None:
                 return fts_hits
         conds, params = [], []
@@ -4178,10 +4185,12 @@ class LayeredStore:
         # `executemany` 逐条语句各计一次（与旧逐调用一致）。
         # ★本笔合成：`touch` 由开关决定——批量口径与「不刷新近因」并存（见
         # `increment_access_many` 的 `touch` 形参）。
+        # ★本笔合成（#787）：调用方显式传 `touch`（唯一现例：`recall` 传 False）时
+        # 从其值，否则回落开关缺省——直接检索（本方法）行为逐位不变。
         # ★本笔合成（#473）：`_anchor_rerank` 只重排/截断最终 `results` 的顺序与组成，
         # 批量计数口径不变（仍对最终返回的 `results` 计数）。
         results = self._anchor_rerank(q, scored[:limit], layers, limit)
-        touch = self._retrieval_touches_recency()
+        touch = self._retrieval_touches_recency() if touch is None else touch
         self.increment_access_many([node.id for node, _ in results], touch=touch)
         return results
 
@@ -4241,11 +4250,14 @@ class LayeredStore:
                 seen.add(n.id)
         return out
 
-    def _search_content_fts(self, q: str, terms, layers, limit: int):
+    def _search_content_fts(self, q: str, terms, layers, limit: int, touch: bool = None):
         """FTS5+BM25 候选生成（retrieval.py）。返回 None 表示交回原 LIKE 路径。
 
         候选按 BM25 从全库取（不再受插入顺序与 LIMIT 300/500 截断影响）；
-        分数 = max(原 Jaccard+tag 加成, 0.9·s/(s+K))，≥0.95 判重语义只来自 Jaccard。"""
+        分数 = max(原 Jaccard+tag 加成, 0.9·s/(s+K))，≥0.95 判重语义只来自 Jaccard。
+
+        #787：`touch` 形参与 LIKE 路径同语义（None → 开关缺省；`recall` 显式传
+        False——见 `search_content` docstring），FTS/LIKE 两条检索腿同一口径。"""
         from lingshu.core import retrieval as _rt
         FTSIndex = _rt.FTSIndex
         ctx = _rt.context_enabled()
@@ -4296,9 +4308,11 @@ class LayeredStore:
         # ★本笔合成：FTS 路径同样收进批量单点（#571 禁「循环内 increment_access」），
         # 并以 `touch` 形参落实本件「不刷新近因」——两套语义并存（见
         # `increment_access_many` 的 `touch` 形参）。
+        # ★本笔合成（#787）：调用方显式 `touch` 从其值，否则回落开关缺省（与 LIKE 腿
+        # 同一 `search_content` 入口的口径）。
         # ★本笔合成（#473）：`_anchor_rerank` 只重排最终 results 的顺序/组成，计数口径不变。
         results = self._anchor_rerank(q, [(n, s) for n, s, _ in scored[:limit]], layers, limit)
-        touch = self._retrieval_touches_recency()
+        touch = self._retrieval_touches_recency() if touch is None else touch
         self.increment_access_many([n.id for n, _ in results], touch=touch)
         return results
 
@@ -7744,8 +7758,22 @@ class SpacetimeMemoryEngine:
 
         #29④：终排与 search_content 同口径，同分再按置信度降序（confidence 与
         importance 一起进排序键；未验证/被矛盾标记的低置信节点不再压过高置信节点）。
-        """
-        results = self.store.search_content(context_content, limit=50)
+
+        #787（主键漂移）：近因分量读 `last_access`，而检索路径（search_content）
+        返回前会把命中节点的 `last_access` 刷成「现在」⇒ 同一节点的分数在两次
+        recall 之间漂移（issue 实测 ~1.9e-08，随两次调用间隔增长），主排序键
+        不稳定 ⇒ sim 并列组的次序翻转。#613 的末位确定性键 `id` 在 recall 这里
+        **从未生效**——它只救「精确同分」，救不了「分数自身在漂移」。修法（根修）：
+        recall 的检索腿显式 `touch=False`（见 `search_content` 的 `touch` 形参）
+        ——打分路径不写回打分输入，`last_access` 只由写入、M5 重复观测、置信度
+        复核、巩固复述等真实强化事件刷新（与《检索不刷新近因》设计文档「检索 ≠
+        使用 ≠ 强化」同则；`LINGSHU_RETRIEVAL_NO_TOUCH` 开关仍只管直接检索路径）。
+        access_count 仍在 recall 命中时计数（统计语义不变）。
+        分数随 wall-clock 仍会**整体**微降（recency 对固定 la 单调衰减），但组内
+        两两差值的符号不变 ⇒ 次序跨调用逐位稳定。"""
+        # #787：touch=False——recall 的打分输入（last_access）不得被自己的检索腿
+        # 写回（根修「分数漂移」）；候选池/排序其余口径逐位不变。
+        results = self.store.search_content(context_content, limit=50, touch=False)
         if not results:
             return []
         now = time.time()
@@ -7755,7 +7783,11 @@ class SpacetimeMemoryEngine:
             recency = 1.0 / (1.0 + max(0.0, now - la) / 86400.0)
             score = 0.5 * sim + 0.3 * (node.importance or 0.0) + 0.2 * recency
             scored.append((node, score))
-        scored.sort(key=lambda x: (-x[1], -x[0].confidence))
+        # #613：末位补 `id`——#613 当年只落在 search_content 的三处排序，recall
+        # 自己的终排从未补上；本处补齐同款末位键（库内唯一、跨平台稳定），在
+        # `last_access` 精确并列（如 Windows 时钟粒度下的同桶创建）⇒ 分数精确
+        # 相等时给出唯一确定序。非并列情形逐位不变。
+        scored.sort(key=lambda x: (-x[1], -x[0].confidence, x[0].id))
         if _contradiction.enabled():
             scored = self._with_opposites(scored, limit)
             limit = max(limit, len(scored))  # 矛盾对不拆开（见 _with_opposites）
