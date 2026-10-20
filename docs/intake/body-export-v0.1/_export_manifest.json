@@ -307,7 +307,7 @@
     {
      "file": "activation.py",
      "src": "aeis.activation",
-     "sha256": "a3a68c99a9de460e",
+     "sha256": "218c8ab92525e586",
      "rewrites": 0,
      "sanitized": 0,
      "patches": 1,
@@ -360,7 +360,7 @@
     {
      "file": "longterm_gate.py",
      "src": "aeis.longterm_gate",
-     "sha256": "bc4111378c274ec2c6922be908277fb3b340c53a4a0615296858b312db616c5c",
+     "sha256": "93678fb975ac7bda5918e6818aa49cbbe93c8d88da43bb8a35af7ac8df9e32b8",
      "rewrites": 1,
      "sanitized": 0,
      "patches": 0,
@@ -409,7 +409,7 @@
     {
      "file": "hex_cnn.py",
      "src": "aeis.hex_cnn",
-     "sha256": "c0d9639796fc8525",
+     "sha256": "f94d2cbfdd88781c",
      "rewrites": 0,
      "sanitized": 0,
      "patches": 0,
