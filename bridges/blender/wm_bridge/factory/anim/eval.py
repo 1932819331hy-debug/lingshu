@@ -456,6 +456,13 @@ def _projectile_state(m, t, where="motion"):
     无弹跳：`p(τ) = p0 + v0·τ + ½g·τ²`，`τ = t − t0`。
     有弹跳（`bounce=True` 且 `restitution>0` 且给了 `ground_z`）：逐次解 `½g_z τ² + v_z τ + (z−z_ground) = 0`
     取正根，落地瞬间 `v_z ← −e·v_z`、水平速度不变 —— 每段都是闭式抛物线。
+
+    `max_bounces`（缺省 / `0` / `False` / `None` ⇒ **8**；负值原样生效）是落地反射次数上限。
+    上限用尽、或初值已贴地且 `v0_z <= 0` 时球**落到 `ground_z` 并停住**：z 钳到 `ground_z`、
+    **竖直速度为 0**，`t` 再大也不再下降（水平分量仍按匀速外推）⇒ 不穿透。只有「窗口在
+    落地前结束」（球仍在空中）与「初值已在 `ground_z` 以下、永远回不到地面」两腿才走自由
+    抛体外推。本件与 `lingshu/world/physics.py::projectile_state` 是**同判据镜像**
+    （该实现为 Y-up，本件为 Z-up；#777 两侧同改）。
     """
     p0 = tuple(float(x) for x in _vec3(m["p0"], "%s.p0" % where))
     v0 = tuple(float(x) for x in _vec3(m["v0"], "%s.v0" % where))
@@ -482,15 +489,23 @@ def _projectile_state(m, t, where="motion"):
     rem = tau
     bounces = 0
     max_b = int(m.get("max_bounces") or 8)
+    # 与主实现同判据（#777）：只有「第 1 轮就没有下一次落地」与「预算用尽」才钳位；
+    # `disc < 0`（永远回不到地面）与 `rem < flight`（正常空中腿）保持自由抛体外推。
+    resting = False
     while True:
         disc = vz * vz - 2.0 * gz * (pz - ground)
         if disc < 0.0:                       # 数值噪声：已经在下面了，贴地处理
-            flight = 0.0
-        else:
-            flight = (-vz - math.sqrt(disc)) / gz
-            if flight <= 0.0:
-                flight = (-vz + math.sqrt(disc)) / gz
-        if flight <= 0.0 or rem < flight or bounces >= max_b:
+            break
+        flight = (-vz - math.sqrt(disc)) / gz
+        if flight <= 0.0:
+            flight = (-vz + math.sqrt(disc)) / gz
+        if flight <= 0.0:
+            resting = True
+            break
+        if rem < flight:
+            break
+        if bounces >= max_b:
+            resting = True
             break
         px += vx * flight
         py += vy * flight
@@ -499,6 +514,9 @@ def _projectile_state(m, t, where="motion"):
         # ⚠ 同上：必须用落地瞬间的竖直速度取反（用出发速度会穿地）
         vz = -e * (vz + gz * flight)
         bounces += 1
+    if resting:
+        # 贴地静止：z 钳到 ground、竖直速度 0（球停在面上，不再穿地、随 t 不下降）
+        return (px + vx * rem, py + vy * rem, ground), (vx, vy, 0.0)
     p = (px + vx * rem, py + vy * rem, pz + vz * rem + 0.5 * gz * rem * rem)
     v = (vx, vy, vz + gz * rem)
     return p, v

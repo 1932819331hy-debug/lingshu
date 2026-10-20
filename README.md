@@ -104,6 +104,8 @@ python -X utf8 -m lingshu.world.scenario_cli demo --mode all
 是一个好例子——触发链、最小复现、判据三样都齐）。
 缺少证据、无法复现的描述，我们会先回帖请求补充证据再处置。
 
+安全相关缺陷的提交口径见 [`SECURITY.md`](.github/SECURITY.md)：含可直接利用细节的走私密通道，其余仍走公开 issue。
+
 ---
 
 *灵枢（Lingshu）· 由 FuRongJun-1999 构建与维护。*

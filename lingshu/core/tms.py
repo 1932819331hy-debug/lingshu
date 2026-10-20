@@ -51,6 +51,33 @@ class TruthMaintenance:
                 c.execute(sql)
             c.commit()
 
+    # ------------------------------------------------------------ 写权限闸
+    def _assert_nodes_writable(self, node_ids, action: str) -> None:
+        """共享层写权限闸（#769 ① / #780）：非 PRIMARY 不得经 TMS 改写共享层行。
+
+        缺陷形态（修前 `origin/main`）：本模块**全文零角色引用**——`propagate` 的
+        `UPDATE nodes SET confidence=? WHERE id=?` 没有任何层/角色判据 ⇒ SUB 调
+        `add_justification(锚点, [前提])` 即把 PRIMARY 建的**锚点行** confidence
+        `1.0 → 0.5`，并沿下游闭包传播（核验帖实测，重开 PRIMARY 读回同值）。
+
+        判据（与 `LayeredStore.add_node` 的共享层闸**同款、同源**）：委托 store 的
+        唯一单点 `assert_nodes_writable_by_role`（层 ∈ `SHARED_LAYERS` 且
+        `role != PRIMARY` ⇒ `PermissionError`）。**不**在本模块另写一份判据——
+        「同一列两套口径」正是本族缺陷的成因。
+
+        闸的落点（两处，均为**先判后写**）：
+          · `add_justification`：写 `justifications` / `justification_premises`
+            **之前**——否则被拒时会留下**孤儿依据行**（结论指向一条它无权写的节点）。
+          · `propagate`：`UPDATE` **之前**对**整个闭包**做一次整体预判 ⇒ 被拒时
+            **零落库**（旧形态下闭包内若含共享层行，前半批 UPDATE 已提交）。
+
+        边界（如实）：闸拦的是「写共享层行」；SUB 对**本地层**节点（knowledge /
+        context / self）的依据登记与信念传播照旧放行（`self` 层不在
+        `SHARED_LAYERS`，见 `#191`）。闸只认**节点在库中的层**；节点不存在时
+        交由调用方既有的 `KeyError` 语义处理（`add_justification` 已先判存在性）。
+        """
+        self.store.assert_nodes_writable_by_role(node_ids, action=action)
+
     # ------------------------------------------------------------ 写
     def add_justification(self, conclusion: str, premises: Iterable[str],
                           source: Optional[str] = None) -> str:
@@ -62,6 +89,9 @@ class TruthMaintenance:
         for nid in [conclusion] + prem:
             if self.store.get_node(nid) is None:
                 raise KeyError(f"节点不存在：{nid!r}")
+        # #769 ①：闸落在 INSERT **之前**（被拒时零落库、不留孤儿依据行）。
+        self._assert_nodes_writable(
+            [conclusion], "经 TMS 依据登记写入共享层节点的 confidence")
         jid = uuid.uuid4().hex
         with self.store._lock:
             c = self.store.conn
@@ -134,6 +164,11 @@ class TruthMaintenance:
                     changed = True
             if not changed:
                 break
+        # #769 ①（先判后写）：写回**整个闭包**之前做一次整体预判——闭包内若含
+        # 共享层行，旧形态下 `executemany` 会连同该行一起改写（且一旦中途抛错，
+        # 前半批已提交）。整体预判 ⇒ 被拒时零落库。
+        self._assert_nodes_writable(
+            list(belief), "经 TMS 信念传播写入共享层节点的 confidence")
         with self.store._lock:
             c = self.store.conn
             c.executemany("UPDATE nodes SET confidence=? WHERE id=?",

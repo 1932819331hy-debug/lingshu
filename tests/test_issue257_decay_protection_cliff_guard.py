@@ -23,6 +23,10 @@
 边界（削掉的判别力，如实标注）：本件**只**拆掉占位符悬崖——issue 建议 2/3/4
   （保护行随节点删除、`protect_node` 校验节点存在、孤儿行回收）属保护名单**回收**
   面，不在本件范围（名单仍可无限增长，但不再触发悬崖）。
+  后续（#778 批次）：其中「`protect_node` 校验节点存在」已由 #778-F3 落闸
+  （`ValueError`），「孤儿行检查」已由 #778-F4 落到完整性面
+  （`verify_integrity().orphan_protections` / `export_all` 返回值）；
+  本件夹具 `_protect_many` 随之改为「先建真实节点再保护」（断言未改）。
 
 断言组（抽掉修复＝把 exclude 改回 2N 占位符 ⇒ A/B 必红）：
   A 大名单 + 低变量上限（`SQLITE_LIMIT_VARIABLE_NUMBER=999`）下 `decay_cycle`
@@ -38,11 +42,14 @@ from __future__ import annotations
 import os
 import sqlite3
 import sys
+import time
 
 REPO = os.path.dirname(os.path.dirname(os.path.abspath(__file__)))
 sys.path.insert(0, REPO)
 
-from lingshu.core.core import SpacetimeMemoryEngine  # noqa: E402
+from lingshu.core.core import (  # noqa: E402
+    ConditionSpace, MemoryLayer, SpacetimeMemoryEngine, STNode,
+)
 
 #: 远低于上游默认 32766 的上限——旧实现下「名单长度 > 999/2」即触发悬崖。
 _LIMIT = 999
@@ -55,8 +62,26 @@ def _engine(limit=_LIMIT):
 
 
 def _protect_many(e, n, prefix="gone_"):
+    """把保护名单撑到 n 条（每条都对应一个**真实存在**的情境层节点）。
+
+    #778-F3 后的夹具适配（本件断言未改）：本助手原先直接
+    `protect_node("gone_%d")` 保护**不存在**的 id——那正是 #778-F3 的缺陷形态
+    （先写后查 ⇒ 落孤儿保护行）。F3 落闸后该写法会被 `ValueError` 拒，故改为
+    「先建真实节点、再保护它」：保护名单规模、`decay_cycle` 的占位符面、
+    本件四条断言（A/B/C/D）**逐字不变**。节点用高 importance 的情境层行，
+    且全部受保护 ⇒ 200 轮衰减后仍在（保护语义本身即本件 C 组的对照面）。
+    """
     for i in range(n):
-        e.protect_node("%s%d" % (prefix, i), "LongTermMemoryGate:snapshot")
+        nid = "%s%d" % (prefix, i)
+        now = time.time()
+        e.store.add_node(STNode(
+            id=nid, content="保护名单占位节点 %s" % nid, modality="text",
+            spatial_coordinates={}, temporal_coordinate=now,
+            condition_space=ConditionSpace("守卫", "#257", (now, now + 60), "运行中"),
+            importance=0.9, confidence=0.5, layer=MemoryLayer.CONTEXT,
+            access_count=0, last_access=now, created_at=now,
+            tags=[], semantic_coordinates={}, state_attributes={}, entity_id=None))
+        e.protect_node(nid, "LongTermMemoryGate:snapshot")
 
 
 def _edge_decay_sql(e):
