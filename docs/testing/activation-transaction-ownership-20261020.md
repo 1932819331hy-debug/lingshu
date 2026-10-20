@@ -86,6 +86,10 @@ python -X utf8 tools/verify_manifest.py --strict --quiet
   补同步后 `test_time_core_lint.py` 与 `test_issue607_time_core_shapes_guard.py`
   合跑 74 passed in 161.96s (0:02:41)；全仓时间核扫描 new=0、registered=23、stale=0。
   原始输出见 `time-core-related.log`，结构结果见 `time-core-results.json`。
+- 与独立自我模型保存修复 PR #836 合用：将两个提交的真实包文件和原封不动的两份
+  守卫放入同一隔离副本，23 passed, 73 warnings in 1.97s，无 SKIP；源文件 SHA256
+  和组件提交在 `joint-activation-self-model.json`，临时副本已关闭并移除。
+  这只是兼容性联测，不构成额外贡献或 DSH 宿主验收。
 - 公开日志仅替换临时输出根、规范化行尾空白，并去掉 WSL 启动诊断；完整原始记录
   在本地保留。失败正文、读数、断言不改写。
 - 未验：本地全量门禁、DSH 宿主、生产记忆库、线上触发频率和磁盘满/断电。
