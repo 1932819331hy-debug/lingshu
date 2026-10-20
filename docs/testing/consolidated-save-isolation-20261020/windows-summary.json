@@ -3,21 +3,21 @@
   "platform": "Windows",
   "sqlite": "3.49.1",
   "baseline": "40fceb69e79d0f481455f05ea8581b6f6f5e5816",
-  "guard_sha256": "9ff8a905bd21fa82eaa19550d70fb574e1d909108d7bd2262fb1725243fd9edd",
+  "guard_sha256": "51baea99475a34b701eb98729ff6247ee4a9d1d3ff054cb4e0d26115cee6823d",
   "records": [
     {
       "case": "fixed",
       "ok": true,
       "returncode": 0,
-      "passed": 4,
+      "passed": 5,
       "failed_tests": [],
       "errors": 0,
       "skipped": 0,
       "expected_failures": [],
       "expected_assertion": "",
-      "pytest_summary": "4 passed in 0.37s",
+      "pytest_summary": "5 passed in 0.36s",
       "source_sha256": {
-        "lingshu/nn/hex_cnn.py": "17cb518fe46b2408fc83f2759def512fcb307c2798bc2ebdfaf450be17024cf7"
+        "lingshu/nn/hex_cnn.py": "f94d2cbfdd88781c879b1412810ab8a9b40cbff4a0180f4cb7b62c8a61e72926"
       }
     },
     {
@@ -28,6 +28,7 @@
       "failed_tests": [
         "test_parallel_saves_do_not_share_temporary_files[failure]",
         "test_parallel_saves_do_not_share_temporary_files[success]",
+        "test_temporary_basename_is_independent_of_model_name",
         "test_temporary_name_collision_keeps_unowned_file"
       ],
       "errors": 0,
@@ -35,10 +36,11 @@
       "expected_failures": [
         "test_parallel_saves_do_not_share_temporary_files[success]",
         "test_parallel_saves_do_not_share_temporary_files[failure]",
-        "test_temporary_name_collision_keeps_unowned_file"
+        "test_temporary_name_collision_keeps_unowned_file",
+        "test_temporary_basename_is_independent_of_model_name"
       ],
       "expected_assertion": "",
-      "pytest_summary": "3 failed, 1 passed in 0.51s",
+      "pytest_summary": "4 failed, 1 passed in 0.52s",
       "source_sha256": {
         "lingshu/nn/hex_cnn.py": "c0d9639796fc8525fee203307f017ea097f9b411d0b0e916491f0f028a3973a0"
       }
@@ -57,9 +59,9 @@
         "test_parallel_saves_do_not_share_temporary_files[success]"
       ],
       "expected_assertion": "concurrent valid save was rejected",
-      "pytest_summary": "1 failed in 0.40s",
+      "pytest_summary": "1 failed in 0.43s",
       "source_sha256": {
-        "lingshu/nn/hex_cnn.py": "4b3c5a3bb5d61469ea285a5da3f194921bf3c79953dc68d2cb1eba992002a497"
+        "lingshu/nn/hex_cnn.py": "353bd4d3221daade13fa2e1c6b506d4b098c19980aa7f01eea3d40624b302606"
       }
     },
     {
@@ -78,7 +80,7 @@
       "expected_assertion": "temporary-name collision was not rejected",
       "pytest_summary": "1 failed in 0.41s",
       "source_sha256": {
-        "lingshu/nn/hex_cnn.py": "85bbf0eac06b3f27a0162d75b07bcbb028afbe4e006c64dacb8436ece44c9356"
+        "lingshu/nn/hex_cnn.py": "9af91cd6dc03d47a57f3e37884f0cd9d31c724376358a2fbb14649c7e4e8b6d0"
       }
     },
     {
@@ -95,9 +97,28 @@
         "test_temporary_name_collision_keeps_unowned_file"
       ],
       "expected_assertion": "another save's temporary file was removed",
-      "pytest_summary": "1 failed in 0.41s",
+      "pytest_summary": "1 failed in 0.43s",
       "source_sha256": {
-        "lingshu/nn/hex_cnn.py": "1bb8021042c2c4ba4959342c02ec3d6a5c5a115bd807d612627a951d9a3939e9"
+        "lingshu/nn/hex_cnn.py": "a750966a4d63f7e3e73fa5ae701abb8ea5c8bdd3917031d9122f82692be2a1ad"
+      }
+    },
+    {
+      "case": "grow_temp_basename_with_model_name",
+      "ok": true,
+      "returncode": 1,
+      "passed": 0,
+      "failed_tests": [
+        "test_temporary_basename_is_independent_of_model_name"
+      ],
+      "errors": 0,
+      "skipped": 0,
+      "expected_failures": [
+        "test_temporary_basename_is_independent_of_model_name"
+      ],
+      "expected_assertion": "temporary basename grew with model filename",
+      "pytest_summary": "1 failed in 0.44s",
+      "source_sha256": {
+        "lingshu/nn/hex_cnn.py": "3b1c09df76661956416d5af135bb01c84d3861ded79407fad48f0e01a2ae0886"
       }
     }
   ]

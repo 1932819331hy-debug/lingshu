@@ -3,6 +3,7 @@
 The barrier only orders the final renames. Serialization, fsync, rename,
 cleanup and model loading all use their real implementations.
 """
+import builtins
 import json
 import os
 from pathlib import Path
@@ -67,7 +68,7 @@ def test_parallel_saves_do_not_share_temporary_files(tmp_path, monkeypatch, seco
     assert outcomes["first"] == str(target), "another save consumed the first save's temporary file"
     assert json.loads(target.read_text(encoding="utf-8"))["run"] == "first"
     np.testing.assert_array_equal(hex_cnn.load_consolidated(str(target))["k"], first_kernel)
-    assert not list(tmp_path.glob("model.json.tmp-*")), "save left temporary files behind"
+    assert not list(tmp_path.glob("*.tmp-*")), "save left temporary files behind"
 
 
 def test_temporary_name_collision_keeps_unowned_file(tmp_path, monkeypatch):
@@ -76,7 +77,7 @@ def test_temporary_name_collision_keeps_unowned_file(tmp_path, monkeypatch):
     original = target.read_bytes()
     monkeypatch.setattr(uuid, "uuid4", lambda: SimpleNamespace(hex="collision"))
     candidates = [Path(f"{target}.tmp-{os.getpid()}"),
-                  Path(f"{target}.tmp-{os.getpid()}-collision")]
+                  tmp_path / f".lingshu-save.tmp-{os.getpid()}-collision"]
     for candidate in candidates:
         candidate.write_bytes(b"owned by another save")
     error = None
@@ -100,3 +101,24 @@ def test_new_model_keeps_normal_creation_permissions(tmp_path):
     assert stat.S_IMODE(target.stat().st_mode) == stat.S_IMODE(control.stat().st_mode), \
         "save changed normal umask-based creation permissions"
     np.testing.assert_array_equal(hex_cnn.load_consolidated(str(target))["k"], np.arange(7))
+
+
+def test_temporary_basename_is_independent_of_model_name(tmp_path, monkeypatch):
+    """Observe real opens before JSON failure, including Windows' path-length limit."""
+    names, errors = [], []
+
+    def observed_open(path, *args, **kwargs):
+        names.append(Path(path).name)
+        return builtins.open(path, *args, **kwargs)
+
+    monkeypatch.setattr(hex_cnn, "open", observed_open, raising=False)
+    for basename in ("short.json", "model_" + "x" * 220 + ".json"):
+        try:
+            hex_cnn.save_consolidated({"k": np.arange(7)}, {"invalid": object()},
+                                     str(tmp_path / basename))
+        except BaseException as exc:
+            errors.append(type(exc))
+    assert len(names) == 2, "save did not attempt its two real temporary-file opens"
+    assert len(names[0]) == len(names[1]), "temporary basename grew with model filename"
+    assert errors == [TypeError, TypeError], "long model name broke temporary-file creation"
+    assert not list(tmp_path.glob("*.tmp-*")), "failed serialization left temporary files behind"

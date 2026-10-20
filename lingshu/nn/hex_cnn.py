@@ -314,7 +314,7 @@ def save_consolidated(kernels: Dict[str, np.ndarray], meta: Dict, path: str) -> 
 
     原子落盘：先写同目录临时档再 os.replace 顶替目标档——写入中途失败（含
     元数据不可序列化）时目标档保持原样，不会被先截断成空档/半截坏档。
-    每次保存独占一个临时档，仅清理自己成功创建的文件；同进程并发保存互不
+    每次保存独占一个定长短名临时档，仅清理自己成功创建的文件；同进程并发保存互不
     消费临时档。最终内容取最后一次成功 replace，不承诺调用顺序或合并。
 
     #498（#393 修复的副作用）：`os.replace` 把目标换成**新 inode** ⇒ ①新档权限
@@ -333,7 +333,7 @@ def save_consolidated(kernels: Dict[str, np.ndarray], meta: Dict, path: str) -> 
                **meta}
     target = os.path.realpath(path)
     os.makedirs(os.path.dirname(target) or ".", exist_ok=True)
-    tmp = f"{target}.tmp-{os.getpid()}-{uuid.uuid4().hex}"
+    tmp = os.path.join(os.path.dirname(target), f".lingshu-save.tmp-{os.getpid()}-{uuid.uuid4().hex}")
     owns_tmp = False
     try:
         with open(tmp, "x", encoding="utf-8") as f:

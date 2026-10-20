@@ -1,11 +1,12 @@
 {
   "guard": "tests/test_consolidated_save_isolation.py",
   "sources": ["lingshu/nn/hex_cnn.py"],
-  "total": 4,
+  "total": 5,
   "baseline_failures": [
     "test_parallel_saves_do_not_share_temporary_files[success]",
     "test_parallel_saves_do_not_share_temporary_files[failure]",
-    "test_temporary_name_collision_keeps_unowned_file"
+    "test_temporary_name_collision_keeps_unowned_file",
+    "test_temporary_basename_is_independent_of_model_name"
   ],
   "mutations": [
     {
@@ -15,7 +16,7 @@
       "changes": [{
         "file": "lingshu/nn/hex_cnn.py",
         "method": "save_consolidated",
-        "old": "tmp = f\"{target}.tmp-{os.getpid()}-{uuid.uuid4().hex}\"",
+        "old": "tmp = os.path.join(os.path.dirname(target), f\".lingshu-save.tmp-{os.getpid()}-{uuid.uuid4().hex}\")",
         "new": "tmp = f\"{target}.tmp-{os.getpid()}\""
       }]
     },
@@ -39,6 +40,17 @@
         "method": "save_consolidated",
         "old": "if not owns_tmp:",
         "new": "if False:"
+      }]
+    },
+    {
+      "name": "grow_temp_basename_with_model_name",
+      "test": "test_temporary_basename_is_independent_of_model_name",
+      "assertion": "temporary basename grew with model filename",
+      "changes": [{
+        "file": "lingshu/nn/hex_cnn.py",
+        "method": "save_consolidated",
+        "old": "tmp = os.path.join(os.path.dirname(target), f\".lingshu-save.tmp-{os.getpid()}-{uuid.uuid4().hex}\")",
+        "new": "tmp = f\"{target}.tmp-{os.getpid()}-{uuid.uuid4().hex}\""
       }]
     }
   ]
