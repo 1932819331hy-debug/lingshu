@@ -7184,6 +7184,11 @@ class SpacetimeMemoryEngine:
                 existing, _ = self.store._tolerant_edges([row])
                 if existing:
                     hit = existing[0]
+                    # 写权限闸先行（#234/#769/#780，单一真源 `_assert_edge_endpoints_role`，
+                    # 与 store.add_edge 同判据）：去重命中虽不写入，但写 API 的 fail-closed
+                    # 契约不得被早退绕过——只读/越层角色即便命中既有边也必须 PermissionError
+                    # （CI 红：test_issue769_780 g9 的 sub.add_edge 既有边未拦）。
+                    self.store._assert_edge_endpoints_role(source_id, target_id)
                     hit.merged = True  # 与 M5 命中的 #223 标记同款（可区分「已存在」与「新建」）
                     self._note_action("relation",
                                       f"{source_id}→{target_id}",
