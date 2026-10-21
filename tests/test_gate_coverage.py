@@ -22,7 +22,11 @@
 实现：
     · 从仓根读 gate.yml 的 `SCRIPT_TESTS`——它是 YAML 折叠标量（`>-`）⇒
       按空白分词即可（不引第三方 YAML，避免守卫自身新增依赖）。
-    · 对**未列入**者逐件 `pytest --collect-only`（**只收集不执行**，短超时）。
+    · 对**未列入**者**一次**批量 `pytest --collect-only tests/`（#474：原实现逐件
+      起子进程，207 次 spawn / 240.9 秒；批量后 1 次 / 约 3 秒，逐件收集数一致）。
+      `--ignore` 掉 SCRIPT_TESTS（它们模块级 `sys.exit()`，混进同一次收集会把
+      整个 pytest 进程带走），并加 `--continue-on-collection-errors` 防单件导入
+      错误吞掉其余件的收集。批量失败（超时/解析不出）⇒ 自动回落逐件口径。
     · 三档打印：走脚本腿 / 走 pytest 腿（附收集数）/ **都没走到**。
 
 自身要求：本件**必须自身可被 pytest 收集**——否则它自己就落在盲区里
@@ -43,7 +47,9 @@ REPO = os.path.dirname(os.path.dirname(os.path.abspath(__file__)))
 GATE_YML = os.path.join(REPO, ".github", "workflows", "gate.yml")
 TESTS_DIR = os.path.join(REPO, "tests")
 SELF_REL = "tests/test_gate_coverage.py"
-COLLECT_TIMEOUT = 90          # 秒；某件偏高（导入重）也不致误判为超时
+COLLECT_TIMEOUT = 90          # 秒；某件偏高（导入重）也不致误判为超时（逐件兜底口径）
+BATCH_TIMEOUT = 300           # 秒；一次批量收集的上界（#474：把「件数 × 90s」的无界上界
+                              # 收窄为单次 300s —— 225 件时最坏 5.2 小时 → 5 分钟）
 _COUNT_RE = re.compile(r"(\d+)\s+tests?\s+collected")
 
 
@@ -95,6 +101,49 @@ def _collect_count(rel_path):
     hits = _COUNT_RE.findall(out)
     count = int(hits[-1]) if hits else 0     # 取末行汇总（防中间噪声行）
     return count, "rc=%d" % proc.returncode
+
+
+def _parse_collected_counts(text):
+    """从 `pytest --collect-only -q tests/` 的输出里数出**逐件**收集数。
+
+    只认 node id 行（`tests/<路径>.py::...`）——汇总行（`NNN tests collected`）
+    与 `ERROR ...` 行都不含 `::`，自然不计入；参数化用例的每个 node id 各计一次，
+    与逐件 `--collect-only <file>` 的汇总口径一致（#474 的对账组：207 件全等）。
+    """
+    counts = {}
+    for line in text.splitlines():
+        line = line.strip()
+        if line.startswith("tests/") and "::" in line:
+            rel = line.split("::", 1)[0]
+            counts[rel] = counts.get(rel, 0) + 1
+    return counts
+
+
+def _collect_counts_batch(script_tests):
+    """**一次** `pytest --collect-only` 取全仓逐件收集数（#474）。
+
+    镜像 gate.yml 的 pytest 腿：`--ignore` 掉 `SCRIPT_TESTS`——那些件模块级即
+    `sys.exit()`，混进同一次收集会把整个 pytest 进程带走。`--continue-on-collection-
+    errors` 让单件导入错误只把该件收成 0 件（判红），不连坐其余件。
+
+    返回 (counts | None, diag)：None 表示批量不可用（超时），调用方回落逐件口径。
+    """
+    env = dict(os.environ)
+    env.setdefault("PYTHONUTF8", "1")
+    env.setdefault("PYTHONIOENCODING", "utf-8")
+    cmd = [sys.executable, "-X", "utf8", "-m", "pytest",
+           "--collect-only", "-q", TESTS_DIR,
+           "--continue-on-collection-errors"]
+    for rel in sorted(script_tests):
+        cmd.append("--ignore=" + os.path.join(REPO, rel))
+    try:
+        proc = subprocess.run(cmd, cwd=REPO, capture_output=True, text=True,
+                              encoding="utf-8", errors="replace",
+                              timeout=BATCH_TIMEOUT, env=env)
+    except subprocess.TimeoutExpired:
+        return None, "batch collect-only 超时（>%ss）" % BATCH_TIMEOUT
+    out = (proc.stdout or "") + "\n" + (proc.stderr or "")
+    return _parse_collected_counts(out), "batch rc=%d" % proc.returncode
 
 
 _PYTEST_FILE_RE = re.compile(r"^(?:test_.+|.+_test)\.py$")
@@ -155,11 +204,20 @@ def _coverage_report():
     """三档归类 + 明细行（供各断言与打印共用）。"""
     script_tests = set(_script_tests_from_gate_yml())
     script_leg, pytest_leg, uncovered = [], [], []
+    need = []
     for rel in _test_files():
         if rel in script_tests:
             script_leg.append(rel)
-            continue
-        count, diag = _collect_count(rel)
+        else:
+            need.append(rel)
+    # #474：一次批量收集替代逐件 spawn（207 次 / 240.9s → 1 次 / ~3s）。
+    counts, batch_diag = _collect_counts_batch(script_tests)
+    for rel in need:
+        if counts is None:
+            # 批量不可用（超时）⇒ 回落逐件口径，判据不降级。
+            count, diag = _collect_count(rel)
+        else:
+            count, diag = counts.get(rel, 0), batch_diag
         if count is None:
             uncovered.append((rel, diag))
         elif count > 0:
@@ -211,6 +269,43 @@ def test_guard_itself_is_collectable():
     assert count, (
         "本件 %s 没被 pytest 收集（%s）⇒ 它自己就落在它所防的盲区里，"
         "本判据形同虚设。" % (SELF_REL, diag))
+
+
+def test_batch_parser_counts_per_file():
+    """量具自检④（#474）：批量输出的逐件计数解析（纯函数，不起子进程）。
+
+    只认 `tests/<路径>.py::...` 的 node id 行；汇总行与 ERROR 行不得计入；
+    参数化用例的每个 node id 各计一次（与逐件 `--collect-only` 的汇总口径一致）。
+    """
+    text = (
+        "tests/test_a.py::test_one\n"
+        "tests/test_a.py::test_two\n"
+        "tests/sub/test_b.py::TestX::test_three\n"
+        "tests/test_a.py::test_param[case-1]\n"
+        "\n"
+        "4 tests collected in 0.02s\n"
+        "ERROR tests/test_broken.py - ImportError while importing test module\n"
+    )
+    counts = _parse_collected_counts(text)
+    assert counts == {"tests/test_a.py": 3, "tests/sub/test_b.py": 1}, (
+        "批量计数解析错：%r ⇒ 覆盖表会与逐件口径不一致（#474 的对账前提）" % (counts,))
+
+
+def test_batch_and_per_file_counts_agree_on_sample():
+    """量具自检⑤（#474 对账组）：真实仓上批量口径与逐件口径必须同数。
+
+    取前三件做抽检（控制成本）：批量若少收/多收，这里直接点名。
+    """
+    script_tests = set(_script_tests_from_gate_yml())
+    need = [rel for rel in _test_files() if rel not in script_tests]
+    assert need, "没有需要收集的件 ⇒ 量具失效"
+    counts, diag = _collect_counts_batch(script_tests)
+    assert counts is not None, diag
+    for rel in need[:3]:
+        per_file, pdiag = _collect_count(rel)
+        assert counts.get(rel, 0) == per_file, (
+            "批量与逐件收集数不一致：%s 批量=%r 逐件=%r（%s / %s）"
+            % (rel, counts.get(rel, 0), per_file, diag, pdiag))
 
 
 def test_enumeration_face_is_recursive_and_behavior_based(tmp_path, monkeypatch):
