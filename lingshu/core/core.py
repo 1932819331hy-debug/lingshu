@@ -7922,11 +7922,21 @@ class SpacetimeMemoryEngine:
         见 `_assert_meta_key_writable`）。为什么闸位必须在赋值之前：旧形态若
         先改 `self._context_max` 再在落库处抛，内存已改而盘面未写 ⇒ 静默分叉
         （与 `#191` 的 `update_self` 同款病：调用方看到异常，运行态却已变）。
+
+        容量保存和 FIFO 裁剪共用一条事务，提交成功后才发布运行值。否则保存失败
+        仍会使下一次正常写入按新容量误删记忆，或裁剪失败留下部分删除。与配置终裁
+        一样要求独立事务：调用方后续的 rollback 无法撤回 Python 属性，故已有事务
+        时在任何改动前显式拒绝。
         """
-        self.store._assert_meta_key_writable("context_max")
-        self._context_max = _to_int_or(max_size, self.DEFAULT_CONTEXT_MAX)
-        self.store.set_meta("context_max", str(self._context_max))
-        self.store.enforce_context_cap(self._context_max)
+        with self.store._lock:
+            self.store._assert_meta_key_writable("context_max")
+            if self.store.conn.in_transaction:
+                raise RuntimeError("容量设置需要独立事务；请先结束调用方事务")
+            capacity = _to_int_or(max_size, self.DEFAULT_CONTEXT_MAX)
+            with self.store._structure_event_transaction():
+                self.store.set_meta("context_max", str(capacity))
+                self.store.enforce_context_cap(capacity)
+            self._context_max = capacity
 
     # ==================== 去重配置（M5 · D-004 动态阈值） ====================
 
