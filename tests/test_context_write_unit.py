@@ -6,6 +6,7 @@ from pathlib import Path
 import sqlite3
 import subprocess
 import sys
+import time
 
 import pytest
 
@@ -57,14 +58,15 @@ def test_existing_instance_uses_current_database_capacity(engine, old_cap, new_c
         other.close()
 
 
-def test_existing_process_keeps_context_after_capacity_increase(engine):
+def test_existing_process_keeps_context_after_capacity_increase(engine, tmp_path):
     engine.set_context_cap(2)
     program = '''import json, sys, warnings
+from pathlib import Path
 warnings.simplefilter("ignore")
 from lingshu.core.core import MemoryLayer, SpacetimeMemoryEngine
 engine = SpacetimeMemoryEngine(sys.argv[1])
 try:
-    print(json.dumps({"ready": True}), flush=True)
+    Path(sys.argv[2]).write_text("ready", encoding="utf-8")
     if sys.stdin.readline().strip() != "write":
         raise RuntimeError("missing test command")
     node = engine.add_context("context from a second real process")
@@ -73,15 +75,25 @@ finally:
     engine.close()
 '''
     repo = Path(__file__).resolve().parents[1]
-    process = subprocess.Popen([sys.executable, "-B", "-X", "utf8", "-u", "-c", program, engine.store.db_path],
+    ready_path = tmp_path / "process-ready"
+    # Constructor diagnostics can exceed a Windows pipe buffer before ready.
+    # Keep stderr in a file and bound readiness independently of stdout.
+    diagnostic = (tmp_path / "process-stderr.log").open("w+", encoding="utf-8")
+    process = subprocess.Popen([sys.executable, "-B", "-X", "utf8", "-u", "-c", program,
+        engine.store.db_path, str(ready_path)],
         cwd=repo, env={**os.environ, "PYTHONPATH": str(repo), "PYTHONDONTWRITEBYTECODE": "1"},
-        stdin=subprocess.PIPE, stdout=subprocess.PIPE, stderr=subprocess.PIPE, text=True, encoding="utf-8")
+        stdin=subprocess.PIPE, stdout=subprocess.PIPE, stderr=diagnostic, text=True, encoding="utf-8")
     try:
-        assert json.loads(process.stdout.readline()) == {"ready": True}
+        deadline = time.monotonic() + 15
+        while not ready_path.exists() and process.poll() is None and time.monotonic() < deadline:
+            time.sleep(0.01)
+        diagnostic.seek(0)
+        assert ready_path.exists(), diagnostic.read()
         engine.set_context_cap(5)
         original = _seed(engine, 4)
-        stdout, stderr = process.communicate("write\n", timeout=15)
-        assert process.returncode == 0, stderr
+        stdout, _ = process.communicate("write\n", timeout=15)
+        diagnostic.seek(0)
+        assert process.returncode == 0, diagnostic.read()
         result = json.loads(stdout)
         assert result["count"] == 5, "already-open process erased context using its old capacity"
         assert all(engine.store.get_node(nid) is not None for nid in original)
@@ -93,6 +105,7 @@ finally:
         for pipe in (process.stdin, process.stdout, process.stderr):
             if pipe is not None:
                 pipe.close()
+        diagnostic.close()
 
 
 def test_fifo_failure_undoes_the_new_context_on_disk(engine):
