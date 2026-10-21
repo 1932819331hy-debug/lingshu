@@ -231,14 +231,35 @@ class FTSIndex:
         except sqlite3.Error:
             pass
 
+    def _tracking_epoch(self) -> int:
+        """派生索引失去跟踪时交回原检索路径，不把空缓存当成无记忆。
+
+        默认配置的另一实例会 detach 全库触发器；存活对象不能仅凭存在就
+        继续相信索引。schema_version 同时用于识别一次读取期间的拆除/重挂。
+        """
+        conn = self.store.conn
+        epoch = conn.execute("PRAGMA schema_version").fetchone()[0]
+        names = {r[0] for r in conn.execute(
+            "SELECT name FROM sqlite_master WHERE type='trigger' AND name IN (?,?,?)",
+            _TRIGGERS)}
+        if names != set(_TRIGGERS):
+            raise sqlite3.OperationalError("FTS 跟踪触发器不完整，回退原检索路径")
+        return epoch
+
+    def _require_tracking_epoch(self, epoch: int) -> None:
+        if self.store.conn.execute("PRAGMA schema_version").fetchone()[0] != epoch:
+            raise sqlite3.OperationalError("FTS 读取期间派生结构已变更，回退原检索路径")
+
     # ---------- 增量同步 ----------
     def sync(self, batch: int = 2000) -> int:
         store = self.store
         done = 0
+        epoch = self._tracking_epoch()
         while True:
             c = store.conn
             ids = [r[0] for r in c.execute("SELECT nid FROM nodes_fts_dirty LIMIT ?", (batch,))]
             if not ids:
+                self._require_tracking_epoch(epoch)
                 return done
             with store._tx():
                 for nid in ids:
@@ -275,6 +296,7 @@ class FTSIndex:
         if not toks:
             return None
         toks = toks[:MAX_QUERY_GRAMS]
+        epoch = self._tracking_epoch()
         self.sync()
         match = " OR ".join('"' + g + '"' for g in toks)
         # 先在 FTS 内部按 rank 截断（rank 即 bm25，FTS5 对 ORDER BY rank LIMIT 走 top-k 优化），
@@ -300,6 +322,7 @@ class FTSIndex:
             if n_inner <= inner:
                 break
             inner = inner << 2  # 内层放大 4 倍
+        self._require_tracking_epoch(epoch)
         return [(tuple(r)[:-1], -float(r["_b"])) for r in rows[:want]]
 
     def scores_within(self, query_terms: Sequence[str], nids: Sequence[str]) -> dict:
@@ -313,6 +336,7 @@ class FTSIndex:
                     toks.append(g)
         if not toks or not nids:
             return {}
+        epoch = self._tracking_epoch()
         self.sync()
         match = " OR ".join('"' + g + '"' for g in toks[:MAX_QUERY_GRAMS])
         conn = self.store.conn
@@ -325,6 +349,7 @@ class FTSIndex:
                    % ",".join("?" for _ in part))
             for r in conn.execute(sql, [match] + part).fetchall():
                 out[r["nid"]] = -float(r["b"])
+        self._require_tracking_epoch(epoch)
         return out
 
     def temporal_neighbors(self, nids: Sequence[str], layers=None,
