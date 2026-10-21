@@ -1,0 +1,567 @@
+{
+ "schema": "second_third_batch_public_evidence/v1",
+ "generated_at": "2026-10-13T16:43:18+0800",
+ "measurement_baseline": {
+  "ref": "5603e28540ea1596d089f259e6fecd594ea73ccc",
+  "short": "5603e285",
+  "note": "本批能力差一律以 5603e285（第一批之后的提交）为基线；基线里已经存在的第一批能力不计入本批。"
+ },
+ "current_tree": {
+  "root": "<workspace>",
+  "head": "5603e28540ea1596d089f259e6fecd594ea73ccc",
+  "worktree_changed_files": [
+   "bench/results/world_memory/20261013_second_third/README.md",
+   "bench/results/world_memory/20261013_second_third/a_rework_independent.txt",
+   "bench/results/world_memory/20261013_second_third/b_rework_independent.txt",
+   "bench/results/world_memory/20261013_second_third/brain_home_isolated_check.txt",
+   "bench/results/world_memory/20261013_second_third/evidence.json",
+   "bench/results/world_memory/20261013_second_third/feedback_comparison.png",
+   "bench/results/world_memory/20261013_second_third/final_registry_gates.txt",
+   "bench/results/world_memory/20261013_second_third/pytest_final_focused.txt",
+   "bench/results/world_memory/20261013_second_third/pytest_final_remaining.txt",
+   "bench/results/world_memory/20261013_second_third/pytest_heavy.txt",
+   "bench/results/world_memory/20261013_second_third/scripts_final_all.txt",
+   "bench/results/world_memory/20261013_second_third/verify_evidence.py",
+   "bench/results/world_memory/20261013_second_third/verify_report.json",
+   "docs/intake/body-export-v0.1/_export_manifest.json",
+   "docs/second_third_batch_plan.md",
+   "docs/second_third_batch_usage.md",
+   "docs/second_third_batch_validation.md",
+   "lingshu/core/core.py",
+   "lingshu/nn/hex_gen.py",
+   "lingshu/nn/hex_query.py",
+   "lingshu/world/scene_simulator.py",
+   "lingshu/world/seven_layer_loop.py",
+   "lingshu/world/world3d.py",
+   "tests/test_issue211_world3d_build_guard.py",
+   "tests/test_query_order_invariance.py",
+   "tests/test_second_batch_camera.py",
+   "tests/test_second_batch_relations_feedback.py",
+   "tests/test_third_batch_actions.py",
+   "tests/test_third_batch_core_action.py",
+   "tools/silent_except_lint_baseline.txt"
+  ]
+ },
+ "runtime": {
+  "python": "3.12.13",
+  "platform": "Windows-11-10.0.22631-SP0",
+  "numpy": "2.5.3",
+  "PIL": "12.3.0",
+  "pytest": "9.1.1"
+ },
+ "source_sha256_before": {
+  "lingshu/core/core.py": "f6164851377058239229a10b409d6dd8e3093be5b98b1e03b5a6234bb42056d5",
+  "lingshu/nn/hex_gen.py": "e1c225be6a33a9114ad3875fba657d7f6beef725924ad162bb70a52f1a54f175",
+  "lingshu/nn/hex_query.py": "4d56def16a04047c79e719a1a35b734e0c0a3dcc277b9966fc43f5541bff9d7a",
+  "lingshu/world/scene_simulator.py": "e0c3e0451b5b42841ce57636bafb4db6db9afc08a88d8bd22b8a18072024f9e4",
+  "lingshu/world/seven_layer_loop.py": "4c56a912c29ed50eca8247b930637c1156c2381e906dd8a637d59143687c66b1",
+  "lingshu/world/world3d.py": "7d662b75c71cd4283aadf667a11b3e57d2b0d531e9077623a45cf12349e44775"
+ },
+ "source_sha256_after": {
+  "lingshu/core/core.py": "f6164851377058239229a10b409d6dd8e3093be5b98b1e03b5a6234bb42056d5",
+  "lingshu/nn/hex_gen.py": "e1c225be6a33a9114ad3875fba657d7f6beef725924ad162bb70a52f1a54f175",
+  "lingshu/nn/hex_query.py": "4d56def16a04047c79e719a1a35b734e0c0a3dcc277b9966fc43f5541bff9d7a",
+  "lingshu/world/scene_simulator.py": "e0c3e0451b5b42841ce57636bafb4db6db9afc08a88d8bd22b8a18072024f9e4",
+  "lingshu/world/seven_layer_loop.py": "4c56a912c29ed50eca8247b930637c1156c2381e906dd8a637d59143687c66b1",
+  "lingshu/world/world3d.py": "7d662b75c71cd4283aadf667a11b3e57d2b0d531e9077623a45cf12349e44775"
+ },
+ "source_files_unchanged": true,
+ "probe": {
+  "baseline": {
+   "workspace_guard": {
+    "root": "<work-dir>\\baseline_5603e285",
+    "lingshu_file": "<work-dir>\\baseline_5603e285\\lingshu\\__init__.py",
+    "inside_root": true
+   },
+   "root": "<work-dir>\\baseline_5603e285",
+   "f04": {
+    "has_camera_to_meta": false,
+    "has_camera_from_meta": false,
+    "ingest_two_known_cameras": [
+     {
+      "status": "ok",
+      "has_persisted_key": false,
+      "persisted": null,
+      "triangulated": false
+     },
+     {
+      "status": "ok",
+      "has_persisted_key": false,
+      "persisted": null,
+      "triangulated": true
+     }
+    ],
+    "vprim_nodes_after_ingest": 0,
+    "camera_block_tag": "lingshu-camera",
+    "nodes_carry_camera_block": 0,
+    "ingest_empty_camera_status": "ok",
+    "ingest_empty_camera_reason": null,
+    "cross_engine_build": {
+     "status": "ok",
+     "mode": "single_view",
+     "requested_mode": "multiview",
+     "reason": "no_camera_pose",
+     "objects": 0,
+     "observations": 0,
+     "center": null,
+     "max_abs_error_m": null
+    },
+    "cross_engine_error_lt_0_05": false
+   },
+   "f06": {
+    "layout": "red circle @ r7（下方行）, blue circle @ r1（上方行）",
+    "declared_relation": "red(head) above blue(body) —— 按该布局不成立",
+    "score": 1.0,
+    "verdict": "ACCEPT",
+    "relations_present": false,
+    "relation_satisfied": null,
+    "relation_facts": null,
+    "result_keys": [
+     "all_scores",
+     "id",
+     "margin",
+     "name",
+     "score",
+     "verdict"
+    ]
+   },
+   "f07": {
+    "has_refine_render": false,
+    "generate_from_text_has_refine_rounds": false,
+    "readback_calib": {
+     "tx_solid": 2.78,
+     "vert_striped": 0.665,
+     "area_cut": 397.0
+    },
+    "readback_colors": [],
+    "scenarios": {
+     "red-circle": {
+      "text": "左上有红色小点纹圆形",
+      "seed": 7,
+      "size": 96,
+      "pattern_misses_independent": 1,
+      "miss_detail": [
+       {
+        "part": 0,
+        "spec_pattern": "dotted",
+        "read_pattern": "solid",
+        "read_area": 13,
+        "zone": "r0"
+       }
+      ],
+      "parts": [
+       {
+        "shape": "circle",
+        "color": "red",
+        "zone": "r0",
+        "pattern": "dotted",
+        "size": "small"
+       }
+      ],
+      "parts_count": 1,
+      "declared_patterns": [
+       "dotted"
+      ],
+      "prod_refine_before_after": [
+       null,
+       null
+      ],
+      "refine_present": false
+     },
+     "triangle": {
+      "text": "中间有点纹三角",
+      "seed": 0,
+      "size": 96,
+      "pattern_misses_independent": 1,
+      "miss_detail": [
+       {
+        "part": 0,
+        "spec_pattern": "dotted",
+        "read_pattern": null,
+        "read_area": 6,
+        "zone": "r4"
+       }
+      ],
+      "parts": [
+       {
+        "shape": "triangle",
+        "color": "red",
+        "zone": "r4",
+        "pattern": "dotted",
+        "size": "medium"
+       }
+      ],
+      "parts_count": 1,
+      "declared_patterns": [
+       "dotted"
+      ],
+      "prod_refine_before_after": [
+       null,
+       null
+      ],
+      "refine_present": false
+     }
+    }
+   },
+   "f08": {
+    "has_configure_action": false,
+    "has_clear_action": false,
+    "comparison": "untested: 基线没有 configure_action，行动对照无法复跑"
+   },
+   "worker_exit_code": 0
+  },
+  "current": {
+   "workspace_guard": {
+    "root": "<workspace>",
+    "lingshu_file": "<workspace>\\lingshu\\__init__.py",
+    "inside_root": true
+   },
+   "root": "<workspace>",
+   "f04": {
+    "has_camera_to_meta": true,
+    "has_camera_from_meta": true,
+    "ingest_two_known_cameras": [
+     {
+      "status": "ok",
+      "has_persisted_key": true,
+      "persisted": "node_30a8bcbc_1791880999511",
+      "triangulated": false
+     },
+     {
+      "status": "ok",
+      "has_persisted_key": true,
+      "persisted": "node_939456de_1791880999512",
+      "triangulated": true
+     }
+    ],
+    "vprim_nodes_after_ingest": 2,
+    "camera_block_tag": "lingshu-camera",
+    "nodes_carry_camera_block": 2,
+    "ingest_empty_camera_status": "error",
+    "ingest_empty_camera_reason": "bad_camera_pose",
+    "cross_engine_build": {
+     "status": "ok",
+     "mode": "multiview",
+     "requested_mode": "multiview",
+     "reason": null,
+     "objects": 1,
+     "observations": 2,
+     "center": [
+      0.6,
+      1.0,
+      6.0
+     ],
+     "max_abs_error_m": 0.0
+    },
+    "cross_engine_error_lt_0_05": true
+   },
+   "f06": {
+    "layout": "red circle @ r7（下方行）, blue circle @ r1（上方行）",
+    "declared_relation": "red(head) above blue(body) —— 按该布局不成立",
+    "score": 0.667,
+    "verdict": "ACCEPT",
+    "relations_present": true,
+    "relation_satisfied": false,
+    "relation_facts": null,
+    "result_keys": [
+     "all_scores",
+     "conn_hits",
+     "conn_total",
+     "id",
+     "margin",
+     "name",
+     "relation_hits",
+     "relation_total",
+     "relations",
+     "role_detections",
+     "roles",
+     "score",
+     "verdict"
+    ]
+   },
+   "f07": {
+    "has_refine_render": true,
+    "generate_from_text_has_refine_rounds": true,
+    "readback_calib": {
+     "tx_solid": 2.78,
+     "vert_striped": 0.665,
+     "area_cut": 397.0
+    },
+    "readback_colors": [
+     "red",
+     "green",
+     "blue"
+    ],
+    "scenarios": {
+     "red-circle": {
+      "text": "左上有红色小点纹圆形",
+      "seed": 7,
+      "size": 96,
+      "pattern_misses_independent": 0,
+      "miss_detail": [],
+      "parts": [
+       {
+        "shape": "circle",
+        "color": "red",
+        "zone": "r0",
+        "pattern": "dotted",
+        "size": "small"
+       }
+      ],
+      "parts_count": 1,
+      "declared_patterns": [
+       "dotted"
+      ],
+      "prod_refine_before_after": [
+       1,
+       0
+      ],
+      "refine_present": true,
+      "off_pattern_misses_independent": 1,
+      "intent_preserved_parts_equal": true,
+      "image_changed_by_refine": true
+     },
+     "triangle": {
+      "text": "中间有点纹三角",
+      "seed": 0,
+      "size": 96,
+      "pattern_misses_independent": 0,
+      "miss_detail": [],
+      "parts": [
+       {
+        "shape": "triangle",
+        "color": "red",
+        "zone": "r4",
+        "pattern": "dotted",
+        "size": "medium"
+       }
+      ],
+      "parts_count": 1,
+      "declared_patterns": [
+       "dotted"
+      ],
+      "prod_refine_before_after": [
+       1,
+       0
+      ],
+      "refine_present": true,
+      "off_pattern_misses_independent": 1,
+      "intent_preserved_parts_equal": true,
+      "image_changed_by_refine": true
+     }
+    }
+   },
+   "f08": {
+    "has_configure_action": true,
+    "has_clear_action": true,
+    "report_exit_code": 0,
+    "comparison": {
+     "static/predictive": {
+      "final_distance": 0.0,
+      "extrapolated_ticks": 0,
+      "final_traced_distance": 0.0,
+      "target_kind": "static_beacon"
+     },
+     "static/fixed": {
+      "final_distance": 16.9189,
+      "extrapolated_ticks": 0,
+      "final_traced_distance": 16.9189,
+      "target_kind": "static_beacon"
+     },
+     "patrol/predictive": {
+      "final_distance": 0.0,
+      "extrapolated_ticks": 37,
+      "final_traced_distance": 0.0,
+      "target_kind": "moving_scout"
+     },
+     "patrol/fixed": {
+      "final_distance": 15.3052,
+      "extrapolated_ticks": 39,
+      "final_traced_distance": 15.3052,
+      "target_kind": "moving_scout"
+     }
+    }
+   },
+   "worker_exit_code": 0
+  }
+ },
+ "mutations": [
+  {
+   "id": "P0",
+   "kind": "positive-control",
+   "expected": "green",
+   "what": "不注入任何补丁：同一套 pytest 设施下原代码必须全绿",
+   "command": "-X utf8 -m pytest -p no:cacheprovider -q --no-header -p mut_P0 tests/test_second_batch_camera.py::test_c7_ingest_rejects_incomplete_camera_without_persisting tests/test_second_batch_relations_feedback.py::test_f06_wildcard_roles_are_order_invariant_full_permutations tests/test_second_batch_relations_feedback.py::test_f07_real_failure_diff_strictly_decreases tests/test_third_batch_actions.py::test_i_stale_target_observation_is_not_new_error_feedback tests/test_third_batch_actions.py::test_i_pre_existing_correction_is_frozen_by_stale_calls",
+   "guards": [
+    "tests/test_second_batch_camera.py::test_c7_ingest_rejects_incomplete_camera_without_persisting",
+    "tests/test_second_batch_relations_feedback.py::test_f06_wildcard_roles_are_order_invariant_full_permutations",
+    "tests/test_second_batch_relations_feedback.py::test_f07_real_failure_diff_strictly_decreases",
+    "tests/test_third_batch_actions.py::test_i_stale_target_observation_is_not_new_error_feedback",
+    "tests/test_third_batch_actions.py::test_i_pre_existing_correction_is_frozen_by_stale_calls"
+   ],
+   "exit_code": 0,
+   "seconds": 0.6,
+   "summary": [
+    "5 passed, 9 warnings in 0.38s"
+   ],
+   "failure_assertions": [],
+   "assertion_locations": [],
+   "verdict": "green",
+   "as_expected": true,
+   "killed_guard": false
+  },
+  {
+   "id": "M1",
+   "kind": "mutation",
+   "expected": "red",
+   "what": "Camera3D.from_meta 忽略 strict，强制 strict=False（伪造位姿的旧缺陷形态）",
+   "command": "-X utf8 -m pytest -p no:cacheprovider -q --no-header -p mut_M1 tests/test_second_batch_camera.py::test_c7_ingest_rejects_incomplete_camera_without_persisting",
+   "guards": [
+    "tests/test_second_batch_camera.py::test_c7_ingest_rejects_incomplete_camera_without_persisting"
+   ],
+   "exit_code": 1,
+   "seconds": 0.4,
+   "summary": [
+    "1 failed, 9 warnings in 0.18s"
+   ],
+   "failure_assertions": [
+    ">                   assert r[\"status\"] == \"error\", (entry, label, r)",
+    "E                   AssertionError: ('add_view', '空对象', {'status': 'ok', 'category': 'chair', 'center_3d': None, 'views_used': 1, ...})",
+    "E                   assert 'ok' == 'error'",
+    "E                     - error",
+    "E                     + ok",
+    "tests\\test_second_batch_camera.py:431: AssertionError",
+    "FAILED tests/test_second_batch_camera.py::test_c7_ingest_rejects_incomplete_camera_without_persisting"
+   ],
+   "assertion_locations": [
+    "tests\\test_second_batch_camera.py:431: AssertionError"
+   ],
+   "verdict": "red",
+   "as_expected": true,
+   "killed_guard": true
+  },
+  {
+   "id": "M2",
+   "kind": "mutation",
+   "expected": "red",
+   "what": "hex_query._canonical_det_order 改为输入顺序（通配双角色绑定随排列翻转）",
+   "command": "-X utf8 -m pytest -p no:cacheprovider -q --no-header -p mut_M2 tests/test_second_batch_relations_feedback.py::test_f06_wildcard_roles_are_order_invariant_full_permutations",
+   "guards": [
+    "tests/test_second_batch_relations_feedback.py::test_f06_wildcard_roles_are_order_invariant_full_permutations"
+   ],
+   "exit_code": 1,
+   "seconds": 0.5,
+   "summary": [
+    "1 failed in 0.15s"
+   ],
+   "failure_assertions": [
+    "            assert_role_index_mapping(entry, dets)",
+    ">       assert len(sigs) == 1, sigs",
+    "E       AssertionError: {'{\"conn_hits\": 2, \"conn_total\": 2, \"margin\": 0.667, \"name\": \"pair\", \"relation_hits\": 0, \"relation_total\": 1, \"relatio...ve\", \"left_of\"], \"from\": \"r0\", \"to\": \"r8\"}}], \"roles\": {\"a\": [\"r0\"], \"b\": [\"r8\"]}, \"score\": 1.0, \"verdict\": \"ACCEPT\"}'}",
+    "E       assert 2 == 1",
+    "E        +  where 2 = len({'{\"conn_hits\": 2, \"conn_total\": 2, \"margin\": 0.667, \"name\": \"pair\", \"relation_hits\": 0, \"relation_total\": 1, \"relatio...ve\", \"left_of\"], \"from\": \"r0\", \"to\": \"r8\"}}], \"roles\": {\"a\": [\"r0\"], \"b\": [\"r8\"]}, \"score\": 1.0, \"verdict\": \"ACCEPT\"}'})",
+    "tests\\test_second_batch_relations_feedback.py:328: AssertionError",
+    "FAILED tests/test_second_batch_relations_feedback.py::test_f06_wildcard_roles_are_order_invariant_full_permutations"
+   ],
+   "assertion_locations": [
+    "tests\\test_second_batch_relations_feedback.py:328: AssertionError"
+   ],
+   "verdict": "red",
+   "as_expected": true,
+   "killed_guard": true
+  },
+  {
+   "id": "M3",
+   "kind": "mutation",
+   "expected": "red",
+   "what": "hex_gen.refine_render 强制 rounds=0（真实像素改善被取消）",
+   "command": "-X utf8 -m pytest -p no:cacheprovider -q --no-header -p mut_M3 tests/test_second_batch_relations_feedback.py::test_f07_real_failure_diff_strictly_decreases",
+   "guards": [
+    "tests/test_second_batch_relations_feedback.py::test_f07_real_failure_diff_strictly_decreases"
+   ],
+   "exit_code": 1,
+   "seconds": 0.5,
+   "summary": [
+    "1 failed in 0.15s"
+   ],
+   "failure_assertions": [
+    "        assert before and before[0][1] == \"pattern\" and before[0][3] is None, before",
+    ">       assert len(after) < len(before) and after == [], (before, after)",
+    "E       AssertionError: ([(0, 'pattern', 'dotted', None)], [(0, 'pattern', 'dotted', None)])",
+    "E       assert (1 < 1)",
+    "E        +  where 1 = len([(0, 'pattern', 'dotted', None)])",
+    "E        +  and   1 = len([(0, 'pattern', 'dotted', None)])",
+    "tests\\test_second_batch_relations_feedback.py:457: AssertionError",
+    "FAILED tests/test_second_batch_relations_feedback.py::test_f07_real_failure_diff_strictly_decreases"
+   ],
+   "assertion_locations": [
+    "tests\\test_second_batch_relations_feedback.py:457: AssertionError"
+   ],
+   "verdict": "red",
+   "as_expected": true,
+   "killed_guard": true
+  },
+  {
+   "id": "M4",
+   "kind": "mutation",
+   "expected": "red",
+   "what": "ActionDecision.observe_outcome 强制 target_fresh=True（陈旧观测被当成新反馈）",
+   "command": "-X utf8 -m pytest -p no:cacheprovider -q --no-header -p mut_M4 tests/test_third_batch_actions.py::test_i_stale_target_observation_is_not_new_error_feedback tests/test_third_batch_actions.py::test_i_pre_existing_correction_is_frozen_by_stale_calls",
+   "guards": [
+    "tests/test_third_batch_actions.py::test_i_stale_target_observation_is_not_new_error_feedback",
+    "tests/test_third_batch_actions.py::test_i_pre_existing_correction_is_frozen_by_stale_calls"
+   ],
+   "exit_code": 1,
+   "seconds": 0.5,
+   "summary": [
+    "2 failed in 0.25s"
+   ],
+   "failure_assertions": [
+    ">       assert outcome[\"target_observation_fresh\"] is False, outcome",
+    "E       AssertionError: {'observed_self': [2, 1, 2], 'observed_target': [9, 1, 5], 'predicted_target': [5, 1, 5], 'target_observation_fresh': True, ...}",
+    "E       assert True is False",
+    "tests\\test_third_batch_actions.py:940: AssertionError",
+    "        assert frozen == {\"correction\": [2.0, 0.0], \"error_history\": [4.0],",
+    ">           assert after == before == frozen, (",
+    "E           AssertionError: ('陈旧结算改动了既有修正/统计', {'correction': [2.0, 0.0], 'error_history': [4.0], 'error_samples': 1, 'mean_abs_target_error': 4.0}, {'correction': [3.0, 0.0], 'error_history': [4.0, 4.0], 'error_samples': 2, 'mean_abs_target_error': 4.0})",
+    "E           assert {'correction'...t_error': 4.0} == {'correction'...t_error': 4.0}",
+    "E             Omitting 1 identical items, use -vv to show",
+    "E             Differing items:",
+    "E             {'error_samples': 2} != {'error_samples': 1}",
+    "E             {'correction': [3.0, 0.0]} != {'correction': [2.0, 0.0]}",
+    "E             {'error_history': [4.0, 4.0]} != {'error_history': [4.0]}",
+    "E             Use -v to get more diff",
+    "tests\\test_third_batch_actions.py:967: AssertionError",
+    "FAILED tests/test_third_batch_actions.py::test_i_stale_target_observation_is_not_new_error_feedback",
+    "FAILED tests/test_third_batch_actions.py::test_i_pre_existing_correction_is_frozen_by_stale_calls"
+   ],
+   "assertion_locations": [
+    "tests\\test_third_batch_actions.py:940: AssertionError",
+    "tests\\test_third_batch_actions.py:967: AssertionError"
+   ],
+   "verdict": "red",
+   "as_expected": true,
+   "killed_guard": true
+  }
+ ],
+ "limitations": [
+  "F08：基线（5603e28）没有 configure_action/clear_action，行动对照无法在基线上复跑 —— 基线侧只有 has_configure_action=False，没有基线数值，标为未测。",
+  "F07 的公开读数一律来自本脚本自算的独立像素回读（extract_attributes）；生产侧 refine 的 before/after 只作旁证列出，不作为公开判据。",
+  "F04 的 0.05 m 阈值只用一对已知位姿相机在多视角重建上测得，不构成通用标定、外参求解或真实设备精度的声明。",
+  "F06 只声明‘关系不满足时 score 降低且 relation.satisfied=False’，不声明任何裁决（verdict）一定翻转。",
+  "本脚本只跑 4 个定点守卫 + 有限探测（不是 full pytest，不覆盖全仓）；其余门禁证据见本目录下各份 .txt 原始日志。",
+  "全部读数在 Windows + .venv Python3.12 上取得；未在 CI 复跑，不声明 CI 已绿，也不声明其它解释器/平台矩阵。"
+ ],
+ "baseline_export": {
+  "ref": "5603e28540ea1596d089f259e6fecd594ea73ccc",
+  "dest": "<work-dir>\\baseline_5603e285",
+  "files": 371,
+  "has_pycache": false,
+  "dest_pre_existing": false,
+  "dest_removed": false
+ },
+ "f07_scenarios": [
+  "red-circle",
+  "triangle"
+ ]
+}

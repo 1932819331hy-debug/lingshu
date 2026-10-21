@@ -10,10 +10,14 @@
     当一件**既是**脚本式、又**没被**列入 SCRIPT_TESTS ⇒ **门禁两条腿都看不到它**，
     它绿 / 红都无人知——此「同族盲区」已出现三次（#69 / #26 / #145）。
 
-判据（本件）：`tests/test_*.py` 里的**每一件**必须满足其一——
+判据（本件）：`tests/` 下（**递归**）属「测试件」的**每一件**必须满足其一——
     (a) 出现在 gate.yml 的 `SCRIPT_TESTS` 里（走**脚本腿**）；或
     (b) `pytest --collect-only <file>` 收集数 > 0（走 **pytest 腿**）。
     二者皆非 ⇒ **判红**并点名该文件。
+    「测试件」= 行为判据三族之一（`_is_test_artifact`）：文件名符合 pytest 默认收集式、
+    顶层定义了 `test_*` 函数、或含 `if __name__ == "__main__"` 块（脚本式）。
+    #491：枚举面原为 `os.listdir(tests/) × test_*.py`（**顶层 + 按名**）⇒ 子目录 /
+    异名的脚本式守卫会从 pytest 腿、脚本腿、本守卫**三个视野同时消失**。
 
 实现：
     · 从仓根读 gate.yml 的 `SCRIPT_TESTS`——它是 YAML 折叠标量（`>-`）⇒
@@ -29,6 +33,7 @@
 """
 from __future__ import annotations
 
+import ast
 import os
 import re
 import subprocess
@@ -92,17 +97,65 @@ def _collect_count(rel_path):
     return count, "rc=%d" % proc.returncode
 
 
+_PYTEST_FILE_RE = re.compile(r"^(?:test_.+|.+_test)\.py$")
+
+
+def _is_test_artifact(path):
+    """行为判据（#491）：该 `.py` 是否属「门禁两条腿之一应当走到」的**测试件**。
+
+    三族之一即算——
+      (a) 文件名符合 pytest 默认收集式（`test_*.py` / `*_test.py`）⇒ pytest 腿候选；
+      (b) 顶层定义了 `test_*` 函数（或 `Test*` 类内的 `test_*` 方法）⇒ pytest 腿候选；
+      (c) 含 `if __name__ == "__main__"` 块 ⇒ **脚本式**，只能靠 SCRIPT_TESTS 走脚本腿。
+    三族皆非 ⇒ 合法辅助模块（如 `tests/_helpers.py`、`conftest.py`），不在本件视野内。
+    解析不了（SyntaxError）⇒ 收进视野（宁可报出、不静默失明）。
+    """
+    path = os.fspath(path)
+    if _PYTEST_FILE_RE.match(os.path.basename(path)):
+        return True
+    try:
+        with open(path, encoding="utf-8", errors="replace") as fh:
+            tree = ast.parse(fh.read(), filename=str(path))
+    except SyntaxError:
+        return True
+    for node in ast.walk(tree):
+        if isinstance(node, ast.If) and "__main__" in ast.unparse(node.test):
+            return True
+    for node in tree.body:
+        if isinstance(node, (ast.FunctionDef, ast.AsyncFunctionDef)):
+            if node.name.startswith("test_"):
+                return True
+        elif isinstance(node, ast.ClassDef) and node.name.startswith("Test"):
+            if any(isinstance(m, (ast.FunctionDef, ast.AsyncFunctionDef))
+                   and m.name.startswith("test_") for m in node.body):
+                return True
+    return False
+
+
 def _test_files():
-    return sorted(f for f in os.listdir(TESTS_DIR)
-                  if f.startswith("test_") and f.endswith(".py"))
+    """枚举 `tests/` 下**递归**的测试件（仓内相对 POSIX 路径，已排序）。
+
+    #491：原实现是 `os.listdir(TESTS_DIR)` + `startswith("test_")` —— **顶层 + 按名**
+    ⇒ 子目录 / 异名脚本式守卫会从 pytest 腿、脚本腿、本守卫**三个视野同时消失**。
+    """
+    root = os.path.dirname(os.path.normpath(TESTS_DIR))
+    found = []
+    for dirpath, dirnames, filenames in os.walk(TESTS_DIR):
+        dirnames[:] = sorted(d for d in dirnames if d != "__pycache__")
+        for name in sorted(filenames):
+            if not name.endswith(".py"):
+                continue
+            full = os.path.join(dirpath, name)
+            if _is_test_artifact(full):
+                found.append(os.path.relpath(full, root).replace(os.sep, "/"))
+    return sorted(found)
 
 
 def _coverage_report():
     """三档归类 + 明细行（供各断言与打印共用）。"""
     script_tests = set(_script_tests_from_gate_yml())
     script_leg, pytest_leg, uncovered = [], [], []
-    for f in _test_files():
-        rel = "tests/" + f
+    for rel in _test_files():
         if rel in script_tests:
             script_leg.append(rel)
             continue
@@ -160,6 +213,42 @@ def test_guard_itself_is_collectable():
         "本判据形同虚设。" % (SELF_REL, diag))
 
 
+def test_enumeration_face_is_recursive_and_behavior_based(tmp_path, monkeypatch):
+    """量具自检③（#491）：枚举面必须**递归**且按**行为**判件，否则三视野同时失明。
+
+    合成四件在临时树里实算（**不写工作树**）：
+      · `tests/sub/test_script_style_guard.py` —— 脚本式 + 子目录 ⇒ 必须枚举到；
+      · `tests/check_named_guard.py`        —— 脚本式 + 异名顶层 ⇒ 必须枚举到；
+      · `tests/named_pytest_style_test.py`  —— 异名但合 pytest 默认收集式 ⇒ 必须枚举到；
+      · `tests/helper.py`                   —— 合法辅助模块 ⇒ **不得**被枚举（防误报）。
+    若有人把 `_test_files()` 改回「`os.listdir` + `test_` 前缀」，本条即变红。
+    """
+    script_src = ('def main():\n'
+                  '    assert 1 + 1 == 2\n'
+                  '\n'
+                  'if __name__ == "__main__":\n'
+                  '    main()\n')
+    fake = tmp_path / "tests"
+    (fake / "sub").mkdir(parents=True)
+    (fake / "sub" / "test_script_style_guard.py").write_text(script_src, encoding="utf-8")
+    (fake / "check_named_guard.py").write_text(script_src, encoding="utf-8")
+    (fake / "named_pytest_style_test.py").write_text(
+        "def test_ok():\n    assert True\n", encoding="utf-8")
+    (fake / "helper.py").write_text("def helper():\n    return 42\n", encoding="utf-8")
+
+    monkeypatch.setattr(sys.modules[__name__], "TESTS_DIR", str(fake))
+    found = _test_files()
+    for want in ("tests/sub/test_script_style_guard.py",
+                 "tests/check_named_guard.py",
+                 "tests/named_pytest_style_test.py"):
+        assert want in found, (
+            "枚举面漏掉 %s（实测 %s）⇒ 该件会从 pytest 腿 / 脚本腿 / 本守卫"
+            "三个视野同时消失（#491 的机制）。" % (want, found))
+    assert "tests/helper.py" not in found, (
+        "枚举面把合法辅助模块 tests/helper.py 也收进来了（%s）⇒ 会制造误报，"
+        "判据应收窄到「文件名符合收集式 ∨ 顶层 test_* 函数 ∨ 有 __main__ 块」。" % found)
+
+
 # ---------------------------------------------------------------- 主判据
 
 def test_every_test_file_is_covered():
@@ -179,7 +268,7 @@ def test_every_test_file_is_covered():
             "（脚本式），或改成可被 pytest 收集（含 test_* 函数）。")
     # 契约：覆盖集 = SCRIPT_TESTS(∩tests) ∪ pytest 腿
     covered = set(rep["script_leg"]) | {rel for rel, _ in rep["pytest_leg"]}
-    all_rel = {"tests/" + f for f in _test_files()}
+    all_rel = set(_test_files())
     assert covered == all_rel, (
         "覆盖集与 tests/ 实况不符：未覆盖 %s" % sorted(all_rel - covered))
 

@@ -58,6 +58,16 @@ def neutral_path(p):
     return tail_seg(p) if is_abs_path(p) else p
 
 
+def neutral_title(t):
+    """#625：TITLE_RE 捕获的真源「功能名」若本身是绝对路径（正文写「功能名：<绝对路径>」），
+    必须与同节点 ref_root 同口径掩码——末段＋sha1(原文)前 8 位短指纹（neutral_root_id 同款，
+    保区分度：同末段不同原文指纹不同）。未掩码时该串会原样进 graph.json/viewer_graph.json/
+    naming_report.json 三个公开产物。"""
+    if t and is_abs_path(t):
+        return "%s#%s" % (tail_seg(t) or "root", hashlib.sha1(t.encode("utf-8")).hexdigest()[:8])
+    return t
+
+
 def neutral_root_id(p):
     p = str(p or "")
     if not is_abs_path(p):
@@ -114,7 +124,7 @@ def parse_md(path):
         return None
     body = t[m.end():]
     tm = TITLE_RE.search(body)
-    title = tm.group(1).strip() if tm else (fm.get("id") or os.path.basename(path))
+    title = neutral_title(tm.group(1).strip()) if tm else (fm.get("id") or os.path.basename(path))
     sha = hashlib.sha256(t.encode("utf-8", "replace")).hexdigest()[:12]
     return fm, body, title, sha
 
@@ -134,16 +144,31 @@ def main(argv=None):
         return 2
 
     nodes, edges = [], []
+    # edge_owner 与 edges 逐条同长的并行表：每条边由哪个节点声明（issue #605）。
+    # 边计数迁移到悬空剔除之后统一统计（见下方），声明归属（而非按 e["s"] 重归属）
+    # 必须靠它带过剔除这一关——#534 守卫钉住「mapping 形态边 s 是显式第三方时，
+    # 计数仍归声明节点」。
+    edge_owner = []
     layers = collections.Counter()
     buckets = collections.Counter()
     edge_types = collections.Counter()
     skipped = 0
+    # 节点 id 唯一性登记（issue #358）：同 id 的第二个及以后节点确定性改名（首见者
+    # 保留原名），冲突逐条登记进 meta/报告/告警 —— 否则 graph.json 出现同 id 双节点，
+    # counts.nodes 与去重 id 数自相矛盾，查看器 BY_ID 字典静默覆盖。
+    id_seen = {}
+    duplicate_ids = []
 
     for dirpath, dirnames, filenames in os.walk(root):
         rel_dir = os.path.relpath(dirpath, root).replace("\\", "/")
         if rel_dir.startswith(("_", "trash")) or os.path.basename(dirpath).startswith("."):
             dirnames[:] = []
             continue
+        # 遍历顺序确定化（issue #360）：os.walk 的 dirnames 顺序 = 文件系统返回顺序
+        # （NTFS 恰为字母序、ext4 为目录项序），目录创建顺序不同的两份同内容真源会产出
+        # 不同节点顺序 ⇒ derive_edges R5 同名标题归属（title_owner 取 ids[0]）随之改变，
+        # 而 source_sha 相同（它按 id 排序计算）。就地排序即可与文件系统序解耦。
+        dirnames.sort()
         for fn in sorted(filenames):
             if not fn.endswith(".md"):
                 continue
@@ -169,20 +194,57 @@ def main(argv=None):
             # YAML 数字 id（如 `id: 12345`）会解析成 int；归一为 str，否则
             # sorted((id, sha)) 混排抛 TypeError（issue #290）。
             nid = str(fm.get("id") or os.path.splitext(fn)[0])
+            # 重复 id 判定与改名（issue #358）：**同 id 的后到者让位**，确定性改为
+            # `<nid>#<sha>`（sha = 该文件内容指纹前 12 位，逐内容定值 ⇒ 与遍历顺序
+            # 无关、重跑稳定）。不改写真源、不静默丢节点：改名结果进 meta.duplicate_ids
+            # 与导出告警，查看器 BY_ID 不再发生「后写覆盖先写」。
+            # 改名结果必须回写 id_seen（issue #605）：同 id **同内容**的第 2/3 份
+            # 会算出同一个 `<nid>#<sha>`（内容指纹对同内容不可区分），旧码只回写
+            # 原 id ⇒ 改名撞车无感知，图里出现两条同 id 节点（#358 想消除的现象
+            # 在 3 份场景原样复现）、duplicate_ids 的 renamed_to 完全相同无法分辨。
+            # 回写后再撞（同 id 同内容第 3 份起）叠加确定性序号（`#2`、`#3`…）直到
+            # 唯一：遍历序已定死（上方 dirnames.sort + sorted(filenames，#360），
+            # 同结构真源重跑得到相同序号 ⇒ 产物仍可复现；刻意不用路径派生后缀——
+            # 同内容不同路径的两份真源会因此产出不同 id/指纹，破坏可复现性）。
+            if nid in id_seen:
+                dup_path = os.path.relpath(p, root).replace("\\", "/")
+                base = "%s#%s" % (nid, sha)
+                new_nid, seq = base, 2
+                while new_nid in id_seen:
+                    new_nid = "%s#%d" % (base, seq)
+                    seq += 1
+                duplicate_ids.append({"id": nid, "renamed_to": new_nid,
+                                      "kept": id_seen[nid], "path": dup_path})
+                id_seen[new_nid] = dup_path
+                nid = new_nid
+            else:
+                id_seen[nid] = os.path.relpath(p, root).replace("\\", "/")
             layers[layer] += 1
             if bucket:
                 buckets[bucket] += 1
 
             eds = fm.get("edges") or []
-            df = fm.get("derived_from")
+            # mapping 形态 {src: dst} → 转成边（issue #534）。之前直接 for 循环
+            # 迭代 dict 只拿到 key（字符串），被 isinstance 检查静默丢弃，
+            # 且 n_edges 按 len(eds) 计造成自相矛盾。
+            _eds_is_mapping = isinstance(eds, dict)
+            if _eds_is_mapping:
+                eds = [{"s": str(k), "t": str(v), "type": "untyped"}
+                       for k, v in eds.items() if v is not None]
             for e in eds:
                 if not isinstance(e, dict):
                     continue
                 et = str(e.get("type") or "untyped")
-                edge_types[et] += 1
-                tgt = e.get("target") or e.get("to") or e.get("id")
+                # mapping 形态已自带 "s"；list 形态用当前节点 nid 作源。
+                # 边计数（edge_types/n_edges）已迁移到悬空剔除之后统一统计
+                # （issue #605，见下方剔除处），此处只把声明节点登记进 edge_owner
+                # （与 edges 逐条同长），声明归属随边带过剔除这一关。
+                src = str(e.get("s") or nid)
+                tgt = e.get("target") or e.get("to") or e.get("id") or e.get("t")
                 if tgt:
-                    edges.append({"s": nid, "t": str(tgt), "type": et, "derived": False})
+                    edges.append({"s": src, "t": str(tgt), "type": et, "derived": False})
+                    edge_owner.append(nid)
+            df = fm.get("derived_from")
             # derived_from 可能是标量串（"a, b"）或 YAML 列表（[a, b]）。列表若直接
             # str() 会拼成 "['a', 'b']" 的伪目标、随后因悬空被剔除 ⇒ 静默丢边（issue #298）。
             if isinstance(df, (list, tuple)):
@@ -195,6 +257,7 @@ def main(argv=None):
                 t2 = t2.strip()
                 if t2:
                     edges.append({"s": nid, "t": t2, "type": "derived_from", "derived": False})
+                    edge_owner.append(nid)
 
             # doc_ref / code_ref 可能是 dict（{root, path}）或标量路径串；旧码直接
             # .get 假定 dict ⇒ 标量时 AttributeError 使整次导出崩（issue #291）。
@@ -214,15 +277,39 @@ def main(argv=None):
                 "sha": sha,
                 "ref_root": neutral_root_id(ref),
                 "ref_dir": neutral_path(os.path.dirname(str((dr or cr).get("path", "")).replace("\\", "/")).replace("\\", "/")),
-                "n_edges": len(eds),
+                "n_edges": 0,   # 占位：悬空剔除后按存活边重算（issue #605，见下方）
                 "path": os.path.relpath(p, root).replace("\\", "/"),
             })
 
     ids = set(n["id"] for n in nodes)
     dangling = sum(1 for e in edges if e["s"] not in ids or e["t"] not in ids)
-    edges = [e for e in edges if e["s"] in ids and e["t"] in ids]
+    # 边计数统一到悬空剔除之后（issue #605）：旧码 edge_types 在解析循环里、
+    # n_edges 在节点落表时（均为剔除前）计数，而 counts.edges 在剔除后统计 ⇒
+    # 同一产物 counts.edges=0 而 sum(edge_types)=1、node.n_edges=1，报告同时写
+    # 「显式边 0（悬空已剔除 1）」与「causal: 1」自相矛盾。剔除前的总量信息由
+    # dangling（悬空已剔除 N）单独承载，不与存活计数混写。edge_types 由此覆盖
+    # 全部存活边（含 derived_from——旧码只在 `edges` 循环累加、漏掉 derived_from，
+    # 零悬空时 sum(edge_types) 也会小于 counts.edges，同族两套口径）。n_edges 按声明归属
+    # （edge_owner）而非按 e["s"] 重归属——mapping 形态边 s 是显式第三方时计数
+    # 仍归声明节点（#534 守卫钉住该口径）；无悬空边时与旧读数逐值相同。
+    kept = [(e, o) for e, o in zip(edges, edge_owner) if e["s"] in ids and e["t"] in ids]
+    edges = [e for e, _ in kept]
+    edge_types = collections.Counter(e["type"] for e in edges)
+    owner_cnt = collections.Counter(o for _, o in kept)
+    for n in nodes:
+        n["n_edges"] = owner_cnt.get(n["id"], 0)
 
-    with_edge = sum(1 for nid in ids if any(e["s"] == nid or e["t"] == nid for e in edges))
+    # 「有边节点」与 n_edges 统一判据（issue #654）：按声明归属（owner_cnt）计。
+    # 旧码 with_edge 按「存活边两端」数（any(e.s==nid or e.t==nid)），与上方
+    # n_edges 的声明口径是两套判据且报告不注明——mapping 形态下声明者 a
+    # （n_edges=1）不在任何存活边的两端（边是 b→c），报告却说它不是「有边节点」；
+    # list 形态下被指向的 b（n_edges=0）反而计入 with_edge ⇒ 同一产物对「谁有边」
+    # 给出集合不重叠的两个答案（{a} vs {b,c}），sum(n_edges) 与 with_edge 无法对账。
+    # 统一后「有边节点 N」＝「n_edges>0 的节点数」，与 #534 钉住的 n_edges 声明
+    # 归属同口径（本修复不改 n_edges 本身）；declared_edge_nodes 是同值的显式
+    # 口径锚点字段，供产物自证三数关系：with_edge == declared_edge_nodes
+    # == count(n_edges>0)，另 sum(n_edges) == counts.edges（#605 边数三口径）。
+    with_edge = sum(1 for nid in ids if owner_cnt.get(nid, 0) > 0)
     density = 100.0 * with_edge / max(len(ids), 1)
 
     graph = {
@@ -234,7 +321,11 @@ def main(argv=None):
             ).hexdigest()[:16],
             "generated_at": datetime.now().strftime("%Y-%m-%d %H:%M:%S"),
             "counts": {"nodes": len(nodes), "edges": len(edges), "buckets": len(buckets),
-                       "with_edge": with_edge, "density_pct": round(density, 2), "skipped_md": skipped},
+                       "with_edge": with_edge, "declared_edge_nodes": with_edge,
+                       "density_pct": round(density, 2), "skipped_md": skipped},
+            # 重复 id 登记（issue #358）：节点 id 已唯一化，此处留下「哪些原 id 撞过、
+            # 后到者被改名成什么、原名保留给哪个文件」，供审计与查看器排查。
+            "duplicate_ids": duplicate_ids,
             "layers": dict(layers),
             "edge_types": dict(edge_types),
         },
@@ -252,13 +343,21 @@ def main(argv=None):
         "- 节点 %d（跳过无法解析 %d）" % (len(nodes), skipped),
         "- 显式边 %d（悬空已剔除 %d）" % (len(edges), dangling),
         "- 桶 %d" % len(buckets),
-        "- **有边节点 %d / %d = %.1f%%**" % (with_edge, len(ids), density),
+        # 口径注明（#654）：「有边」＝声明了存活边（n_edges>0），非「存活边的端点」
+        "- **有边节点 %d / %d = %.1f%%**（口径：声明了存活边，＝ nodes[].n_edges>0 的节点数）" % (with_edge, len(ids), density),
         "", "## 层分布", "",
     ] + ["- %s: %d" % (k, v) for k, v in layers.most_common()] + [
         "", "## 边类型", "",
     ] + ["- %s: %d" % (k, v) for k, v in edge_types.most_common()] + [
         "", "## 桶 Top20", "",
     ] + ["- %s: %d" % (b["bucket"], b["count"]) for b in graph["buckets"][:20]] + [""]
+
+    if duplicate_ids:
+        # 告警走 stderr（issue #358）：stdout 是 JSON 统计块，掺入文本会破坏消费方解析。
+        print("警告：%d 个重复节点 id 已改名（后到者 → <id>#<sha>），详见 meta.duplicate_ids：%s"
+              % (len(duplicate_ids), ", ".join(d["id"] for d in duplicate_ids)), file=sys.stderr)
+        report_lines += ["", "## 重复 id（已改名，后到者让位）", ""] + [
+            "- %s ← %s（保留原名：%s）" % (d["renamed_to"], d["path"], d["kept"]) for d in duplicate_ids] + [""]
 
     os.makedirs(args.out, exist_ok=True)
     if args.write:

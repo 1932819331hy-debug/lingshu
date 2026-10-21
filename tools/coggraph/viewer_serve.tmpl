@@ -55,7 +55,8 @@ def node_detail(nid):
         # issue #276：`path` 来自 viewer_graph.json（可被替换/来自他方），
         # 先做包含性校验再判 isfile —— 否则 `../x` 与绝对路径都能读到 MDCG 之外。
         if _within_root(fp) and os.path.isfile(fp):
-            with io.open(fp, encoding="utf-8", errors="replace") as f:
+            # utf-8-sig 剥 BOM：BOM 会让 startswith("---") 判否，front matter 被整段当正文展示（issue #412 同族）。
+            with io.open(fp, encoding="utf-8-sig", errors="replace") as f:
                 raw = f.read()
             if raw.startswith("---"):
                 end = raw.find("\n---", 3)

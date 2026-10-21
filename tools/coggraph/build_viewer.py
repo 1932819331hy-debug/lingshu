@@ -66,7 +66,7 @@ HTML = """<!doctype html>
  <label><input type="checkbox" id="iso"> 孤立节点</label>
  <label><input type="checkbox" id="dashed" checked> 推导边（虚线）</label>
  <label><input type="checkbox" id="hubn" checked> 枢纽/桶节点</label>
- <label><input type="checkbox" id="anch" checked> 只看已锚定（隐藏隔离区）</label>
+ <label><input type="checkbox" id="anch" checked> 只看已锚定（未锚定/未审计一律隐藏）</label>
 </div>
 <div id="cy"></div>
 <div id="detail"></div>
@@ -111,7 +111,12 @@ function build(){
   for(const n of G.nodes){
     if(!lay.has(n.layer)) continue;
     if(n.hub && !showHub) continue;
-    if(onlyAnch && n.ncls === '隔离区') continue;
+    // #629（本端已裁＝fail-closed）：旧判据 `n.ncls === '隔离区'` 是单值相等 ⇒
+    // 「未审计」（ncls===''，naming_report 长度闸/未收录标题根本无 row）与
+    // 「已通过审计」同值，默认勾选下越短越可见。改为「未锚定即隐藏」：只有
+    // 明确判为 强规范锚/已锚定 的节点可见；alias候选/隔离区/'' 一律隐藏，
+    // 与「隔离区」语义及 S3 口径一致。取消勾选仍可看全量。
+    if(onlyAnch && n.ncls !== '强规范锚' && n.ncls !== '已锚定') continue;
     if(n.degree===0 && !showIso) continue;
     if(q && !(n.title||'').toLowerCase().includes(q) && !n.id.toLowerCase().includes(q)) continue;
     keep.add(n.id);
@@ -139,7 +144,9 @@ function build(){
   cy.edges().forEach(e=>{ const d=e.data(); const t=d.id.split('|')[2];
     e.style('line-color', ruleColor[t]||'#666'); e.style('line-style', d.id.endsWith('|1')?'dashed':'solid'); });
   const shown = cy.nodes().length, se = cy.edges().length;
-  document.getElementById('stat').innerHTML = '显示 '+shown+' 节点 / '+se+' 边<br>全库 '+G.meta.counts.nodes+' 节点 / '+(G.meta.counts.edges+G.meta.derived)+' 边'+(G.merged_aliases?('（已归并 '+G.merged_aliases+' 个重复/同义节点）'):'')+'<br>真源指纹 '+G.meta.source_sha;
+  // #413：derived 计数写在 viewer_graph 顶层（vgraph["derived"]），不在 g["meta"] 里；
+  //   旧写法从 meta 取 derived（键不存在 ⇒ undefined）⇒ 与 counts.edges 相加恒为 NaN（侧栏「全库 … 边」显示 NaN）。
+  document.getElementById('stat').innerHTML = '显示 '+shown+' 节点 / '+se+' 边<br>全库 '+G.meta.counts.nodes+' 节点 / '+(G.meta.counts.edges+G.derived)+' 边'+(G.merged_aliases?('（已归并 '+G.merged_aliases+' 个重复/同义节点）'):'')+'<br>真源指纹 '+G.meta.source_sha;
   cy.on('tap','node', async evt=>{
     const id = evt.target.id(); const box = document.getElementById('detail');
     box.style.display='block'; box.innerHTML = '<h3>'+esc(id)+'</h3><div class="m">加载中…</div>';
@@ -219,26 +226,40 @@ def _sha256_file(path):
     return h.hexdigest()
 
 
-def fetch_cytoscape(out_dir):
+def fetch_cytoscape(out_dir, allow_unofficial=False):
     """确保 out_dir/cytoscape.min.js 是**固定版本且内容校验通过**的 cytoscape。
 
     修复 #251：旧实现仅以「文件存在且 >100000 字节」判定可复用（不校验内容），
     被替换 / 损坏 / 版本漂移的同名文件会被静默复用；下载产物也不校验。
     现在复用与下载两条路径都做 SHA256 校验，期望指纹 = 固定版本官方产物（CYTO_SHA256）。
 
-    离线 / 测试可用环境变量 LINGSHU_CYTO_SHA256 显式声明**自备**产物的期望指纹
-    （默认仍走固定值）；它只用于放置自备副本，不改变默认的固定校验。
+    修复 #620（校验旁路）：旧取值 `expect = os.environ.get("LINGSHU_CYTO_SHA256") or CYTO_SHA256`
+    的 `or` 短路让环境变量**取代**固定基准——把它设成目标文件自身的 sha256 即可让任意
+    篡改内容通过校验、stdout 谎称「已有（校验通过）」。现改为**双轨**，两轨各自可判定：
+      · 内容 sha 轨（默认，恒参与判定，对齐 #251 已有效那半）：仅 `got == CYTO_SHA256`
+        判官方通过；**下载路径恒按官方固定指纹**，环境变量与自备开关都不得放宽它。
+      · 自备声明轨（显式独立开关）：`allow_unofficial=True`（CLI `--allow-unofficial-cyto`）
+        **且** `LINGSHU_CYTO_SHA256` 显式声明自备产物指纹时，仅**复用路径**接受
+        `got == 声明值`；通过时 stderr 告警、措辞与官方通过可区分，并由调用方把
+        判定登记进 viewer_graph.json 的 `cyto_official` 字段（产物侧可查）。
+    变量本身不再是放行凭据：旁路场景（设变量=篡改自身 sha、不开开关）一律拒绝（rc≠0）。
     """
     p = os.path.join(out_dir, "cytoscape.min.js")
-    expect = os.environ.get("LINGSHU_CYTO_SHA256") or CYTO_SHA256
+    declared = (os.environ.get("LINGSHU_CYTO_SHA256") or "").strip()
     if os.path.isfile(p) and os.path.getsize(p) > 100000:
         got = _sha256_file(p)
-        if got != expect:
-            raise SystemExit(
-                "cytoscape.min.js 校验失败：期望 sha256=%s，实得 %s（文件 %s）。"
-                "请删除该文件后重试（将重新下载并校验），或放置固定版本 %s"
-                % (expect, got, p, CYTO_URL))
-        return p, "已有（校验通过）"
+        if got == CYTO_SHA256:
+            return p, "已有（官方校验通过）"
+        if allow_unofficial and declared and got == declared:
+            print("[warn] build_viewer: 按自备声明接受非官方 cytoscape 副本（sha256=%s，"
+                  "经 LINGSHU_CYTO_SHA256 + --allow-unofficial-cyto 显式开启）；"
+                  "viewer_graph.json 已登记 cyto_official=false" % got, file=sys.stderr)
+            return p, "已有（自备声明校验通过·非官方副本）"
+        raise SystemExit(
+            "cytoscape.min.js 校验失败：官方固定指纹=%s，实得 %s（文件 %s）；"
+            "自备声明=%s（且自备声明仅对复用路径显式开启 --allow-unofficial-cyto 时有效，"
+            "下载路径恒按官方指纹）。请删除该文件后重试（将重新下载并校验），或放置固定版本 %s"
+            % (CYTO_SHA256, got, p, declared or "（未设）", CYTO_URL))
     last = ""
     for attempt in range(3):
         try:
@@ -246,18 +267,20 @@ def fetch_cytoscape(out_dir):
             with urllib.request.urlopen(req, timeout=120) as r:
                 data = r.read()
             got = hashlib.sha256(data).hexdigest()
-            if got != expect:
+            if got != CYTO_SHA256:
                 raise SystemExit(
                     "cytoscape 下载校验失败：期望 sha256=%s，实得 %s（%s）——拒绝写入被篡改/"
-                    "版本漂移的产物。" % (expect, got, CYTO_URL))
+                    "版本漂移的产物（#620：下载轨恒按官方固定指纹，LINGSHU_CYTO_SHA256 "
+                    "与自备开关都不得放宽此轨）。" % (CYTO_SHA256, got, CYTO_URL))
             with open(p, "wb") as f:
                 f.write(data)
-            return p, "已下载（校验通过）"
+            return p, "已下载（官方校验通过）"
         except Exception as e:
             last = str(e)
             time.sleep(3)
     raise SystemExit("cytoscape 下载失败（离线环境请手工放置固定版本 cytoscape.min.js 到 %s，"
-                     "其 sha256 须为 %s）：%s" % (out_dir, expect, last))
+                     "其 sha256 须为 %s；自备非官方副本须经 --allow-unofficial-cyto + "
+                     "LINGSHU_CYTO_SHA256 显式声明其指纹）：%s" % (out_dir, CYTO_SHA256, last))
 
 
 def main(argv=None):
@@ -270,6 +293,10 @@ def main(argv=None):
     ap.add_argument("--synonyms", default="", help="synonym_groups.json（同义归并候选；仅在 --merge-synonyms 时生效）")
     ap.add_argument("--merge-synonyms", action="store_true",
                     help="显式启用视图层同义归并（默认关闭，只作待复核候选，不自动归并）")
+    ap.add_argument("--allow-unofficial-cyto", action="store_true",
+                    help="#620：显式允许复用路径按 LINGSHU_CYTO_SHA256 声明接受自备 cytoscape 副本"
+                         "（非官方件会 stderr 告警并在 viewer_graph.json 记 cyto_official=false；"
+                         "下载路径恒按官方固定指纹）")
     args = ap.parse_args()
 
     with io.open(args.graph, encoding="utf-8") as f:
@@ -285,7 +312,10 @@ def main(argv=None):
                 d_hubs[h["id"]] = dict(h)
         d_edges.extend(dd.get("edges", []))
     hubs_list = list(d_hubs.values())
-    d_edge_count = len(d_edges)
+    # #640：旧口径 `d_edge_count = len(d_edges)`（折叠前原始数）已退役——唯一消费点
+    #   是 vgraph["derived"]，而它必须与折叠损耗计数同口径（#618 的 dropped_selfloop/
+    #   merged_edges 恰从这批边里剔除），净数在折叠循环之后另算（derived_net）。
+    #   hubs 的 count 是节点数语义（R4，测试已锁），不属边口径，本件不动。
 
     # ---- 同义/重复归并：别名节点重映射到 canonical（仅视图层，不改真源）
     # #410：synonym_groups.json 是**待复核**候选（README/⑤ 宣称「不自动归并」）。
@@ -309,16 +339,57 @@ def main(argv=None):
     def canon(x):
         return alias_to_canon.get(x, x)
 
+    # ---- #645：R5 同名 phantom 边过滤（折叠循环之前，消费侧口径）——
+    # derive_edges 的 R5 在正文里搜标题，同名组（a1/a2/a3 同标题）里 a2/a3 的
+    # 正文首行 `# 功能名：<自身标题>` 会匹配到组首 a1 ⇒ 产出 a2→a1 / a3→a1 的
+    # 「互引」边——这是同名声明（自身标题行递归），不是被别的概念引用（#359）。
+    # 审计侧 naming_report 的 Q1 deg（:74）与 r5_in（:95-97/#606）两处都已按
+    # 「提及者标题 == 被提及标题」滤掉，本端旧实现零过滤 ⇒ 被审计判「不存在」的边
+    # 在视图侧画成「正文互引」（body_crossref 在 DEFAULT_EDGE_ON 默认可见集合）
+    # 且计入 degree。与 naming_report 完全同口径（title_of 的 strip 语义一致）；
+    # derive_edges 产出侧不动（审计与视图共用真源，过滤是消费侧口径问题）。
+    # 损耗计数可见（#618 纪律）：stdout 折叠损耗行新增一类 + 顶层 phantom_r5_dropped 恒写。
+    title_of = {n["id"]: (n.get("title") or "").strip() for n in g["nodes"]}
+    phantom_r5_dropped = 0
+    d_edges_kept = []
+    for e in d_edges:
+        if (e.get("rule") == "R5_body_crossref"
+                and title_of.get(e.get("s"), "") == title_of.get(e.get("t"), "")):
+            phantom_r5_dropped += 1     # 同名 phantom：与 naming_report #359/#606 同口径剔除
+            continue
+        d_edges_kept.append(e)
+    d_edges = d_edges_kept
+
+    # #618：折叠损耗必须可见，不再静默丢边。两类损耗分别计数——
+    #   L1 自环丢弃（折叠后 s==t；真源 export 侧无 s==t 防护，可自带 a->a）；
+    #   L2 同键合并（两条真关系折叠后撞 (s,t,type,derived) 同键，并成一条）。
+    #   L3 别名节点剔除（下方 vnodes 过滤）是 #410 的刻意设计，不属损耗、不告警。
+    #   L4 R5 同名 phantom（#645，上方已在上游剔除）：同名标题行递归互引，非损耗
+    #      语义的折叠，但同走「计数可见」纪律（判据见上方 #645 块）。
     all_edges, seen_edge = [], set()
+    selfloop_dropped, dup_merged = 0, 0
     for e in g["edges"] + d_edges:
         s, t = canon(e["s"]), canon(e["t"])
         if s == t:
+            selfloop_dropped += 1
             continue
         k = (s, t, e["type"], bool(e.get("derived")))
         if k in seen_edge:
+            dup_merged += 1
             continue
         seen_edge.add(k)
         all_edges.append({"s": s, "t": t, "type": e["type"], "derived": bool(e.get("derived"))})
+    if selfloop_dropped or dup_merged or phantom_r5_dropped:
+        print("折叠损耗：自环丢弃 %d 条 / 同键合并 %d 条 / 同名 phantom %d 条"
+              "（同义折叠后 s==t、同键重复、R5 同名标题行递归互引（#645）被剔除，"
+              "计数见 viewer_graph.json 顶层 dropped_selfloop / merged_edges / phantom_r5_dropped）"
+              % (selfloop_dropped, dup_merged, phantom_r5_dropped))
+    # #640：derived 必须是**折叠后净数**——旧口径取折叠前 len(d_edges)，而
+    #   dropped_selfloop/merged_edges 恰从这批边里剔除 ⇒ 侧栏「全库 N 边」
+    #   （counts.edges + derived）系统性高估、偏差恒等于损耗量。源头修
+    #   （本端已裁口径，不采「侧栏直用 G.edges.length」）：此处改算折叠后
+    #   实际存活的推导边数。零损耗时与旧值一致 ⇒ #413 加法恒等不受影响。
+    derived_net = sum(1 for e in all_edges if e["derived"])
 
     deg = collections.Counter()
     for e in all_edges:
@@ -329,6 +400,16 @@ def main(argv=None):
 
     hub_ids = {h["id"] for h in hubs_list}
     hubs_by_id = {h["id"]: h for h in hubs_list}
+
+    # 枢纽节点的 degree 必须按实际连接边数算，不能直接用 h["count"]——
+    # count 是 derive_edges 登记的"当日节点数"（R4 语义，测试已锁定），不是连接度。
+    # 直接套用会导致 50 条孤立笔记的日枢纽被画成 degree=50 的超级节点。
+    hub_deg = collections.Counter()
+    for e in all_edges:
+        if e["s"] in hub_ids:
+            hub_deg[e["s"]] += 1
+        if e["t"] in hub_ids:
+            hub_deg[e["t"]] += 1
 
     title2cls = {}
     if args.naming and os.path.isfile(args.naming):
@@ -349,7 +430,8 @@ def main(argv=None):
     for h in hubs_list:
         vnodes.append({"id": h["id"], "layer": "hub", "title": h["label"],
                        "bucket": "", "tags": [], "importance": 0,
-                       "degree": h["count"], "hub": True})
+                       "degree": hub_deg.get(h["id"], 0),
+                       "node_count": h["count"], "hub": True})
 
     # 先算布局，再把枢纽移到成员质心（必须在拷进 vnodes 之前；否则拷贝到的是未居中的坐标）
     pos = build_layout(g["nodes"], hubs_by_id)
@@ -370,18 +452,26 @@ def main(argv=None):
     layer_count = collections.Counter(n["layer"] for n in vnodes)
     doc = (HTML.replace("%%LAYER_COLOR%%", json.dumps(LAYER_COLOR))
                .replace("%%RULE_COLOR%%", json.dumps(RULE_COLOR)))
+    # #618：损耗计数恒写（含 0），供下游与 meta.counts.edges 对账（顶层口径同 derived，见 #413）。
+    # #645：phantom_r5_dropped 同恒写（含 0）——R5 同名 phantom 剔除量与 #618 两类损耗同纪律。
     vgraph = {"meta": g["meta"], "nodes": vnodes, "edges": vedges,
               "layer_count": dict(layer_count), "edge_type_count": dict(et_count),
-              "derived": d_edge_count, "merged_aliases": merged_alias_count}
+              "derived": derived_net, "merged_aliases": merged_alias_count,
+              "dropped_selfloop": selfloop_dropped, "merged_edges": dup_merged,
+              "phantom_r5_dropped": phantom_r5_dropped}
 
     os.makedirs(args.out, exist_ok=True)
+    # #620：cytoscape 校验前置到产物落盘之前——官方/自备的判定要登记进
+    #   viewer_graph.json 的 cyto_official 字段（产物侧可查，两种通过不再混称）；
+    #   校验不过直接非零退出，产物不写（比旧序「先写产物、最后才校验」更严不更宽）。
+    _, note = fetch_cytoscape(args.out, allow_unofficial=args.allow_unofficial_cyto)
+    vgraph["cyto_official"] = "非官方" not in note
     with io.open(os.path.join(args.out, "index.html"), "w", encoding="utf-8", newline="\n") as f:
         f.write(doc)
     with io.open(os.path.join(args.out, "viewer_graph.json"), "w", encoding="utf-8", newline="\n") as f:
         json.dump(vgraph, f, ensure_ascii=False)
     with io.open(os.path.join(args.out, "serve.py"), "w", encoding="utf-8", newline="\n") as f:
         f.write(SERVE)
-    _, note = fetch_cytoscape(args.out)
     print("产物：%s" % args.out)
     print("  index.html / viewer_graph.json(%d 节点 %d 边) / serve.py / cytoscape.min.js(%s)"
           % (len(vnodes), len(vedges), note))

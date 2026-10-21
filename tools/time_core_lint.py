@@ -19,8 +19,10 @@
     · `--baseline FILE --update-baseline` 而 FILE **不存在** → 退出码 2 且**不创建**该文件
       （防误写：写错路径时不会凭空造出一个 baseline）。只有**默认** baseline
       （不给 `--baseline`）不存在时才允许 `--update-baseline` 创建它。
-    · 输出以 `{file, line, rule}` 三元组为键：同一逻辑语句同时命中 R2 与 R3 时**输出 2 行**，
-      baseline 也必须写 2 行（`--update-baseline` 会自动写 2 行，不是漏了）。
+    · 输出**逐条**记账（#607 起）：同一逻辑语句同时命中 R2 与 R3 时输出 2 行；同一物理行
+      的多条同类违规（`;` 同行多语句等）也逐条输出——`{file, line, rule}` 三元组**可重复
+      出现**。baseline 仍是三元组集合语义：同一三元组登记 1 行即覆盖该行该规则的全部命中
+      （`--update-baseline` 机械去重后落盘）。
 
 规则表（E5 三类，取自 time_core 自身 docstring）
 ------------------------------------------------
@@ -31,9 +33,13 @@ R2 keep_rate  离散保持率改写（三类形态，任一命中即 R2）：
               (b) `retain = 1 - f` / `keep = 1 - f` / `keep_rate = 1 - f` 等保持率命名的赋值
               (c) 括号包裹的独立 `(1 - <decay|factor|gamma|rate>|…)` 表达式
 R3 ema        EMA/保持率出现在**乘性更新**里：
-              (a) 自指乘性更新 `x = … x * …`（x 以 `self.x` 形态亦可）
+              (a) 自指乘性更新 `x = … x * …`（x 以 `self.x` 形态亦可；被冗余外层括号
+                  整体包住的也算——`(v * 0.9)`、`(self.v * 0.9) + 0.1 * g`，#607；
+                  调用实参括号与 `(t * w).sum()` 伴生括号不算）
               (b) 增量乘性赋值 `x *= …`
-              (c) 赋值 / return 的表达式中出现 `* <retain|keep|keep_*|momentum|ema|decay*|forget*|…>`
+              (c) 赋值 / return 的表达式中出现 `* <retain|keep|keep_*|momentum|ema|
+                  decay*|forget*|gamma|alpha|rho|tau|discount|lr|…>`（#607 补齐
+                  与 R2C 对齐的衰减名）
 
 豁免表（写进代码；下表顺序即优先级，先命中者生效）
 --------------------------------------------------
@@ -73,8 +79,10 @@ L3 R2(a) 的 factor 必须是**纯名字**表达式（允许 `self.` / 属性链
    "核的参数"）。⚠ 其中 `x * (1 - gamma*dt)` 是真实世界**最常见**的衰减改写形态，这条假阴
    值得维护者知情（想覆盖它需要表达式归因，不是加个正则能收的）。
 L4 EX4 是**名字白名单**（INTERP_VOCAB），是本工具最弱的一环：把保持率命名成 `fx/pc/cov/…`
-   会漏报；真插值权重若不在白名单（`alpha`、`t`、`u`、`a` 等任何名字）会误报。
-   白名单刻意保持小且保守。
+   会漏报；真插值权重若不在白名单（`t`、`u`、`a` 等任何名字）会误报。
+   白名单刻意保持小且保守。⚠ #607 起 `alpha` 进了 _KEEP_WORD（与 R2C 的衰减名对齐）：
+   名叫 alpha 的**真插值权重**若以 `* alpha` / `x * alpha` 形态出现会被 R3 报——
+   维护者可把它加进 INTERP_VOCAB 或转交 cred*(…) 核（EX4/EX5）。
 L4b R3 的**数值形状**只认 `0 < literal < 1`（`0.9`、`.5`、`0.98`；`1.5`、`2.0`、`100`
    一概不认）：故 `v = 0.9*v + 0.1*g` 命中，而 `x = 2.0 * x`（纯放大，非衰减）不命中。
    代价是 `x = x * 1.5` 也不报——宁可漏判"放大"，不把放大误判成衰减。
@@ -82,7 +90,8 @@ L5 注释与字符串字面量在扫描前被**等长掩码成空格**（行号�
    `exp(-t/τ)`、`×(1-factor)` 示例不产生命中；反之 f-string 表达式内部的衰减核也一并被
    掩码（假阴，罕见）。
 L6 逻辑语句按括号深度与行尾反斜杠合并续行；**同一物理行上深度 0 的 `;` 会切成独立语句**
-   分别判定（避免 `a = a*(1-pc); b = z*pc` 这类同行复合被 EX4 整体洗白）。仍有的边界：
+   分别判定（避免 `a = a*(1-pc); b = z*pc` 这类同行复合被 EX4 整体洗白）；#607 起各语句
+   的违规**逐条入账**——同行的第 2/3 条同类违规不再被 (line, rule) 去重吞掉。仍有的边界：
    R3(a) 的赋值目标必须**位于语句开头**（允许 `a, b = …` 的元组前缀、`self.` 前缀、
    `x[i] = …` 下标目标、`obj.attr = …` 属性链与 `x: T = …` 注解写法）；
    `if c: y = y * retain` 这类**同行复合语句**（冒号后内联）里的更新
@@ -107,7 +116,8 @@ L9 已判定为"不按违规处理"的既有候选（每条都带豁免回归测
      ——`1 - α` 当证据保留权重、下游乘性使用，离 E5 精神很近，值得维护者人工看一眼。
    · lingshu/gen/hexgen_self_source.py:236/240/411/413、gen/hexgen_c1_real.py:464-465
      —— 互补权重线性插值 / alpha 合成（EX4）。
-   · lingshu/core/core.py:1503/1512/1513 `math.sqrt(p * (1 - p) / n)` —— 伯努利标准误（EX3）。
+   · lingshu/core/core.py（片段定位：`math.sqrt(cer * (1 - cer) / n)` 与
+     `math.sqrt(max(p1 * (1 - p1) / len(with_), 1e-4))` 一族） —— 伯努利标准误（EX3）。
 """
 from __future__ import annotations
 
@@ -119,7 +129,7 @@ import sys
 from pathlib import Path
 from typing import Dict, Iterable, List, Optional, Sequence, Set, Tuple
 
-LINT_VERSION = 1
+LINT_VERSION = 2
 
 REPO_ROOT = Path(__file__).resolve().parents[1]
 DEFAULT_SCAN_DIR = "lingshu"
@@ -175,7 +185,12 @@ _ASSIGN = re.compile(
     r"\s*(?::[^=]+?)?\s*=(?!=)\s*(.+)", re.S)
 
 # EMA / 保持率命名（裸 `keep` 也算——否则 `x*(1-keep)` 报而 `x*keep` 不报，口径自相矛盾；
-# `keep_pm`/`keepdims` 这类前缀相同的名字因 `keep\b` 要求词边界而不会误伤）
+# `keep_pm`/`keepdims` 这类前缀相同的名字因 `keep\b` 要求词边界而不会误伤）。
+# #607：补 gamma/alpha/rho/tau/discount/lr——与 RULE_R2C 自列的衰减名（gamma/lambda）对齐，
+# 否则语义等价写法判读相反（`x = x * (1 - gamma)` 被报、`x = x * gamma` 零命中）。
+# 六个词一律 `\b` 收尾的**精确词**（不认 `gamma_t`/`alphas`/`lru` 等前后缀扩展），
+# 与 R2C 的 gamma 精确口径一致；词首方向无需 `\b`——R3C 的词表位置锚定在 `* ` 或
+# `.` 前缀链之后（`* agamma` 不可能在 `a` 处起匹配，`retain\w*` 一直如此）。
 _KEEP_WORD = (
     r"(?:retain\w*"
     r"|keep_(?:rate|factor|ratio|prob)\w*"
@@ -184,7 +199,8 @@ _KEEP_WORD = (
     r"|ema(?:_(?:rate|alpha|factor))?\w*"
     r"|decay(?:_(?:rate|factor|coef|gamma))?\b"
     r"|forget(?:_rate)?\b"
-    r"|halflife|half_life|smoothing\w*)"
+    r"|halflife|half_life|smoothing\w*"
+    r"|gamma\b|alpha\b|rho\b|tau\b|discount\b|lr\b)"
 )
 RULE_R3C = re.compile(r"\*\s*(?:self\.|np\.)?(?:[A-Za-z_]\w*\.)*" + _KEEP_WORD)
 
@@ -363,21 +379,63 @@ def _is_depth0(s: str, pos: int) -> bool:
     return d == 0
 
 
-def _self_multiplicative_pos(rhs: str, name: str) -> Optional[int]:
-    """R3(a)：RHS 顶层出现 `NAME * 保持率形状` 或 `保持率形状 * NAME` 时返回该乘法位置。
+def _paren_pairs(s: str) -> List[Tuple[int, int]]:
+    """s 中配对圆括号的 (开, 闭) 位置列表（不平衡的残留括号忽略）。"""
+    stack: List[int] = []
+    pairs: List[Tuple[int, int]] = []
+    for i, ch in enumerate(s):
+        if ch == "(":
+            stack.append(i)
+        elif ch == ")" and stack:
+            pairs.append((stack.pop(), i))
+    return pairs
 
-    深度 >0 的乘法（如 `(t * w).sum()` 正交化、`*fill` 解包）不算"乘性更新"。
+
+def _is_depth0_peeled(s: str, start: int, end: int) -> bool:
+    """[start, end) 的乘法是否「剥掉冗余外层括号后」位于深度 0（#607）。
+
+    只剥**成对、且恰好包裹整个命中区**（容空白）的圆括号——`(v * 0.9)`、
+    `((v * 0.9))`、`(self.v * 0.9) + 0.1 * g` 里的自指乘法因此不再逃逸；
+    调用 / 属性访问伴生的括号**不剥**，深度 >0 语义对它们不变：
+      · `foo(…)` / `obj.m(…)` / `x[1](…)`：开括号紧跟标识符/右括号（函数实参）；
+      · `(…).sum()` / `(…)(…)` / `(…)[0]`：闭括号后紧跟 `.`/`(`/`[`（正交化、链式取用）。
+    """
+    pairs = _paren_pairs(s)
+    while True:
+        enclosing = None
+        for o, c in pairs:
+            if o < start and end <= c and (enclosing is None or o > enclosing[0]):
+                enclosing = (o, c)
+        if enclosing is None:
+            return _is_depth0(s, start)
+        o, c = enclosing
+        if s[o + 1:start].strip() or s[end:c].strip():
+            return False                  # 括号里不止这个乘法 ⇒ 不是冗余包裹（如实参之一）
+        if o > 0 and (s[o - 1] in ")]}" or s[o - 1].isalnum() or s[o - 1] == "_"):
+            return False                  # 开括号前是名字/右括号 ⇒ 函数调用实参括号
+        if c + 1 < len(s) and s[c + 1] in ".([":
+            return False                  # 闭括号后是 `.`/`(`/`[` ⇒ `(t * w).sum()` 一族
+        start, end = o, c + 1             # 剥掉这一层，继续向外
+
+
+def _self_multiplicative_pos(rhs: str, name: str) -> Optional[Tuple[int, int]]:
+    """R3(a)：RHS 顶层出现 `NAME * 保持率形状` 或 `保持率形状 * NAME` 时返回该乘法的
+    [start, end) 区间。
+
+    深度 >0 的乘法（如函数实参、`(t * w).sum()` 正交化、`*fill` 解包）不算
+    "乘性更新"；但**被冗余外层括号整体包住**的自指乘法算（`(v * 0.9)`、
+    `(self.v * 0.9) + 0.1 * g`，见 _is_depth0_peeled，#607）。
     """
     esc = re.escape(name)
     # 目标可能带 `.attr` / `[下标]` 后缀（`obj.attr`、`x[i]`），此时结尾是 `]` 等非词字符，
     # `\b` 会因「非词字符后仍是非词字符」而永不成立 ⇒ 用 `(?!\w)` 排除「前缀同名」（`xy`）即可。
     name_pat = r"(?:self\.)?" + esc + r"(?!\w)"
     for m in re.finditer(name_pat + r"\s*\*\s*" + _KEEP_SHAPE, rhs):
-        if _is_depth0(rhs, m.start()):
-            return m.start()
+        if _is_depth0_peeled(rhs, m.start(), m.end()):
+            return m.start(), m.end()
     for m in re.finditer(_KEEP_SHAPE + r"\s*\*\s*" + name_pat, rhs):
-        if _is_depth0(rhs, m.start()):
-            return m.start()
+        if _is_depth0_peeled(rhs, m.start(), m.end()):
+            return m.start(), m.end()
     return None
 
 
@@ -461,7 +519,11 @@ def lint_source(text: str, rel_path: str, raw_lines: Optional[Sequence[str]] = N
     masked = mask_source(text)
     if raw_lines is None:
         raw_lines = text.split("\n")
-    hits: Dict[Tuple[int, str], Dict] = {}
+    # #607：命中**逐条入账**——去重只在「同一语句内、同一规则、同一处文本」（跨规则路径
+    # 对同一处乘法的重复检出要合并：R3(a)×R3(c)、R2(a)×R2(c)）；不同语句（`;` 同行切分）
+    # 或同语句内不同位置的同类违规各自成条，同一 (line, rule) 三元组可出现多条。
+    hits: List[Dict] = []
+    stmt_spans: Dict[int, List[Tuple[str, int, int]]] = {}
     stmts = build_statements(masked)
 
     # EX2 跨语句 softmax：`e = np.exp(-z)` 紧接 `return e / e.sum()` 形态
@@ -480,22 +542,27 @@ def lint_source(text: str, rel_path: str, raw_lines: Optional[Sequence[str]] = N
                 and ("sum(" in tail or ".sum(" in tail):
             softmax_numerator.add(idx)
 
-    def add(line: int, rule: str, reason: Optional[str]) -> None:
+    def add(line: int, rule: str, reason: Optional[str], stmt_idx: int = -1,
+            span: Optional[Tuple[int, int]] = None) -> None:
         if reason is not None:
             return
-        key = (line, rule)
-        if key in hits:
-            return
+        # 同一语句内同一规则的命中区若与已入账的区重叠 ⇒ 是同一处文本的另一条检出
+        # 路径（不是另一条违规），跳过；区不重叠或来自不同语句 ⇒ 逐条入账（#607）。
+        if span is not None and stmt_idx >= 0:
+            for r, s, e in stmt_spans.get(stmt_idx, ()):
+                if r == rule and s < span[1] and span[0] < e:
+                    return
+            stmt_spans.setdefault(stmt_idx, []).append((rule, span[0], span[1]))
         snippet = raw_lines[line - 1].strip() if 0 < line <= len(raw_lines) else ""
         if len(snippet) > MAX_SNIPPET:
             snippet = snippet[:MAX_SNIPPET - 3] + "..."
-        hits[key] = {
+        hits.append({
             "file": rel_path,
             "line": line,
             "rule": rule,
             "rule_name": RULE_NAMES[rule],
             "code_snippet": snippet,
-        }
+        })
 
     for idx, stmt in enumerate(stmts):
         stmt_text = stmt.text
@@ -504,48 +571,50 @@ def lint_source(text: str, rel_path: str, raw_lines: Optional[Sequence[str]] = N
             reason = _exempt_reason(stmt_text, "R1")
             if reason is None and idx in softmax_numerator:
                 reason = "EX2 softmax/归一化（跨语句分子/分母）"
-            add(stmt.line_of(m.start()), "R1", reason)
+            add(stmt.line_of(m.start()), "R1", reason, idx, m.span())
 
         for m in RULE_R2A.finditer(stmt_text):
             base = _factor_base(m.group(1))
             add(stmt.line_of(m.start()), "R2",
-                _exempt_reason(stmt_text, "R2", base, m.start()))
+                _exempt_reason(stmt_text, "R2", base, m.start()), idx, m.span())
         for m in RULE_R2B.finditer(stmt_text):
             base = _factor_base(m.group(1))
             add(stmt.line_of(m.start()), "R2",
-                _exempt_reason(stmt_text, "R2", base, m.start()))
+                _exempt_reason(stmt_text, "R2", base, m.start()), idx, m.span())
         for m in RULE_R2C.finditer(stmt_text):
             add(stmt.line_of(m.start()), "R2",
-                _exempt_reason(stmt_text, "R2", "", m.start()))
+                _exempt_reason(stmt_text, "R2", "", m.start()), idx, m.span())
 
         # R3(a) 自指乘性更新 -------------------------------------------------
         am = _ASSIGN.search(stmt_text)
         if am:
             name = am.group(1)
             rhs = am.group(2)
-            spos = _self_multiplicative_pos(rhs, name)
-            if spos is not None:
-                pos = am.start(2) + spos
+            mspan = _self_multiplicative_pos(rhs, name)
+            if mspan is not None:
+                pos = am.start(2) + mspan[0]
                 add(stmt.line_of(pos), "R3",
-                    _exempt_reason(stmt_text, "R3", "", pos))
+                    _exempt_reason(stmt_text, "R3", "", pos), idx,
+                    (am.start(2) + mspan[0], am.start(2) + mspan[1]))
             # R3(c) 乘性更新里出现 EMA/保持率命名
             cm = RULE_R3C.search(rhs)
             if cm:
                 pos = am.start(2) + cm.start()
                 add(stmt.line_of(pos), "R3",
-                    _exempt_reason(stmt_text, "R3", "", pos))
+                    _exempt_reason(stmt_text, "R3", "", pos), idx,
+                    (am.start(2) + cm.start(), am.start(2) + cm.end()))
         elif stmt_text.lstrip().startswith("return "):
             cm = RULE_R3C.search(stmt_text)
             if cm:
                 add(stmt.line_of(cm.start()), "R3",
-                    _exempt_reason(stmt_text, "R3", "", cm.start()))
+                    _exempt_reason(stmt_text, "R3", "", cm.start()), idx, cm.span())
 
         # R3(b) 增量乘性赋值 -----------------------------------------------
         for m in RULE_R3B.finditer(stmt_text):
             add(stmt.line_of(m.start()), "R3",
-                _exempt_reason(stmt_text, "R3", "", m.start()))
+                _exempt_reason(stmt_text, "R3", "", m.start()), idx, m.span())
 
-    return sorted(hits.values(), key=lambda h: (h["file"], h["line"], h["rule"]))
+    return sorted(hits, key=lambda h: (h["file"], h["line"], h["rule"]))
 
 
 # ---------------------------------------------------------------- baseline
@@ -754,8 +823,10 @@ def run(argv: Optional[Sequence[str]] = None) -> Tuple[int, str, Dict]:
     if args.update_baseline:
         if args.json:
             return 2, "--update-baseline 不能与 --json 同用\n", {"exit_code": 2}
-        text = render_baseline(e for e in
-                               ((h["file"], h["line"], h["rule"]) for h in violations))
+        # baseline 是三元组**集合**语义：同一 (file, line, rule) 的多条命中（#607 起同行
+        # 多违规划账后可能出现）登记 1 行即全部覆盖，机械重写时按集合去重。
+        text = render_baseline(
+            {(h["file"], h["line"], h["rule"]) for h in violations})
         baseline_path.parent.mkdir(parents=True, exist_ok=True)
         baseline_path.write_text(text, encoding="utf-8")
         msg = ""

@@ -58,7 +58,8 @@ def evaluate_node(net: HexHierNet, sub: np.ndarray, energy_share: float,
     best, second = int(order[0]), int(order[1])
     margin = float(logits[best] - logits[second])
     conf = float(p[best])
-    # ②③ 四态:ACCEPT(置信≥0.5 且领先≥0.3,死区) / DEFER(证据弱或并列)
+    # ②③ 四态:ACCEPT(置信≥0.35 且领先≥0.12——即签名默认 th_conf/th_margin,
+    # 可被 calibrate_thresholds 按数据分位覆盖) / DEFER(证据弱或并列)
     if allow_accept and conf >= th_conf and margin >= th_margin:
         verdict = "ACCEPT"
     elif conf <= th_reject:
@@ -103,7 +104,8 @@ def recursive_search(net: HexHierNet, lat: np.ndarray,
       stats["stopped_dead_zone"])。此时 max_depth 降级为**工程保险上界**
       (stop="max_depth"),不再是语义深度——语义深度由信息差决定。
       默认 False:不启用死区,行为与 hex_search-0.1 严格等价(向后兼容)。
-      终止证据入 stats["blindspot_evidence"](停因/位置/深度/份额单列;
+      终止证据入 stats["blindspot_evidence"](停因/位置(r0..r8 象限,
+      **与 found.pos 同口径同域**)/深度/份额单列;
       found 只保留可交付结论,不夹带盲区)。
       注:min_share 此前声明却从未生效(依据《子部件提取_理论稿_v0.4》§〇.A.5
       「残差=信息差 → 自适应阈值 → 死区停」),本参数是其接口兑现。
@@ -123,9 +125,20 @@ def recursive_search(net: HexHierNet, lat: np.ndarray,
     B, r, c, _ = lat.shape
     found: List[Dict] = []
 
+    def pos_of(qy0: float, qy1: float, qx0: float, qx1: float) -> str:
+        """子区域中心的归一化坐标 → 3×3 象限 r0..r8。
+
+        **唯一口径**:found 的交付位置与 blindspot_evidence 的终止位置都走这里
+        (#592——此前终止证据把 `f"d{depth}"` 塞进 `pos`,与 found.pos 同名不同义:
+        消费者按 `r<n>` 解析终止位置会得到恒空命中,而 docstring 声明的就是「位置」)。
+        """
+        cy, cx = (qy0 + qy1) / 2, (qx0 + qx1) / 2
+        return f"r{min(2, int(cy * 3)) * 3 + min(2, int(cx * 3))}"
+
     def note_blindspot(pos: str, depth: int, stop: str, conf: float = 0.0,
                        **extra):
-        """诚实终止证据入 stats(停因/位置/深度/份额全部显式可查)。"""
+        """诚实终止证据入 stats(停因/位置(r0..r8,与 found.pos 同口径)/深度/份额
+        全部显式可查)。"""
         ev = {"pos": pos, "depth": depth, "stop": stop, "conf": conf}
         ev.update(extra)
         stats["blindspot_evidence"].append(ev)
@@ -143,35 +156,39 @@ def recursive_search(net: HexHierNet, lat: np.ndarray,
         # 信息差死区(自适应深度):子域占父域能量过低 → 细分无收益,诚实终止
         if adaptive_depth and depth > 0 and share < min_share * parent_share:
             stats["stopped_dead_zone"] += 1
-            note_blindspot(f"d{depth}", depth, "infogap_dead_zone",
+            note_blindspot(pos_of(qy0, qy1, qx0, qx1), depth,
+                           "infogap_dead_zone",
                            share_ratio=round(share / max(1e-9, parent_share), 4))
             return
         node = evaluate_node(net, sub, share, allow_accept=(depth > 0), **th)
         if node["verdict"] == "REJECT":
             stats["rejected"] += 1
             return
-        if node["verdict"] == "ACCEPT":
-            # 位置 = 子区域中心的归一化坐标 → 3×3 象限
-            cy, cx = (qy0 + qy1) / 2, (qx0 + qx1) / 2
-            pos = f"r{min(2, int(cy * 3)) * 3 + min(2, int(cx * 3))}"
+        if node["verdict"] == "ACCEPT" and depth > 0:
+            # 位置 = 子区域中心的归一化坐标 → 3×3 象限(与终止证据同口径)
+            pos = pos_of(qy0, qy1, qx0, qx1)
             found.append({"obj": node["obj"], "pos": pos,
                           "conf": node["conf"], "depth": depth})
             return
+        # 分类置信不证明根域只含一个物体；先定位到子域，再交付位置。
         # DEFER → 递归深化(可能性引导:切 3×3,空子域被粗筛剪掉)
         stats["deferred"] += 1
         if depth >= max_depth:
             stats["stopped_max_depth"] += 1        # 工程保险上界(非语义深度)
-            note_blindspot(f"d{depth}", depth, "max_depth", conf=node["conf"])
+            note_blindspot(pos_of(qy0, qy1, qx0, qx1), depth, "max_depth",
+                           conf=node["conf"])
             return
         rr, cc = sub.shape[1:3]
         for i in range(3):
             for j in range(3):
                 ssub = sub[:, i * rr // 3:(i + 1) * rr // 3,
                            j * cc // 3:(j + 1) * cc // 3]
-                if ssub.shape[0] == 0 or ssub.shape[1] == 0:
+                if ssub.shape[1] == 0 or ssub.shape[2] == 0:
                     continue
-                search(ssub, qy0 + i / 3, qy0 + (i + 1) / 3,
-                       qx0 + j / 3, qx0 + (j + 1) / 3, depth + 1,
+                search(ssub, qy0 + (qy1 - qy0) * i / 3,
+                       qy0 + (qy1 - qy0) * (i + 1) / 3,
+                       qx0 + (qx1 - qx0) * j / 3,
+                       qx0 + (qx1 - qx0) * (j + 1) / 3, depth + 1,
                        parent_share=share)
 
     search(lat, 0.0, 1.0, 0.0, 1.0, 0)
@@ -195,9 +212,11 @@ def search_report(net: HexHierNet, lat: np.ndarray, metas: List[Dict],
     total_nodes = total_rej = 0
     n = len(lat)
     for i in range(n):
-        found, stats = recursive_search(net, lat[i:i + 1], metas[i]["labels"],
-                                        ) if False else recursive_search(
-            net, lat[i:i + 1], max_depth=max_depth)
+        # #453：原写法是 `recursive_search(net, lat[i:i+1], metas[i]["labels"],)
+        # if False else recursive_search(net, lat[i:i+1], max_depth=max_depth)`——
+        # 恒假 IfExp：死分支永不求值（其第三位置实参 list 还落在签名
+        # `max_depth: int` 的位置上），属调用口径变更后的残骸，移除。
+        found, stats = recursive_search(net, lat[i:i + 1], max_depth=max_depth)
         truth_pos = {lb["pos"] for lb in metas[i]["labels"]}
         det_pos = {f["pos"] for f in found}
         pos_hit += len(truth_pos & det_pos)

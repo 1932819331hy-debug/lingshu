@@ -17,11 +17,20 @@ v1 的漏（独立对抗性复核已证，见报告 ①）：
   · 旧 D 组自称「AST 扫描断言全仓裸名 ⊆ 白名单」，实则**先按白名单过滤** ⇒
     恒真空转（注入新裸名守卫仍 81/81 全绿）。
 
-v2 修法：
+v2 修法（**#273 裁定后为「路 B · 解析期拒绝」**）：
   ① **最早落点**（`lingshu/__init__.py` 首行 + `core.py` 顶部）：在包首次 import
-     时由 `lingshu/_pathguard.py` 从 `sys.path` 移除 **cwd/空串条目** ⇒ 一切经
-     `sys.path` 的裸名导入（含标准库）不再落到 cwd。幂等、可观测、带逃生口
-     `LINGSHU_ALLOW_CWD_IMPORTS`（打开即放弃本层保护，留告警 + 状态）。
+     时由 `lingshu/_pathguard.py` 装一个 `sys.meta_path` finder（`_CwdRouteFinder`），
+     把「**解析结果落在 cwd / 空串 `sys.path` 条目内**」的裸名解析**跳过该条目、
+     改在净化路径上继续解析** ⇒ 一切经 `sys.path` 的裸名导入（含标准库、含非标准
+     库第三方裸名）不再落到 cwd。**不删条目**（宿主进程 `sys.path` 零改写——旧
+     v2 原版会永久删除 cwd/空串条目且不回滚，#273 裁定其「作用域与目的不匹配」）。
+     幂等、可观测、带逃生口 `LINGSHU_ALLOW_CWD_IMPORTS`（打开 ⇒ **不装 finder**，
+     即放弃本层保护，留告警 + 状态）。
+     ★判据是**通用判据**（落在 cwd 面条目内即拒），**不是**「名字 ∈
+     `sys.stdlib_module_names` ∪ 组件白名单」——`numpy` / `scipy` 这类**非标准库
+     第三方裸名**不在任何名字白名单里，按名字面做会留同型口子（F3 组逐名断言）。
+     ★命中后的形态是「**跳过该条目、在净化路径上继续解析**」（143B 实测的「臂 B」），
+     **不是**「命中即抛」（「臂 A」：连标准库 `json` 本身都拿不到 ⇒ 引擎硬崩）。
   ② 组件解析收口（`component_resolver.py`）：白名单名只从 sys.modules 别名 /
      显式根 `LINGSHU_COMPONENT_ROOT` / sys.path 非 cwd / **非脚本目录** 条目解析；
      受控面缺失即抛原生同文本 `ModuleNotFoundError`（不回落 cwd）。
@@ -38,8 +47,12 @@ v2 修法：
   D 组（全仓裸名分类 · 有牙）：AST 扫描**全仓**裸名 → {标准库 / 组件 / 已知第三方 /
      未知}；**未知即红**；并**自证有牙**（沙箱副本注入新裸名 ⇒ 必被检出）。
   F 组（标准库劫持面 · v2 核心）：逐名毒 cwd（json/hashlib/.../collections）
-     `-c` 形态不执行；另 `-m` 形态一条（证绝对 cwd 条目亦被消除）。
-  G 组（逃生口）：关＝cwd 条目被消除；开＝保留 + 告警 + 状态标 `escape_hatch_open`。
+     `-c` 形态不执行；另 `-m` 形态一条（证绝对 cwd 条目亦在拒绝面内）。
+  F3 组（**非标准库裸名** · #273 裁定「逐名覆盖」）：逐名毒 cwd（`numpy` / `scipy`）
+     ——断言「毒文件未被执行」**且**「解析结果不是 cwd 毒件」（**不**断言解析结果
+     = site-packages 真件：那会依赖 CI 环境真装了该包）。
+  G 组（逃生口）：关＝cwd 条目**仍在** `sys.path` 但**解析被拒**（行为断言）；
+     开＝保留 + 告警 + 状态标 `escape_hatch_open`。
   S 组（脚本目录边界）：`python <script>.py` 且脚本目录 != cwd 时，脚本目录里的
      白名单毒组件不被执行（v1 漏点）。
   E 组（边界诚实）：verify_designer docstring 收窄到事实。
@@ -80,13 +93,33 @@ STDLIB_ALLOWED = frozenset({
     # 修复时 core.py 引入——标准库；守卫按设计判红「未知裸名」，此处补分类而非放宽判据）
     "sys", "os", "importlib", "warnings", "pathlib",
     "weakref", "functools", "contextlib",
+    # 运行时自省（inspect：2026-10-13 PR #516 收敛包装链签名契约，
+    # world/world_model.py 引入——标准库；守卫按设计判红「未知裸名」，
+    # 此处补分类而非放宽判据）
+    "inspect",
+    # PR #429 的受保护写服务（structure_service / structure_permissions）
+    # 另引入 ctypes/datetime/logging/socket/socketserver/ssl/struct——同为标准库，
+    # 按同一口径补分类（D0b 断言本表 ⊆ sys.stdlib_module_names）。
+    "ctypes", "datetime", "logging", "socket", "socketserver", "ssl", "struct",
     # 并发 / 时间 / 唯一定名（queue：2026-10-09 采纳 PR #260 时 brain_store.py 引入——
     # 标准库、与 threading 同族；守卫按设计判红「未知裸名」，此处补分类而非放宽判据）
     "threading", "queue", "time", "uuid",
     # 存储
     "sqlite3",
-    # IO / 文本 / 数值 / 随机
-    "io", "re", "math", "random",
+    # IO / 文本 / 数值 / 随机（difflib：矛盾感知 contradiction.py 引入——标准库字符级对齐；
+    # 守卫按设计判红「未知裸名」，此处补分类而非放宽判据）
+    "io", "re", "math", "random", "difflib",
+    # 语法树（ast：2026-10-12 外部 PR 引入 world/coord_contract.py——标准库；
+    # 守卫按设计判红「未知裸名」，此处补分类而非放宽判据）
+    "ast",
+    # 临时文件（tempfile：2026-10-13 新增 world/anim.py 引入——GIF 导出采用
+    # 「写同目录 tmp → 回读自校验 → os.replace 原子替换」，故需要它；
+    # 标准库。守卫按设计判红「未知裸名」，此处补分类而非放宽判据）
+    # 自生成建模/物理/呈现（本批新增模块）引入的标准库裸名：
+    #   tempfile←world/anim.py 之外的 GIF 落盘、array←world/mesh3d.py 的深度缓冲、
+    #   xml←world/mesh_svg.py 的 SVG 解析。皆标准库；守卫按设计判红「未知裸名」，
+    #   此处**补分类而非放宽判据**。
+    "tempfile", "array", "xml",
     # 命令行 / 子进程
     "argparse", "subprocess",
 })
@@ -103,21 +136,30 @@ THIRD_PARTY_ALLOWED = frozenset({
 SELF_ALLOWED = frozenset({"lingshu"})
 
 # 构造期裸名（SpacetimeMemoryEngine.__init__ 的 _setup_* 调用链）→ 失败信息字段
+# #34（本仓）后 `prediction_engine` **移出本表**：core.py 的 `_setup_v19` 改为
+# 「先试裸名（保留私域别名/受控注入面）→ 失败即回退仓内相对导入
+# `..world.prediction`」⇒ 本仓形态下该槽**装配成功**（不再恒失败），其 cwd 收口
+# 由 RELATIVE_IMPORT_COMPONENTS 组另行断言（见 group_relative_import_component）。
 CONSTRUCT_TIME = [
     ("entity_registry", "_v13_error"),
     ("cognitive_orchestrator", "_v13_error"),
     ("blindspot_learning_loop", "_v13_error"),
     ("semantic_space", "_semantic_error"),
     ("attention_policy", "_attention_error"),
-    ("prediction_engine", "_prediction_error"),
     ("lifecycle_engine", "_lifecycle_error"),
     ("flywheel_engine", "_flywheel_error"),
     ("self_cognition_engine", "_self_cognition_error"),
     ("body", "_body_error"),
 ]
+# #34：改为「裸名优先 + 仓内相对导入回退」的组件。它们在本仓**装配成功**，
+# 故不进 CONSTRUCT_TIME 的「装配必败」组；但仍须断言「毒 cwd 不执行」+
+# 「受控面（私域别名/显式根）优先」两条腿。
+RELATIVE_IMPORT_COMPONENTS = [
+    ("prediction_engine", "_prediction"),
+]
 # 白名单全集（扫描面必须覆盖的最小集）
 WHITELIST_EXPECTED = frozenset(
-    [n for n, _ in CONSTRUCT_TIME]
+    [n for n, _ in CONSTRUCT_TIME] + [n for n, _ in RELATIVE_IMPORT_COMPONENTS]
     + ["vision", "pattern_separation", "scene_reconstruction",
        "spacetime_memory_core", "game_web"])
 
@@ -125,6 +167,15 @@ WHITELIST_EXPECTED = frozenset(
 STDLIB_HIJACK_NAMES = [
     "json", "hashlib", "hmac", "sqlite3", "threading", "uuid", "dataclasses",
     "typing", "inspect", "ast", "contextlib", "datetime", "enum", "collections",
+]
+# #273 裁定「守卫」节第 2 条要求「逐名覆盖（含非标准库裸名）」：下列名字**不在**
+# `sys.stdlib_module_names` 里、也不在组件白名单里，而 `lingshu/` 下 `import numpy`
+# 出现在 10 个以上文件。若 finder 只拦「标准库名 ∪ 白名单名」，cwd 下的同名毒文件
+# 会**优先于** site-packages 真件被解析并在引擎进程内执行——即裁定帖理由 1 的
+# 同型漏洞（143B 负对照实测：名字面下 `__version__ == "POISON"`、MARKER 出现）。
+THIRD_PARTY_HIJACK_NAMES = [
+    "numpy",   # world/nn/gen extras；仓内 ≥10 文件裸名 import
+    "scipy",   # activation 可选稀疏依赖；同属非标准库裸名
 ]
 
 _PASS: list = []
@@ -423,6 +474,7 @@ def group_b_alert(base):
             "ok": ca["ok"], "lazy": ca["lazy"],
             "guard": d["guard_installed"],
             "cwd_excluded": d["cwd_excluded_count"],
+            "cwd_entries_live": d["cwd_entries_in_sys_path"],
             "names": d["component_names"],
             "path_scrub": d.get("path_scrub"),
         }, ensure_ascii=False))
@@ -437,16 +489,34 @@ def group_b_alert(base):
     if j:
         need = {n for n, _ in CONSTRUCT_TIME}
         ok(need <= set(j["failed"]),
-           "B2b component_assembly.failed 覆盖全部 10 个构造期组件",
+           "B2b component_assembly.failed 覆盖全部 %d 个构造期组件" % len(need),
            f"missing={sorted(need - set(j['failed']))}")
+        # #34：本仓自带 `PredictionEngine` 经相对导入回退**装配成功** ⇒ 该槽应在
+        # ok 列表（旧实现恒失败 ⇒ 此断言在旧行为下必红）。
+        ok("prediction_engine" in j["ok"],
+           "B2b-34 prediction_engine 装配成功（#34：旧实现裸导入恒失败）",
+           f"ok={j['ok']}")
         ok(j["guard"] is True, "B2c discovery.guard_installed=True（解析守卫在场）")
-        ok(j["cwd_excluded"] >= 1, "B2d discovery 报告已排除 cwd/空串条目", j)
+        # B2d（#273 裁定 · 路 B 口径改写）：原断言锁「条目已被删」
+        # （`cwd_excluded_count = path_scrub.removed_count ≥ 1`）——路 B 下
+        # `removed_count` 恒 0，故改取新语义的「已排除」字面对应物：
+        # **被解析期拒绝 finder 拒绝解析的 cwd/空串条目数** ≥1；并另钉路 B 的核心
+        # 事实：cwd 条目**仍在** sys.path（不删条目、宿主状态零改写）。
+        ok(j["cwd_excluded"] >= 1,
+           "B2d discovery 报告：cwd/空串条目的解析**被拒**（refused_cwd_entry_count≥1，"
+           "路 B 语义；旧口径 removed_count 恒 0）", j)
+        ok(j["cwd_entries_live"] >= 1,
+           "B2d-2 discovery 报告：cwd 条目**仍在** sys.path（路 B：不删条目）", j)
         ok(set(j["names"]) >= WHITELIST_EXPECTED,
            "B2e 白名单含全部已知 15 名", f"missing={sorted(WHITELIST_EXPECTED - set(j['names']))}")
         ps = j.get("path_scrub") or {}
-        ok(ps.get("applied") is True and ps.get("removed_count", 0) >= 1
+        # B2f（同 B2d 标准改写）：原断言要 `removed_count≥1`（锁实现）；路 B 下改为
+        # 行为/新口径读数——finder 在位 + 被拒条目数 ≥1 + 逃生口关。
+        ok(ps.get("applied") is True and ps.get("route_finder_installed") is True
+           and ps.get("refused_cwd_entry_count", 0) >= 1
            and ps.get("escape_hatch_open") is False,
-           "B2f discovery.path_scrub 可观测（applied + removed_count≥1 + 逃生口关）", ps)
+           "B2f discovery.path_scrub 可观测（applied + 解析期拒绝面在位 + "
+           "refused_cwd_entry_count≥1 + 逃生口关）", ps)
 
     # B3：-W ignore（压掉告警）⇒ 构造不崩，self_check 通道仍完整（两路独立）
     r = run_py(code2, cwd=clean, args=["-W", "ignore", "-c", code2])
@@ -454,7 +524,7 @@ def group_b_alert(base):
     for line in (r.stdout or "").splitlines():
         if line.startswith("##JSON##"):
             j3 = json.loads(line[len("##JSON##"):])
-    ok(r.returncode == 0 and j3 is not None and len(j3["failed"]) >= 10,
+    ok(r.returncode == 0 and j3 is not None and len(j3["failed"]) >= len(CONSTRUCT_TIME),
        "B3 告警被压制（-W ignore）时：构造不崩、self_check 通道仍报告全部失败（两路独立）",
        f"rc={r.returncode} failed={None if j3 is None else len(j3['failed'])}")
 
@@ -568,6 +638,52 @@ def group_c_install_paths(base):
     ok(r5.returncode == 0 and "GHOSTS_KEPT: 3" in out5 and "REPO_KEPT: True" in out5,
        "C5 非 cwd 合法条目（PYTHONPATH 的 ghost .zip/.egg/ns 目录 + 仓根）未被误删",
        out5[:300])
+
+
+# ---------------------------------------------------------------- R 组（#34 相对导入回退）
+def group_r_relative_import_component(base):
+    """R 组（#34）：`prediction_engine` 改「裸名优先 + 仓内相对导入回退」后——
+    ① 本仓形态下该槽**装配成功**（旧实现恒 None）；② 毒 cwd 仍不执行；
+    ③ 受控面（显式根/私域别名）**优先**于仓内回退（收口未被回退腿绕过）。"""
+    print("== R 组（#34）：prediction_engine 相对导入回退（成功 + 收口两腿） ==")
+
+    # R1：干净 cwd ⇒ 装配成功（旧实现 `from prediction_engine import ...` 必失败）
+    clean = os.path.join(base, "r_clean")
+    os.makedirs(clean, exist_ok=True)
+    code1 = textwrap.dedent("""
+        from lingshu.core.core import SpacetimeMemoryEngine
+        e = SpacetimeMemoryEngine(":memory:")
+        print("PRED:", type(e._prediction).__name__ if e._prediction else None,
+              "ERR:", repr(e._prediction_error))
+        """)
+    r = run_py(code1, cwd=clean)
+    ok(r.returncode == 0 and "PRED: PredictionEngine ERR: ''" in (r.stdout or ""),
+       "R1[#34] 本仓形态：prediction_engine 装配成功、无错误（旧实现恒 None）",
+       (r.stdout or "")[:300])
+
+    # R2：毒 cwd 提供同名 prediction_engine.py ⇒ 不得被执行（#156 收口仍有效）
+    d = make_poison_dir(base, "prediction_engine", tag="r2")
+    r2 = run_py(code1, cwd=d)
+    marker = os.path.exists(os.path.join(d, "MARKER.txt"))
+    ok(r2.returncode == 0 and not marker and "PRED: PredictionEngine" in (r2.stdout or ""),
+       "R2[#34] 毒 cwd 的 prediction_engine.py 未被执行（回退腿不绕过 #156 收口）",
+       f"rc={r2.returncode} marker={marker} out={(r2.stdout or '')[:200]!r}")
+
+    # R3：受控面（显式根）提供 prediction_engine ⇒ **优先**于仓内回退（受控面语义不变）
+    root = os.path.join(base, "r_root")
+    os.makedirs(root, exist_ok=True)
+    with open(os.path.join(root, "prediction_engine.py"), "w", encoding="utf-8") as f:
+        f.write("class PredictionEngine:\n    MARKER_FAKE = True\n"
+                "    def __init__(self, *a, **k): pass\n")
+    code3 = textwrap.dedent("""
+        from lingshu.core.core import SpacetimeMemoryEngine
+        e = SpacetimeMemoryEngine(":memory:")
+        print("FAKE:", getattr(type(e._prediction), "MARKER_FAKE", False))
+        """)
+    r3 = run_py(code3, cwd=clean, extra={"LINGSHU_COMPONENT_ROOT": root})
+    ok(r3.returncode == 0 and "FAKE: True" in (r3.stdout or ""),
+       "R3[#34] 受控面（显式根）提供该组件时优先命中（回退腿不夺取受控面语义）",
+       (r3.stdout or "")[:300])
 
 
 # ---------------------------------------------------------------- D 组（AST · 有牙）
@@ -698,6 +814,76 @@ def group_f_stdlib_hijack(base):
        f"rc={r.returncode} marker={marker} out={(r.stdout or '')[:160]!r} err={(r.stderr or '')[:160]!r}")
 
 
+# ------------------------------------------- F3 组（非标准库裸名 · #273 裁定 §2.2）
+def group_f_third_party_naked_names(base):
+    """F3：**非标准库第三方裸名**的毒 cwd 逐名断言（#273 裁定「逐名覆盖」）。
+
+    断言写法（**不依赖真件存在**）：「**毒 cwd 文件未被执行（MARKER 不出现）**」
+    **且**「解析结果**不是** cwd 毒件」。
+    **不**断言「解析结果 = site-packages 真件」——那会依赖 CI 环境真装了该包
+    （143B 实测：路径面下毒未执行且解析落到 site-packages 真件 `numpy 2.5.3`；
+    名字面下毒被执行、`__version__ = POISON`）。
+    """
+    print("== F3 组：非标准库第三方裸名（numpy/scipy）毒 cwd 逐名断言 ==")
+    probe = textwrap.dedent("""
+        import json, os, sys
+        from lingshu.core.core import SpacetimeMemoryEngine
+        SpacetimeMemoryEngine(":memory:")
+        info = {}
+        try:
+            import %(name)s as _mod
+            info = {"file": getattr(_mod, "__file__", None),
+                    "version": getattr(_mod, "__version__", None)}
+        except Exception as _exc:  # 真件未安装 ⇒ 解析被拒亦属「不是 cwd 毒件」
+            info = {"err": repr(_exc)}
+        info["marker"] = os.path.exists(os.path.join(os.getcwd(), "MARKER.txt"))
+        info["cwd"] = os.getcwd()
+        print("##JSON##" + json.dumps(info, ensure_ascii=False))
+        """)
+    n_exec = 0
+    for name in THIRD_PARTY_HIJACK_NAMES:
+        d = os.path.join(base, "thirdparty_%s" % name)
+        os.makedirs(d, exist_ok=True)
+        with open(os.path.join(d, name + ".py"), "w", encoding="utf-8") as f:
+            f.write("# poison third-party bare name (top-level code must NOT run)\n"
+                    "import os as _os\n"
+                    "with open(_os.path.join(_os.path.dirname(_os.path.abspath(__file__)),"
+                    " \"MARKER.txt\"), \"w\", encoding=\"utf-8\") as _f:\n"
+                    "    _f.write(\"EXECUTED thirdparty=\" + _os.path.basename(__file__))\n"
+                    "__version__ = \"POISON\"\n")
+        r = run_py(probe % {"name": name}, cwd=d)
+        j = None
+        for line in (r.stdout or "").splitlines():
+            if line.startswith("##JSON##"):
+                j = json.loads(line[len("##JSON##"):])
+        poison_marker = os.path.exists(os.path.join(d, "MARKER.txt"))
+        n_exec += 1 if poison_marker else 0
+        ok(r.returncode == 0 and j is not None,
+           f"F3a[{name}] 子进程取到读数 rc=0", f"rc={r.returncode} "
+           f"out={(r.stdout or '')[:160]!r} err={(r.stderr or '')[:200]!r}")
+        if not j:
+            continue
+        # ① 毒 cwd 文件未被执行
+        ok(j["marker"] is False,
+           f"F3b[{name}] 毒 cwd 的 {name}.py 未被执行（MARKER 不存在）", j)
+        # ② 解析结果不是 cwd 毒件（不依赖真件存在：真件缺失 ⇒ err 分支亦满足）
+        resolved_poison = False
+        if j.get("file"):
+            try:
+                resolved_poison = (
+                    os.path.normcase(os.path.realpath(os.path.dirname(j["file"])))
+                    == os.path.normcase(os.path.realpath(j["cwd"])))
+            except Exception:  # pragma: no cover - 非法路径
+                resolved_poison = True
+        resolved_poison = resolved_poison or (j.get("version") == "POISON")
+        ok(not resolved_poison,
+           f"F3c[{name}] 解析结果**不是** cwd 毒件（非标准库裸名不落 cwd 面）", j)
+    ok(n_exec == 0,
+       "F3 汇总：%d 个非标准库第三方裸名毒文件全部未执行（executed=0/%d）"
+       % (len(THIRD_PARTY_HIJACK_NAMES), len(THIRD_PARTY_HIJACK_NAMES)),
+       f"n_exec={n_exec}")
+
+
 # ---------------------------------------------------------------- G 组（逃生口）
 def group_g_escape_hatch(base):
     print("== G 组：逃生口 LINGSHU_ALLOW_CWD_IMPORTS（默认关；开＝放弃本层保护） ==")
@@ -714,7 +900,9 @@ def group_g_escape_hatch(base):
         }, ensure_ascii=False))
         """)
 
-    # G1：默认（逃生口关）⇒ '' 被消除、状态标 escape_hatch_open=False
+    # G1：默认（逃生口关）⇒ cwd 条目**仍在** sys.path（路 B：不删条目、宿主状态零
+    # 改写）但**解析被拒**（finder 在位）；并逐名断言「cwd 下同名的标准库文件没有
+    # 被执行」——#273 裁定「守卫」节第 1 条：由「实现断言」改「行为断言」。
     r = run_py(code, cwd=clean)
     j = None
     for line in (r.stdout or "").splitlines():
@@ -722,13 +910,34 @@ def group_g_escape_hatch(base):
             j = json.loads(line[len("##JSON##"):])
     ok(r.returncode == 0 and j is not None, "G1a 逃生口关：子进程取到状态", (r.stdout or "")[:160])
     if j:
-        ok(j["empty_in_path"] is False, "G1b 逃生口关：'' 已从 sys.path 消除")
         s = j["scrub"]
+        # G1b（行为断言 · #273 守卫节第 1 条）：cwd 下同名的**标准库**文件没有被
+        # 执行（MARKER 不出现）+ 解析结果不是 cwd 毒件；条目仍在 sys.path（路 B
+        # 不删条目 ⇒ 宿主进程状态零改写——这是 #273 本件主诉的直接守卫）。
+        d = make_stdlib_poison_dir(base, "json", tag="g1b")
+        rp = run_py("from lingshu.core.core import SpacetimeMemoryEngine\n"
+                    "SpacetimeMemoryEngine(':memory:')\n"
+                    "print('CONSTRUCTED')\n", cwd=d)
+        marker = os.path.exists(os.path.join(d, "MARKER.txt"))
+        ok(rp.returncode == 0 and not marker and "CONSTRUCTED" in (rp.stdout or ""),
+           "G1b 逃生口关：cwd 下同名的标准库文件（json.py）未被**执行**（MARKER 不存在）"
+           "、引擎照常装配 rc=0",
+           f"rc={rp.returncode} marker={marker} out={(rp.stdout or '')[:120]!r} "
+           f"err={(rp.stderr or '')[:120]!r}")
+        ok(j["empty_in_path"] is True,
+           "G1b-2 逃生口关：cwd/空串条目**仍在** sys.path（路 B：不删条目、"
+           "不改写宿主进程全局状态）")
+        ok(s["route_finder_installed"] is True and s["refused_cwd_entry_count"] >= 1,
+           "G1c 逃生口关：状态标解析期拒绝面生效（route_finder_installed=True / "
+           "refused_cwd_entry_count≥1）且逃生口关", s)
         ok(s["escape_hatch_open"] is False and s["cwd_scrub_active"] is True
-           and s["removed_count"] >= 1 and s["cwd_entries_now"] == 0,
-           "G1c 逃生口关：状态标 cwd_scrub_active=True / removed_count≥1 / cwd_entries_now=0", s)
-        ok(all(":" not in k for k in s["removed_kinds"]),
-           "G1d removed_kinds 不含本机绝对路径（只记种类）", s["removed_kinds"])
+           and s["removed_count"] == 0,
+           "G1c-2 逃生口关：escape_hatch_open=False / cwd_scrub_active=True / "
+           "removed_count=0（路 B 不删条目）", s)
+        ok(all(":" not in k for k in s["removed_kinds"])
+           and all(":" not in k for k in s["refused_cwd_kinds"]),
+           "G1d removed_kinds / refused_cwd_kinds 不含本机绝对路径（只记种类）",
+           f"removed={s['removed_kinds']} refused={s['refused_cwd_kinds']}")
 
     # G2：逃生口开（LINGSHU_ALLOW_CWD_IMPORTS=1）⇒ 保留 cwd 条目 + 告警 + 状态可观测
     r = run_py(code, cwd=clean, extra={"LINGSHU_ALLOW_CWD_IMPORTS": "1"})
@@ -794,6 +1003,22 @@ def group_e_disclosure():
        "E3 docstring 精确表述本批范围（消除 cwd/空串 sys.path 解析）且同进程属设计级")
     ok("逃生口" in doc, "E4 docstring 明示仍不覆盖的情形（逃生口被显式打开）")
 
+    # ---- E5–E7（#273 裁定 · 路 B 新增）：范围声明收窄到**新行为**的事实 ----
+    # 裁定帖「两项一并裁定」第 1 条：`_pathguard` 的范围声明须如实声明新行为
+    # （旧措辞「`PYTHONPATH` 条目一律不动」在实现按**路径值**判定下不成立）。
+    # 这三条锁 `lingshu/_pathguard.py` 的模块 docstring（本件改动的文件）。
+    import lingshu._pathguard as pg
+    pdoc = pg.__doc__ or ""
+    ok("不删" in pdoc and "不改写" in pdoc,
+       "E5 _pathguard docstring 明写路 B 契约（**不删条目** / **不改写宿主进程全局状态**）",
+       pdoc[:200])
+    ok("互斥" in pdoc and "PYTHONPATH" in pdoc,
+       "E6 _pathguard docstring 明写「显式 `PYTHONPATH=<cwd>` 与保护面互斥，"
+       "二者只能取一」（裁定帖两项一并裁定第 1 条）", pdoc[:200])
+    ok("脚本目录" in pdoc and "保留不动" in pdoc,
+       "E7 _pathguard docstring 明示「脚本目录 ≠ cwd 时本模块不拒它、这一面保留不动」"
+       "（#421 面保留不动）", pdoc[:200])
+
 
 def main():
     base = tempfile.mkdtemp(prefix="f156_guard_")
@@ -806,8 +1031,10 @@ def main():
         group_a_all_at_once(base)
         group_b_alert(base)
         group_c_install_paths(base)
+        group_r_relative_import_component(base)
         group_d_whitelist()
         group_f_stdlib_hijack(base)
+        group_f_third_party_naked_names(base)
         group_g_escape_hatch(base)
         group_s_script_dir(base)
         group_e_disclosure()
@@ -820,10 +1047,12 @@ def main():
         for m in _FAIL:
             print("  -", m)
         return 1
-    print("VERDICT=PASS（issue #156 v2 守卫：cwd/空串 sys.path 解析面已消除——白名单组件"
-          "（逐名 × 两形态）+ 标准库（逐名）毒 cwd 均不执行；脚本目录边界亦收口；"
-          "AST 分类判据有牙（未知即红）；逃生口与 path_scrub 状态可观测；"
-          "显式根/PYTHONPATH/别名/非 cwd 合法条目四条装配路径未被修坏）")
+    print("VERDICT=PASS（issue #156 v2 守卫 · #273 裁定路 B：cwd/空串 sys.path 面的"
+          "裸名解析在**解析期被拒**（不删条目、宿主进程 sys.path 零改写）——白名单组件"
+          "（逐名 × 两形态）+ 标准库（逐名）+ **非标准库第三方裸名（numpy/scipy 逐名）**"
+          "毒 cwd 均不执行；脚本目录边界亦收口；AST 分类判据有牙（未知即红）；"
+          "逃生口与解析期拒绝面状态可观测；显式根/PYTHONPATH/别名/非 cwd 合法条目"
+          "四条装配路径未被修坏）")
     return 0
 
 

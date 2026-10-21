@@ -98,6 +98,94 @@ def test_world_learner_passes_seed_to_world():
             != WorldLearner(size=24, seed=2).world._rng.random())
 
 
+# ==================== ② seed 必须达「世界构建」流，不只达「实体行为」流 ====================
+# 缺陷：SceneSimulator.__init__ 构造 VoxelWorld 时**未透传 seed** ⇒ VoxelWorld 恒用
+# 自身缺省 seed=0，`build_flatland` 的种树位置与 SceneSimulator.seed 无关。
+# 即 SceneSimulator.seed 只播种实体行为流（wander），对世界构建无影响。
+
+def _terrain(seed):
+    """经 SceneSimulator 取得**地形布局**（VoxelWorld.blocks 快照）。
+
+    注意：`create_scene()` 返回的 `blocks` 是**计数**（int），不是布局——用它做
+    相等比较会恒真（方块总数与树位置无关）。必须取 `world.blocks`（{(x,y,z): 块}）。
+    """
+    from lingshu.world.scene_simulator import SceneSimulator
+
+    sim = SceneSimulator(size=24, seed=seed)
+    sim.create_scene(trees=4, water=True)
+    return dict(sim.world.blocks)
+
+
+def test_scene_terrain_differs_by_seed():
+    assert _terrain(1) != _terrain(2), \
+        "seed 未达世界构建流 ⇒ 两个 seed 的地形逐位相同（世界构建维度消融无效）"
+
+
+def test_scene_same_seed_terrain_reproducible():
+    assert _terrain(7) == _terrain(7)
+
+
+def test_voxelworld_direct_seed_still_works():
+    """VoxelWorld 直接用法不受影响：其自身 seed 参数照旧生效。"""
+    from lingshu.world.voxel_world import VoxelWorld
+
+    a = VoxelWorld(size=24, seed=1)
+    a.build_flatland(trees=4, water=True)
+    b = VoxelWorld(size=24, seed=2)
+    b.build_flatland(trees=4, water=True)
+    assert a.blocks != b.blocks
+
+
+def test_scene_passes_seed_to_its_voxel_world():
+    """直接核对透传：SceneSimulator(seed=N).world._rng 必须与 VoxelWorld(seed=N) 同流。"""
+    from lingshu.world.scene_simulator import SceneSimulator
+    from lingshu.world.voxel_world import VoxelWorld
+
+    assert (SceneSimulator(size=24, seed=5).world._rng.random()
+            == VoxelWorld(size=24, seed=5)._rng.random())
+# ==================== ⑤ 两个残留透传点（同 PR #12 同族补修） ====================
+# 背景：`e18562f`（外部 PR #12）只修了上述三条构造链；`SceneSimulator` 在仓内共有
+# 5 处构造点，另两处仍把 seed 丢掉——「换个 seed 重跑」在这两条路径上依旧是空转。
+
+def test_spacetime_consistency_passes_seed_to_scene():
+    """SpacetimeConsistency 此前签名里连 seed 都没有 ⇒ 内部物理世界恒为 42。"""
+    from lingshu.world.spacetime_consistency import SpacetimeConsistency
+
+    a = SpacetimeConsistency(size=24, seed=1).scene._rng.random()
+    b = SpacetimeConsistency(size=24, seed=2).scene._rng.random()
+    assert a != b, "seed 被丢弃 ⇒ 两个 seed 的物理世界逐位相同（消融无效）"
+
+
+def test_spacetime_consistency_default_seed_is_42():
+    """缺省必须等价历史硬编码 42 —— 既有实验读数不被动改变。"""
+    from lingshu.world.spacetime_consistency import SpacetimeConsistency
+
+    assert (SpacetimeConsistency(size=24).scene._rng.random()
+            == SpacetimeConsistency(size=24, seed=42).scene._rng.random())
+
+
+def test_core_scene_simulator_passes_seed():
+    """引擎工具面 `scene_simulator(action="step"|"state")` 此前不认 params.seed。"""
+    from lingshu.core.core import SpacetimeMemoryEngine
+
+    def _rng(seed):
+        e = SpacetimeMemoryEngine(":memory:")
+        e.scene_simulator("state", {"size": 24, "seed": seed})
+        return e._scene._rng.random()
+
+    assert _rng(1) != _rng(2), "params.seed 被丢弃 ⇒ 物理世界恒为 42（消融无效）"
+
+
+def test_core_scene_simulator_default_seed_is_42():
+    from lingshu.core.core import SpacetimeMemoryEngine
+
+    e1 = SpacetimeMemoryEngine(":memory:")
+    e1.scene_simulator("state", {"size": 24})
+    e2 = SpacetimeMemoryEngine(":memory:")
+    e2.scene_simulator("state", {"size": 24, "seed": 42})
+    assert e1._scene._rng.random() == e2._scene._rng.random()
+
+
 if __name__ == "__main__":
     import traceback
 

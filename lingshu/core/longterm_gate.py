@@ -17,7 +17,11 @@
 - 0.4 ≤ imp < 0.7 → 知识层常规写入（importance = imp）
 - imp < 0.4  → 情境层（短期，睡眠巩固时再评估提升）
 """
+import hashlib
+import logging
 import time
+
+_log = logging.getLogger(__name__)
 
 
 class LongTermMemoryGate:
@@ -42,6 +46,10 @@ class LongTermMemoryGate:
         # 全库核心词表缓存（lingshu #389）：按 (节点数, max rowid) 签名失效。
         self._known_cache = None
         self._known_sig = None
+        # #770②：正文总长另存一份——签名第三项已改为**内容指纹**，而增量分支的
+        # 第三条门槛仍是「正文总长增加」（口径同改前的 `SUM(LENGTH(content))`，
+        # 只对 str 正文计数），故长度单独保留。
+        self._known_total_len = 0
 
     # ---- 特征提取 ----
 
@@ -51,16 +59,28 @@ class LongTermMemoryGate:
         return hist[-1]["d_norm"] if hist else 0.5
 
     def _d_second(self) -> float:
-        """信息差二阶变化 Δ²D：slope 的变化趋势（需 ≥3 样本）。
-        正=信息差加速扩大（新领域涌现信号）；负=收敛。"""
+        """信息差二阶变化 Δ²D：**最近一点**的二阶差分（需 ≥3 样本）。
+        正=信息差加速扩大（新领域涌现信号）；负=收敛。
+
+        #387 修复：旧实现 `d1[-1] - d1[0]` 是**窗口两端一阶差之差**
+        （跨整窗的趋势量），不是二阶差分——与文件头 `:10`「gap_history 二阶差分」
+        及本函数 docstring「二阶变化」不符。后果：只要窗口内 slope 曾变过，
+        该量就按**窗口跨度**取满，`max(-0.5, …)` 常被钳到 −0.5 档（与最近一步的
+        真实加速度无关）。现取 d1[-1] - d1[-2]（= vals[-1] - 2·vals[-2] + vals[-3]），
+        即最近一点的二阶差分。
+        判据来源：本文件头 `:10-11` 的声明（「Δ²D 信息差二阶 → gap_history
+        二阶差分（加速/减速）」）＋ 二阶差分的标准定义（Δ²x_n = x_n − 2x_{n−1}
+        + x_{n−2}）；理论章节追不到（本仓无 longterm_gate 独立理论稿）⇒ 属
+        文件内声明与实现的自洽性修复。
+        """
         hist = getattr(self.engine, "_gap_history", None) or []
         if len(hist) < 3:
             return 0.0
         vals = [h["d_norm"] for h in hist[-5:]]
         d1 = [vals[i + 1] - vals[i] for i in range(len(vals) - 1)]
-        if not d1:
+        if len(d1) < 2:
             return 0.0
-        return max(-0.5, min(0.5, d1[-1] - d1[0]))  # 归一化钳制
+        return max(-0.5, min(0.5, d1[-1] - d1[-2]))  # 归一化钳制
 
     def _trust(self) -> float:
         """当前信任值 T（0-1）。
@@ -84,16 +104,21 @@ class LongTermMemoryGate:
         return float(t)
 
     def _trust_second(self) -> float:
-        """信任二阶变化 Δ²T：trust_history 二阶差分（信任跃升信号）。"""
+        """信任二阶变化 Δ²T：trust_history 的**最近一点**二阶差分（信任跃升信号）。
+
+        #387 修复：与 `_d_second` 同根——旧实现 `d1[-1] - d1[0]` 是窗口两端一阶差
+        之差（跨整窗趋势量），不是二阶差分；现取 `d1[-1] - d1[-2]`。
+        判据来源同 `_d_second`（文件头 `:11` 声明 ＋ 二阶差分标准定义）。
+        """
         th = getattr(getattr(self.engine, "self_model", None),
                      "trust_history", None) or []
         if len(th) < 3:
             return 0.0
         vals = [h["t_total"] for h in th[-6:]]
         d1 = [vals[i + 1] - vals[i] for i in range(len(vals) - 1)]
-        if not d1:
+        if len(d1) < 2:
             return 0.0
-        return max(-0.5, min(0.5, d1[-1] - d1[0]))
+        return max(-0.5, min(0.5, d1[-1] - d1[-2]))
 
     # 非 ASCII 文字面：CJK 基本区/扩展A/兼容表意 + 假名 + 谚文 + 西里尔 + 拉丁扩展 + 希腊。
     # 旧实现只留 \u4e00-\u9fff，假名/谚文/西里尔等一律被删（lingshu #213）。
@@ -146,7 +171,8 @@ class LongTermMemoryGate:
         lingshu #389：v1.27 起每次调用都把全库正文重新切成 3/4 字片段
         （prefeed 一次调用算两遍：_novelty + evaluate→_novelty），库里有一篇
         长文档后单条短输入耗时数秒、峰值内存数百 MB。现按库签名
-        （节点数 / max(rowid) / 正文总长）缓存「每节点 gram 集合 + 词频 + 并集」，
+        （节点数 / max(rowid) / 正文内容指纹，见 `_known_snapshot`）缓存
+        「每节点 gram 集合 + 词频 + 并集」，
         签名未变则直接复用，不再重切。**判别力不变**：仍是全库参考集、仍是
         硬判阈值；缓存的只是解析结果。**内存未改善**：缓存仍持有全库 gram
         （#389 期望的「成本与库总正文量无关」需倒排索引/增量表，属更大改动，
@@ -165,24 +191,75 @@ class LongTermMemoryGate:
         # 仅剔除「只出现在被排除节点」的 gram（仍出现在其它节点的不算新）
         return {g for g in union if g not in xg or counts.get(g, 0) > 1}
 
+    @staticmethod
+    def _row_digest(content) -> int:
+        """单行正文摘要（8 字节 blake2b → 整数）——#770② 的「内容维」。
+
+        旧签名第三项是 `SUM(LENGTH(content))`：**等长原地改写**（`nodes.content`
+        被原地 UPDATE 成**同样长度**的另一段正文）下三项逐位不变 ⇒ 缓存被判有效、
+        复用陈旧 gram 表（新正文 0/21 进并集、旧正文 21/21 留存，实测签名
+        `(1,1,13)`→`(1,1,13)`）。长度这一维无法区分「同长度的两段不同正文」，
+        故补逐行**内容摘要**。
+        非 str 正文（历史坏行 / 非文本列）按 `str(...)` 归一后取摘要——与
+        `add_perception` 的 str 写入面口径一致，且不让一行坏正文打断缓存重建。
+        """
+        text = content if isinstance(content, str) else str(content or "")
+        return int.from_bytes(
+            hashlib.blake2b(text.encode("utf-8", "replace"),
+                            digest_size=8).digest(), "big")
+
     def _known_snapshot(self):
         """按库签名缓存全库核心词表，返回 (union, counts, per_node, sig)。
 
-        签名 = (节点数, max(rowid), 正文总长)。签名未变 → 直接复用；
-        **仅追加**（节点数与总长增加、max(rowid) 增加）→ 只切新增行并增量并入
-        （#389 的实际工作负载是「每条外部输入都写一个节点」，全量重建会让缓存
-        形同虚设）；其余情形（删除/改写/清空）→ 全量重建。
+        签名 = (节点数, max(rowid), 正文内容指纹)。签名未变 → 直接复用；
+        **仅追加**（旧行逐行摘要逐位不变、且新增行 rowid 全大于旧 max）→ 只切
+        新增行并增量并入（#389 的实际工作负载是「每条外部输入都写一个节点」，
+        全量重建会让缓存形同虚设）；其余情形（删除/改写/清空）→ 全量重建。
+
+        #770②：签名第三项由 `SUM(LENGTH(content))` 改为**正文内容指纹**
+        （逐行 `(rowid, 摘要)` 折叠成 8 字节整数）——长度对**等长原地改写**不
+        敏感（改前实测 `(1,1,13)`→`(1,1,13)` 逐位不变 ⇒ 直接命中「签名相等 ⇒
+        复用缓存」这一支），内容指纹对任何正文字节变化都变。返回值形状仍是
+        `(int, int, int)` 三元组（调用方与既有测试按三元组解包，形制不变）。
+        ★**改动面刻意收窄到「缓存有效性」这一条判据**：有效性由「三项签名相等」
+        改为「三项签名相等（第三项＝内容指纹）」。**增量分支的三条门槛逐字保持
+        改前形制**（节点数增 ∧ max(rowid) 增 ∧ 正文总长增，总长另存于
+        `_known_total_len`）⇒ B/C（节点数未增 ⇒ 全量重建）与 D（删 1 增 2，三项
+        全增 ⇒ 增量并入）的既有行为**一字未动**（含 #462 的增量残留形态，属另一
+        笔账面）。A 格下节点数与 max(rowid) 均未增 ⇒ 落到**全量重建**。
+        已知残留（如实标注 · 未覆盖面）：A 格与「D 格的删行 rowid 复用」在逐行
+        摘要上不可分辨（`nodes.id` 是 TEXT 主键、非 AUTOINCREMENT，删除后新行会
+        复用 rowid）——本件按派工口径只修 A 格单形态，D 的增量行为按「既有行为
+        不得改动」原样保留；**混合形态**（等长原地改写 ∧ 同期追加节点，三项门槛
+        被追加腿抬高）仍会走增量、复用被改写行的陈旧 gram。
+        代价（如实标注）：判缓存有效性需逐行读 `rowid, content`（游标**惰性
+        迭代**，不 fetchall）并逐行取摘要 —— 相比旧实现的一条聚合 SQL，每次
+        调用多一趟 O(全库正文) 顺序读 + 摘要；省下的是 `_core_grams` 的正则切分
+        与 gram 集合构造（#389 的主要成本，实测单条短输入数秒）。这是「签名须对
+        等长改写敏感」的必然代价：SQLite 无内容哈希聚合函数，不读正文就无法
+        区分同长度的两段不同正文。
         """
-        row = self.engine.store.conn.execute(
-            "SELECT count(*), COALESCE(MAX(rowid),0), "
-            "COALESCE(SUM(LENGTH(content)),0) FROM nodes").fetchone()
-        sig = (int(row[0]), int(row[1]), int(row[2]))
+        h = hashlib.blake2b(digest_size=8)
+        total_len = 0
+        cnt = 0
+        max_rid = 0
+        for rid, content in self.engine.store.conn.execute(
+                "SELECT rowid, content FROM nodes ORDER BY rowid"):
+            rid = int(rid)
+            cnt += 1
+            max_rid = rid
+            total_len += len(content) if isinstance(content, str) else 0
+            h.update(b"%d:%d;" % (rid, self._row_digest(content)))
+        sig = (cnt, max_rid, int.from_bytes(h.digest(), "big"))
         cache = self._known_cache
         if cache is not None and self._known_sig == sig:
             return cache["union"], cache["counts"], cache["per_node"], sig
         if cache is not None:
-            old_cnt, old_max, old_len = self._known_sig
-            if sig[0] > old_cnt and sig[1] > old_max and sig[2] > old_len:
+            # 增量判定：**逐字保持改前三条门槛**（节点数增 ∧ max(rowid) 增 ∧ 正文
+            # 总长增）——见 docstring「改动面刻意收窄到缓存有效性」。
+            old_cnt, old_max = self._known_sig[0], self._known_sig[1]
+            old_len = self._known_total_len
+            if sig[0] > old_cnt and sig[1] > old_max and total_len > old_len:
                 rows = self.engine.store.conn.execute(
                     "SELECT id, content FROM nodes WHERE rowid > ?", (old_max,)
                 ).fetchall()
@@ -195,6 +272,7 @@ class LongTermMemoryGate:
                     for g in gs:
                         counts[g] = counts.get(g, 0) + 1
                 self._known_sig = sig
+                self._known_total_len = total_len
                 return union, counts, per_node, sig
         rows = self.engine.store.conn.execute(
             "SELECT id, content FROM nodes").fetchall()
@@ -207,6 +285,7 @@ class LongTermMemoryGate:
                 counts[g] = counts.get(g, 0) + 1
         self._known_cache = {"union": union, "counts": counts, "per_node": per_node}
         self._known_sig = sig
+        self._known_total_len = total_len
         return union, counts, per_node, sig
 
     def _novelty(self, content: str, existing_id: str = None) -> float:
@@ -306,24 +385,184 @@ class LongTermMemoryGate:
 
         返回的 `layer` = **实际落库层**（读回 DB），`evaluated_layer` = 决策层；
         二者不一致的旧行为已修（lingshu #224）。
+
+        #292 追加变体：新增结果键 `write_failed`（成功路径 `False`）与
+        `write_error`（成功路径 `None`）——「已存在」腿的层级/重要度 `UPDATE`
+        失败时不再与成功路径同值（旧实现 try 尾与 except 各写一遍
+        `node_id = existing_id`，异常在返回值上不可观测）。既有键的语义与取值
+        形态一字未改。
+
+        #770①③（并发面）：把「存在性检查 → 读既有节点 → 写」这一段收进**单一写
+        事务**（复用仓内既有 `LayeredStore._tx()`，与 #344 的 `tag_node` /
+        #517 的 `delete_node` 同一原语，不另造第二套）——`BEGIN IMMEDIATE` 先取
+        RESERVED 写锁，故：
+        ① 「已存在」腿读到的 `node.tags` 与随后的整列 `UPDATE tags` 在同一写锁下
+           （改前两进程各自读到旧 `tags`、后写者用旧值覆盖先写者 ⇒ 整组 worker 的
+           标签静默消失；4 进程×6 次实测丢 18/12/12，串行对照 24/24）；
+        ③ 存在性判定与 `skip_dedup=True` 新建腿**互斥**（同一把写锁串行化
+           「判定 → 新建」）——改前 40 轮×4 进程并发首写同一内容，40/40 轮出重复行。
+        ★事务**只覆盖判定复核与写**（`_snapshot_write`）；`search_content` 的存在性
+        预判与 `evaluate()` 留在事务**之外**（`_snapshot_probe`，只读）。为什么必须
+        这样切：`search_content` 的命中计数腿走 `increment_access_many`——它**自开
+        一条独立连接**（`sqlite3.connect(..., timeout=0)`）写回 `access_count`；
+        若把它放进本事务，那条旁路写与本次 `BEGIN IMMEDIATE` **自冲突**，并把
+        「另一进程 busy 等待持 PENDING」与「本进程 commit 需 EXCLUSIVE」的互等窗口
+        放大到 `busy_timeout`（实测 4 进程×6 次出现 30s 级
+        `OperationalError: database is locked`；把该旁路置 no-op 后同形态 1.26s
+        全绿）。故存在性判定分两段：事务外**预判**（判据与改前逐字相同，且保住
+        「检索命中刷新访问计数」这一既有副作用），事务内**复核**（纯读、零旁路写）。
+        边界（如实标注）：①本件只保证**本门控这条路径**的读改写原子性——其它路径
+        对同一节点的并发读改写（如 `promote_from_context`、引擎侧裸 SQL）不归本件
+        （`core.py` 的 AST 事务守卫亦**只扫 `core.py`**，本文件方法不在其扫描面内）；
+        ②事务边界由 `_tx()` 的嵌套感知兜住（`_tx_depth>1` 时发 SAVEPOINT、提交权归
+        最外层），故被已在事务内的调用方调进来时不会踩
+        `cannot start a transaction within a transaction`；
+        ③事务内的复核判据是「预判命中的节点仍在、且正文 `char_bigram_jaccard` ≥ 0.95」
+        ＋「正文**精确等值**兜底」——前者是 LIKE 路径的同款相似度口径（预判已判过
+        一次，复核只确认没被并发改写）；若预判是**靠 tag_bonus 加成**越阈（jaccard
+        在 0.90~0.95 之间）或走 FTS 混合分路径，复核会判否并退回精确等值 ⇒ 极端
+        情形下从「提升既有」退化为「新建」，此差异已记入未覆盖面；
+        ④长期层的相似边建边（`_snapshot_link`）移到**事务提交之后**——它同样调
+        `search_content`（同一旁路写），留在事务内会重现上面的自冲突。
+        """
+        probe = self._snapshot_probe(content, source, tags)
+        store = self.engine.store
+        with store._tx():
+            result = self._snapshot_write(content, source, tags, entities,
+                                          importance_hint, probe)
+        if result.pop("_need_links", False):
+            # 事务外建边（见边界④）；失败与改前同值（`links=0`），不抛出。
+            result["links"] = self._snapshot_link(result.get("node_id"), content)
+        divergent_id = result.pop("_divergent_id", None)
+        if divergent_id:
+            # issue #481：与判为实质分歧的既有节点登记 OPPOSITE 边（未复核
+            # 0.3）——放在事务外，避免 `add_edge` 的 `_commit_locked()` 提前
+            # 终结外层写事务（与 `_snapshot_link` 同一原因，见边界④）。
+            try:
+                self.engine.register_conflict(result.get("node_id"), divergent_id)
+                result["conflict_registered"] = True
+            except Exception as exc:
+                result["conflict_registered"] = False
+                _log.warning(
+                    "write_snapshot 分歧边登记失败（更正节点已落库，冲突待复核"
+                    " 面缺失）：%s: %s", type(exc).__name__, exc)
+        return result
+
+    def _snapshot_probe(self, content: str, source: str, tags: list) -> dict:
+        """事务外**只读**预判：存在性检查（`search_content`）+ 评估（`evaluate`）。
+
+        判据与改前 `write_snapshot` 逐字相同（含「检索命中刷新访问计数」的既有
+        副作用）；本函数**不**写库、**不**开事务。事务内由 `_recheck_existing`
+        复核其结论（见 `write_snapshot` 边界③）。
         """
         engine = self.engine
-        from .core import MemoryLayer
+        from .core import LayeredStore, MemoryLayer
+        existing_id = None
+        divergent_id = None
+        try:
+            hits = engine.store.search_content(
+                content, layers=[MemoryLayer.KNOWLEDGE, MemoryLayer.CONTEXT], limit=1)
+            if hits:
+                cand = hits[0][0]
+                # issue #481：存在性判据按**正文**（不计 tag_bonus）复核，且
+                # 要求无实质分歧（否定/数值）——旧实现只看 search_content 的
+                # 合成分 ≥0.95（含 0.05 tag_bonus）：差一个「不」或一个数字
+                # 即被判为同一内容 ⇒ 更正被丢弃、错误节点被提权到 0.9 并
+                # protect+no_forget（永久置顶召回）。有分歧另立节点并挂
+                # OPPOSITE 边待复核，而不是把更正并进错误节点。
+                sim = LayeredStore.char_bigram_jaccard(content, cand.content or "")
+                if sim >= 0.95:
+                    if engine._assertion_divergence(content, cand.content or ""):
+                        divergent_id = cand.id
+                    else:
+                        existing_id = cand.id
+        except Exception:
+            pass
+        return {"existing_id": existing_id, "divergent_id": divergent_id,
+                "ev": self.evaluate(content, source, tags, existing_id)}
+
+    def _recheck_existing(self, candidate: str, content: str):
+        """事务内复核预判结论（**纯读**，零 `search_content`／零旁路写）。
+
+        ① 预判命中的 `candidate` 仍在、且正文仍近乎相同（`char_bigram_jaccard`
+           ≥ 0.95）⇒ 沿用——保证「读 tags → 写 tags」落在同一写锁下（#770①）；
+        ② 否则退回「正文**精确等值**」检查（限调用方可写层，与 #217 同口径）——
+           并发首写同一内容时两进程正文逐字相同 ⇒ 后进事务者必命中先写者的行
+           （#770③ 的互斥面）。
+        """
+        from .core import LayeredStore, MemoryLayer
+        store = self.engine.store
+        if candidate:
+            node = store.get_node(candidate)
+            if node is not None and LayeredStore.char_bigram_jaccard(
+                    content, node.content or "") >= 0.95:
+                # issue #481：预判到事务之间候选可能被并发改写成实质分歧
+                # （否定/数值），此时不得沿用——否则更正仍会被并进错误节点。
+                if not self.engine._assertion_divergence(content, node.content or ""):
+                    return candidate
+        row = store.conn.execute(
+            "SELECT id FROM nodes WHERE content=? AND layer IN (?,?) "
+            "ORDER BY rowid LIMIT 1",
+            (content, MemoryLayer.KNOWLEDGE.value,
+             MemoryLayer.CONTEXT.value)).fetchone()
+        return row[0] if row else None
+
+    def _snapshot_link(self, node_id, content: str) -> int:
+        """长期层关联边（事务外调用）：与最相似知识节点建 similar 边，返回建边数。
+
+        改前该段内联在 `write_snapshot` 里；#770 把它移出写事务（见 `write_snapshot`
+        边界④）。异常语义与改前同值：整体失败 ⇒ `0`，不抛出。
+        """
+        try:
+            from .core import EdgeType
+            links = self.engine.store.search_content(content, limit=3)
+            for other, sim in links:
+                if other.id != node_id and sim >= 0.25:
+                    self.engine.add_edge(node_id, other.id,
+                                         relation_type=EdgeType.SIMILAR,
+                                         source_evidence="inferred")
+            return len([x for x in links if x[0].id != node_id])
+        except Exception:
+            return 0
+
+    def _snapshot_write(self, content: str, source: str, tags: list,
+                        entities: list, importance_hint: float,
+                        probe: dict) -> dict:
+        """`write_snapshot` 的实现体（调用方已持有写事务，见 `write_snapshot`）。
+
+        本体内**不得**再开事务，也不得直接 `conn.commit()`——提交一律走
+        `store._commit_locked()`（#665：嵌套层是 no-op，只有最外层真提交）；
+        也不得调用 `search_content`（其旁路写会与本事务自冲突，见 `write_snapshot`）。
+        """
+        engine = self.engine
+        from .core import MemoryLayer, _finite_clamp
+        ev = probe["ev"]
         # 已存在性检查（同内容重复快照 → 提升而非新建）。
         # #217：限定在调用方可写的本地层——不限层时会命中锚点/结构/自我层，
         # 后续裸 SQL 更新绕过 add_node 的 IMMUTABLE_LAYERS + Role 校验，
         # 使 SUB 只凭一段内容片段即可改写共享层节点（并登记永久保护）。
-        existing_id = None
-        try:
-            hits = engine.store.search_content(
-                content, layers=[MemoryLayer.KNOWLEDGE, MemoryLayer.CONTEXT], limit=1)
-            if hits and hits[0][1] >= 0.95:
-                existing_id = hits[0][0].id
-        except Exception:
-            pass
-
-        ev = self.evaluate(content, source, tags, existing_id)
+        # #770③：事务内复核（预判命中的节点仍在 + 精确等值兜底）。
+        existing_id = self._recheck_existing(probe["existing_id"], content)
+        # #292（复核者 123WP-a 追加的同族变体）：`except` 分支**不得**与成功路径
+        # 同值——旧实现里层级/重要度提升的 `UPDATE` 失败被吞，`node_id` 仍赋
+        # `existing_id`（与上一行完全相同的赋值），异常在返回值上**不可观测**。
+        # 现加结果键 `write_failed` / `write_error`：成功路径 `False` / `None`。
+        # 既有键（status / layer / importance / node_id …）的语义与取值形态不变。
+        write_failed = False
+        write_error = None
+        # #587：值域闸**单点收口**——本门控有两处**裸 SQL**写 importance
+        # （下方「已存在」分支与 `promote_from_context`），不经 `STNode.to_row`
+        # 的 `_finite_clamp`（#164/#185 的钳制只挂在 `add_*` 腿）。旧实现
+        # `importance_hint=1e6/inf` 原样落库 ⇒ `inf × decay = inf` 永生、
+        # `ORDER BY importance DESC` 检索恒占首位、挤占 LIMIT 窗口，且
+        # `imp ≥ LONG_TERM_THRESHOLD` 直接触发 `protect_node` 永久保护。
+        # 现按 #185 口径在**入口**归一（与 `add_node` 的
+        # `_finite_clamp(x, 0.0, 1.0, default=0.5)` 同向）：有限值钳到 [0,1]，
+        # 非有限（NaN/±inf）回落 `default`；此处 default 取**评估值**
+        # `ev["importance"]`——提示值坏掉时退回本门控自己的评分，而不是凭空
+        # 造一个 0.0/0.5。阈值本体未改。
         imp = importance_hint if importance_hint is not None else ev["importance"]
+        imp = _finite_clamp(imp, 0.0, 1.0, default=ev["importance"])
         # 层级决策与最终 importance 统一（显式提示同样参与层级判定）
         if imp >= self.LONG_TERM_THRESHOLD:
             decided = "long_term"
@@ -336,7 +575,8 @@ class LongTermMemoryGate:
         if decided == "context" and importance_hint is None:
             return {"status": "discarded", "importance": round(imp, 3),
                     "layer": "context", "features": ev["features"],
-                    "decision": ev["decision"]}
+                    "decision": ev["decision"],
+                    "write_failed": False, "write_error": None}
 
         node_id = None
         if existing_id:
@@ -356,13 +596,28 @@ class LongTermMemoryGate:
                     engine.store.conn.execute(
                         "UPDATE nodes SET importance=?, tags=?, confidence=?, layer=? "
                         "WHERE id=?",
-                        (max(node.importance, imp),
+                        # #672：`node.importance` 是**库内读回值**（存量行可能越界，
+                        # 如 1e6/inf）——`max` 会让它原样写回，绕过上面入口处的钳制。
+                        # 与姊妹腿 `promote_from_context` 对称，落库前过同一口径。
+                        # default 取 `imp`（入口已归一），以保住 #587 守卫③
+                        # 「合法 hint 的 max 合并语义不动」。
+                    (_finite_clamp(max(node.importance, imp), 0.0, 1.0,
+                                   default=imp),
                          _json.dumps(tags_merged, ensure_ascii=False),
                          node.confidence, new_layer, existing_id))
-                    engine.store.conn.commit()
+                    # #770①：提交走 `_commit_locked()`（不是裸 `conn.commit()`）
+                    # ——本腿现由 `write_snapshot` 包在 `_tx()` 里，裸提交会提前
+                    # 终结外层事务（#665 同款：嵌套层提交权不归本层）。
+                    engine.store._commit_locked()
                     node_id = existing_id
-                except Exception:
+                except Exception as exc:
                     node_id = existing_id
+                    write_failed = True
+                    write_error = type(exc).__name__
+                    _log.warning(
+                        "write_snapshot 层级/重要度更新失败（既有节点未更新，"
+                        "回报仍指向既有 node_id=%s）：%s: %s",
+                        existing_id, type(exc).__name__, exc)
 
         if node_id is None:
             if decided == "context":
@@ -387,25 +642,24 @@ class LongTermMemoryGate:
         stored_layer = stored.layer.value if stored is not None else decided
         result = {"node_id": node_id, "importance": round(imp, 3),
                   "layer": stored_layer, "evaluated_layer": decided,
-                  "features": ev["features"]}
+                  "features": ev["features"],
+                  "write_failed": write_failed, "write_error": write_error}
+        # issue #481：新建腿若预判到「实质分歧」的既有节点，把其 id 透传给
+        # `write_snapshot`，由事务**提交后**登记 OPPOSITE 边（add_edge 自带
+        # commit，不能留在本事务内，见 write_snapshot 边界④）。
+        if existing_id is None and probe.get("divergent_id"):
+            result["_divergent_id"] = probe["divergent_id"]
         if decided == "long_term":
             try:
                 engine.protect_node(node_id, f"LongTermMemoryGate:{source}")
                 result["protected"] = True
             except Exception:
                 result["protected"] = False
-            # 关联边：与最相似知识节点建 similar 边（信息差驱动的关联）
-            try:
-                from .core import EdgeType
-                links = engine.store.search_content(content, limit=3)
-                for other, sim in links:
-                    if other.id != node_id and sim >= 0.25:
-                        engine.add_edge(node_id, other.id,
-                                        relation_type=EdgeType.SIMILAR,
-                                        source_evidence="inferred")
-                result["links"] = len([x for x in links if x[0].id != node_id])
-            except Exception:
-                result["links"] = 0
+            # #770：关联边（与最相似知识节点建 similar 边）移到**事务提交之后**
+            # ——该段调 `search_content`，其命中计数腿自开独立连接写回，留在本事务
+            # 内会与 `BEGIN IMMEDIATE` 自冲突（见 `write_snapshot` 边界④）。
+            # `_need_links` 由 `write_snapshot` 消费后从结果里弹出。
+            result["_need_links"] = True
         return result
 
     # ---- 前馈新奇检测（H1 · 海马体学习：新颖→当场强化编码） ----
@@ -418,9 +672,14 @@ class LongTermMemoryGate:
                 tags: list = None, entities: list = None) -> dict:
         """海马体式前馈：输入到来时先检测新奇度，高新奇 → 当场强化编码。
 
-        返回 {novel, novelty, action, node_id, importance, links}
-        - novel=True：触发了强化编码（标记 novel_prefeed + importance 提升 + 建边）
-        - novel=False：常规路径（novelty 未达阈值，不干预）
+        返回 {novel, novelty, action, node_id, importance, links, degraded}
+        - novel=True / action='prefeed_boost'：触发了强化编码（标记 novel_prefeed
+          + importance 提升 + 建边）；`degraded` 列出**实际失败**的降级面
+          （'links' / 'protect'），无降级时为 `[]`。
+        - novel=False / action='routine'：常规路径（novelty 未达阈值，不干预）。
+        - novel=False / action='prefeed_failed'：主写入失败（fail-closed，附
+          `error` = 异常类名）；`node_id=None`、`importance=0.0`、`links=0`
+          ——**不**回报一个并未生效的成功语义（#292 追加变体）。
         """
         engine = self.engine
         try:
@@ -428,8 +687,11 @@ class LongTermMemoryGate:
         except Exception:
             novelty = 0.5
         if novelty < self.NOVEL_TRIGGER:
+            # #292：`degraded` 键**恒在场**（本路径无降级面 ⇒ `[]`），使 docstring
+            # 承诺的键集在三条返回路径上一致——调用方读 `r["degraded"]` 不会
+            # 因走了哪条路径而 KeyError。
             return {"novel": False, "novelty": round(novelty, 3),
-                    "action": "routine"}
+                    "action": "routine", "degraded": []}
 
         # 高新奇 → 强化编码：importance 提升 + 标签 + 建边
         # novelty 复用上面已算出的值（#389：避免对同一输入重复全库扫描）
@@ -440,6 +702,15 @@ class LongTermMemoryGate:
         node_id = None
         links = 0
         actual_imp = None
+        # #292（复核者 123WP-a 追加的同族变体）：**失败必须在返回值上可观测**。
+        # 旧实现主写入（add_perception）抛异常被宽 `except: pass` 吞掉后，
+        # `node_id` 停在 None 却仍回报 `novel=True / action='prefeed_boost'`
+        # ——0 个节点写入却回报成功（与同文件 `write_snapshot` 的
+        # 「回报 ≠ 事实」纪律同族，前一处按该纪律修过、后一处漏改）。
+        # 现：主写入失败 ⇒ fail-closed 回报 `prefeed_failed`；降级面（建边 /
+        # protect_node）失败 ⇒ 节点已写入仍算成功，但失败面逐项登记进
+        # `degraded`（#170 口径：宽 except 必须留痕或收窄）。
+        degraded = []
         try:
             # #292：主动沉淀（前馈强化编码）必须独立成节点——不带 skip_dedup 时
             # M5 去重会把新输入并入相似旧节点（只加 duplicate 标签），回执却报
@@ -452,31 +723,40 @@ class LongTermMemoryGate:
             # 去重命中时 add_perception 返回的是**既有**节点：回报实际落库值，
             # 不要回报一个并未生效的计算值（"回报 ≠ 事实"）。
             actual_imp = getattr(node, "importance", None)
-            # 与相关知识建边（信息差驱动的关联）
+        except Exception as exc:
+            _log.warning("prefeed 主写入失败（fail-closed，不报 boost）：%s: %s",
+                         type(exc).__name__, exc)
+            return {"novel": False, "novelty": round(novelty, 3),
+                    "action": "prefeed_failed", "node_id": None,
+                    "importance": 0.0, "links": 0,
+                    "error": type(exc).__name__, "degraded": degraded}
+        # 与相关知识建边（信息差驱动的关联）——降级面：失败留痕，不吞。
+        try:
+            from .core import EdgeType
+            rel = engine.store.search_content(content, limit=3)
+            for other, sim in rel:
+                if other.id != node_id and sim >= self.NOVEL_EDGE_SIM:
+                    engine.add_edge(node_id, other.id,
+                                    relation_type=EdgeType.SIMILAR,
+                                    source_evidence="inferred")
+                    links += 1
+        except Exception as exc:
+            degraded.append("links")
+            _log.warning("prefeed 建边降级（节点已写入）：%s: %s",
+                         type(exc).__name__, exc)
+        # 长期层 → 保护——同为降级面：失败留痕。
+        if imp >= self.LONG_TERM_THRESHOLD:
             try:
-                from .core import EdgeType
-                rel = engine.store.search_content(content, limit=3)
-                for other, sim in rel:
-                    if other.id != node_id and sim >= self.NOVEL_EDGE_SIM:
-                        engine.add_edge(node_id, other.id,
-                                        relation_type=EdgeType.SIMILAR,
-                                        source_evidence="inferred")
-                        links += 1
-            except Exception:
-                pass
-            # 长期层 → 保护
-            if imp >= self.LONG_TERM_THRESHOLD:
-                try:
-                    engine.protect_node(node_id, f"Prefeed:{source}")
-                except Exception:
-                    pass
-        except Exception:
-            pass
+                engine.protect_node(node_id, f"Prefeed:{source}")
+            except Exception as exc:
+                degraded.append("protect")
+                _log.warning("prefeed 保护登记降级（节点已写入）：%s: %s",
+                             type(exc).__name__, exc)
         return {"novel": True, "novelty": round(novelty, 3),
                 "action": "prefeed_boost", "node_id": node_id,
                 "importance": round(float(actual_imp if actual_imp is not None
                                           else imp), 3),
-                "links": links}
+                "links": links, "degraded": degraded}
 
     def promote_from_context(self, limit: int = 30) -> list:
         """情境层批量提升扫描（睡眠巩固/会话结束时调用）：
@@ -493,7 +773,7 @@ class LongTermMemoryGate:
         engine = self.engine
         promoted = []
         try:
-            from .core import MemoryLayer
+            from .core import MemoryLayer, _finite_clamp
             nodes = engine.store.get_layer_nodes(MemoryLayer.CONTEXT)
             for node in nodes:
                 if len(promoted) >= limit:
@@ -501,7 +781,13 @@ class LongTermMemoryGate:
                 ev = self.evaluate(node.content, "promote", node.tags, node.id)
                 if ev["layer"] in ("long_term", "knowledge"):
                     import json as _json
-                    new_imp = max(node.importance, ev["importance"])
+                    # #587：本腿同为**裸 SQL**——`ev["importance"]` 经 `evaluate`
+                    # 已在 [0,1]，但 `node.importance` 是**库里读回值**，修复前
+                    # 落库的越界行（1e6/inf）会经 `max` 再次写回 ⇒ 一并过同一
+                    # 钳制（同 `write_snapshot` 入口口径，阈值未改）。
+                    new_imp = _finite_clamp(
+                        max(node.importance, ev["importance"]), 0.0, 1.0,
+                        default=ev["importance"])
                     tags_new = list(dict.fromkeys((node.tags or []) + ["promoted"]))
                     engine.store.conn.execute(
                         "UPDATE nodes SET importance=?, layer=?, tags=? WHERE id=?",

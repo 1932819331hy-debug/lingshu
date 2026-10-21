@@ -9,20 +9,20 @@
 
 修法：
   · 越界闸在**门面侧**（`_confine_simloop_out_path`，先判后写）：白名单根＝
-    显式配置面 `LINGSHU_SIMLOOP_OUT_ROOT`（`os.pathsep` 多根）优先，未配置则回落
-    认知图库根 `MDCG_ROOT`（本门面 `load` 分支的同一真源），两者皆无 ⇒ fail-closed。
+    显式配置面 `LINGSHU_SIMLOOP_OUT_ROOT`（`os.pathsep` 多根）优先；**#480 起
+    未配置即 fail-closed，不再回落 `MDCG_ROOT`**（该回落＝默认写真源，见 D）。
     归一用 `realpath + normcase` ⇒ 软链/junction 别名与 `..` 逃逸不得绕过。
   · 原子写在下层 `SimulationLoop.flush_payloads`：同目录临时文件 + `os.replace`。
 
-判据来源：经验标定（本件 #324）——口径取「显式面 → 认知图库根 → fail-closed」
-（与 #85 三级回落链同形）＋「临时文件 + os.replace」；无理论章节规定该口径，
-追不到更早出处。
+判据来源：经验标定（本件 #324）——口径取「显式面 → fail-closed」
+（与 #85 三级回落链同形，但回落腿已被 #480 砍掉）＋「临时文件 + os.replace」；
+无理论章节规定该口径，追不到更早出处。
 
 断言组（抽掉任一修复即红）：
   A 未配置任何根 ⇒ 门面 flush 拒绝且**零落盘**（先判后写）
   B 显式根内 ⇒ 照旧写成功，`written` 与产物内容逐字正确（防误杀）
   C 越出显式根（含 `..` 逃逸）⇒ 拒绝且零落盘
-  D 未配置显式根时回落 `MDCG_ROOT` ⇒ 根内可写、根外拒绝
+  D 未配置显式根时**不再回落** `MDCG_ROOT`（#480）：库根内/外一律拒绝且零落盘
   E 原子性：换入失败（`os.replace` 抛）⇒ 目标文件仍是**旧内容**（旧实现＝先截断成空）
 
 运行（仓根）：python -X utf8 -m pytest tests/test_issue324_simloop_flush_path_guard.py -q --no-header
@@ -104,8 +104,12 @@ def test_c_越出显式根被拒含点划逃逸(monkeypatch):
             "C %s 被拒后仍落盘：%s" % (name, out)
 
 
-def test_d_回落_MDCG_ROOT(monkeypatch):
-    """D：未配置显式根 ⇒ 回落认知图库根（根内可写、根外拒）。"""
+def test_d_不再回落_MDCG_ROOT(monkeypatch):
+    """D（#480 更新）：未配置显式根 ⇒ **不再回落** `MDCG_ROOT`——库根内/外一律拒。
+
+    旧 D 断言「回落库根 ⇒ 根内可写」，那正是 #480 的缺陷面（默认写真源）。
+    #324 的白名单机制（显式根 + 归一包含性判定）保持不变，只砍回落腿。
+    """
     td = tempfile.mkdtemp()
     lib = os.path.join(td, "mdcg_lib")
     os.makedirs(lib, exist_ok=True)
@@ -115,8 +119,8 @@ def test_d_回落_MDCG_ROOT(monkeypatch):
 
     inside = os.path.join(lib, "contextual", "ok.md")
     r = eng.wm_simloop("flush", {"out_path": inside})
-    assert r["status"] == "ok", "D 回落库根内写入被误拒：%r" % (r,)
-    assert os.path.exists(inside), "D 库根内未落盘"
+    assert r["status"] == "error", "D 回落库根仍在（#480 未修）：%r" % (r,)
+    assert not os.path.exists(inside), "D 库根内被拒后仍落盘"
 
     outside = os.path.join(td, "nope.md")
     r2 = eng.wm_simloop("flush", {"out_path": outside})

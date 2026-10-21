@@ -1,10 +1,15 @@
 # Copyright 2026 灵枢 (Lingshu) · MIT
-"""Silhouette3D — 线条轮廓 + 深度着色（漫画风 3D 呈现）。
+"""Silhouette3D — 线条轮廓 + 深度着色（漫画风 **2.5D** 呈现）。
 
-理念（呼应「线条 + 漫画填色」游戏风格与 WORLD3D 零 LLM 确定性渲染）：
-- 角色 = 一组**轮廓部件**（2D 轮廓点 + 深度 z + 基础色），无需网格/贴图。
-- 投影后按**深度着色**：近的部件亮/暖，远的暗/冷 —— 颜色即距离。
-- 旋转视角时部件产生视差位移 + 画家算法遮挡 —— 真 3D。
+表示层口径（如实声明，#8）：
+- 角色 = 一组**轮廓部件**（2D 轮廓点 + 深度 z 偏移 + 基础色），无需网格/贴图。
+- **每个部件是零厚度平面多边形**（`SilhouettePart.points` 只有 (x, y)；z 是部件
+  级的常数偏移，不是逐顶点深度）。遮挡由**画家算法排序**实现，非深度缓冲。
+- 投影后按**相机坐标系深度着色**（见 `render`/`_depth_factor`）：近的部件亮/暖，
+  远的暗/冷 —— 颜色即距离。
+- 旋转视角时部件产生**视差位移 + 画家算法遮挡**。这是**分层视差（2.5D）**：
+  纸片/皮影式表现，**不是**有体积的三维体——侧视 90° 时各平面坍塌成细线。
+  据此外推「多视角几何一致性/重建精度」会量到视差而非几何（#8）。
 
 肥鱼（猫娘少女）轮廓模板：猫耳/头/身体(裙)/手臂/腿/尾巴，各部件深度不同。
 
@@ -16,9 +21,11 @@ from __future__ import annotations
 
 import math
 import os
+import warnings
 from dataclasses import dataclass, field
 from typing import List, Optional, Tuple
 
+from .svg_backend import SVGBackend
 from .world3d import Camera3D
 
 # ---------------------------------------------------------------------------
@@ -40,7 +47,7 @@ class SilhouettePart:
     """
     name: str
     points: List[Tuple[float, float]]    # 轮廓（多边形顶点）
-    depth: float = 0.0                   # 深度 z（米，正=朝向相机）
+    depth: float = 0.0                   # 部件相对中心的 z 偏移（米，越大越靠角色背面）
     color: Tuple[int, int, int] = (200, 200, 200)
     outline: Tuple[int, int, int] = (40, 30, 35)   # 线条色（漫画描边）
     pivot: Optional[Tuple[float, float]] = None    # 旋转中心（2D，相对角色中心）
@@ -68,6 +75,13 @@ class Silhouette3D:
         self.center = center
         self.parts: List[SilhouettePart] = []
         self.depth_span = depth_span       # 深度着色范围（米）：span 内 1.0→0.55 亮度
+        # 表情几何基准（#376）：`set_expression` 首次调用时快照眼/嘴/高光的原始
+        # 几何，其后每次调用都从这份基准重算 —— 使 set_expression 幂等。
+        self._expr_base: Optional[dict] = None
+        # 矢量出口的观测面（不静默）：最近一次 `render_svg*` 的 `SVGBackend.stats()`
+        # 与最近一次 `animate_svg` 的帧/动画信息；未调用过则 None。
+        self.last_svg_stats: Optional[dict] = None
+        self.last_anim_info: Optional[dict] = None
 
     def add_part(self, part: SilhouettePart) -> "Silhouette3D":
         self.parts.append(part)
@@ -119,9 +133,13 @@ class Silhouette3D:
         return (self.center[0] + p2[0], self.center[1] + p2[1],
                 self.center[2] + depth)
 
-    def _depth_factor(self, z: float) -> float:
-        """深度 → 亮度因子：近(小 z 偏移)亮，远(大 z 偏移)暗。"""
-        dz = z - self.center[2]
+    def _depth_factor(self, dz: float) -> float:
+        """部件相对角色中心的相机前向深度差 → 亮度因子：近（dz 小）亮，远（dz 大）暗。
+
+        `dz` = 部件相机前向深度 − 角色中心相机前向深度（均为
+        `Camera3D.depth_of` 读数，与排序同一口径，见 #175）；默认相机下
+        `dz` 恰为部件自身的 `depth` 偏移，故默认视角着色与旧口径逐位一致。
+        """
         t = max(0.0, min(1.0, dz / max(self.depth_span, 1e-6)))
         return 1.0 - 0.45 * t        # 近 1.0 → 远 0.55
 
@@ -130,27 +148,33 @@ class Silhouette3D:
 
     # ---- 渲染 ----
 
-    def render(self, screen_w: int = 400, screen_h: int = 500,
-               camera: Optional[Camera3D] = None,
-               background: Tuple[int, int, int] = (250, 248, 244),
-               alpha: bool = False) -> "PIL.Image":
-        """渲染：按深度降序（远先画）填充每个轮廓部件 + 描边。返回 PIL Image。
-
-        alpha=True 时返回 RGBA（背景透明，部件不透明）——供 WorldModel 用
-        paste 合成（C 级），替代逐像素循环。
-        """
-        from PIL import Image, ImageDraw
-
-        cam = camera or Camera3D.look_at(
+    def _default_camera(self) -> Camera3D:
+        """默认相机：眼位 = 角色中心 − 3·z，看向角色中心。"""
+        return Camera3D.look_at(
             eye=(self.center[0], self.center[1], self.center[2] - 3.0),
             target=self.center)
-        mode = "RGBA" if alpha else "RGB"
-        if alpha:
-            img = Image.new("RGBA", (screen_w, screen_h), (*background, 0))
-        else:
-            img = Image.new("RGB", (screen_w, screen_h), background)
-        draw = ImageDraw.Draw(img)
 
+    def _view(self, screen_w: int, screen_h: int,
+              camera: Optional[Camera3D] = None
+              ) -> List[Tuple[SilhouettePart, List[Tuple[float, float]], float]]:
+        """投影 + 排序内核：返回 `[(part, 屏幕多边形, dz), ...]`（**画家序**：远先画）。
+
+        `dz` = 部件相机前向深度 − 角色中心前向深度（着色与排序同一口径，见下）。
+
+        画家算法：按**相机坐标系前向深度**降序（远先画，近覆盖）。
+        缺陷态（#175）：排序与着色都用固定 `part.depth`——只在默认相机
+        （eye = center − 3·z）下「正 = 远离相机」成立；相机绕到背后时
+        尾巴/四肢（depth 大）实际离相机更近却先画、被身体盖住，着色也反了。
+        判据来源：docs/theory/世界模型与语义时空图_完整理论整理与实现路线.md
+        §3.2 投影-关联（遮挡/尺度须按相机坐标 z，与 `Camera3D.project` 同一变换），
+        与 world3d.Object3D.depth 同口径。
+
+        部件按相机前向深度**只**取决于 `part.depth` 与相机（与关节角无关）
+        ⇒ 同一机位下**画家序在帧间不变**——这是 `animate_svg` 能按「每个部件
+        一条 `points` 动画」逐帧合成的前提之一（另一个前提是可见部件集合不变，
+        见 `animate_svg` 的降级路径）。
+        """
+        cam = camera or self._default_camera()
         # 每个部件：旋转后顶点 → 3D → 屏幕多边形
         projected = []
         for part in self.parts:
@@ -166,15 +190,272 @@ class Silhouette3D:
             if ok and len(poly) >= 3:
                 projected.append((part, poly))
 
-        # 画家算法：深度降序（远先画，近覆盖）
-        for part, poly in sorted(projected, key=lambda x: -x[0].depth):
-            f = self._depth_factor(self.center[2] + part.depth)
+        z_ref = cam.depth_of(self.center)
+        view = []
+        for part, poly in projected:
+            dz = cam.depth_of(self._to_3d((0.0, 0.0), part.depth)) - z_ref
+            view.append((part, poly, dz))
+        return sorted(view, key=lambda x: -x[2])
+
+    def _paint(self, draw, view, alpha: bool = False) -> None:
+        """绘制内核：只调 `draw.polygon(...)`（与 `ImageDraw` / `SVGBackend` 同形）。
+
+        `view` = `_view(...)` 的输出（画家序）；按序填充 + 描边，深度着色
+        与既有实现同一口径。**位图出口与矢量出口共用本内核** ⇒ 绘制顺序、
+        坐标、颜色不可能在两出口之间走偏。
+        """
+        for part, poly, dz in view:
+            f = self._depth_factor(dz)
             fill = self._shade(part.color, f)
             if alpha:
                 draw.polygon(poly, fill=(*fill, 255), outline=(*part.outline, 255))
             else:
                 draw.polygon(poly, fill=fill, outline=part.outline)
+
+    def render(self, screen_w: int = 400, screen_h: int = 500,
+               camera: Optional[Camera3D] = None,
+               background: Tuple[int, int, int] = (250, 248, 244),
+               alpha: bool = False) -> "PIL.Image":
+        """渲染：按深度降序（远先画）填充每个轮廓部件 + 描边。返回 PIL Image。
+
+        alpha=True 时返回 RGBA（背景透明，部件不透明）——供 WorldModel 用
+        paste 合成（C 级），替代逐像素循环。
+
+        几何/排序在 `_view`，绘制在 `_paint`（与 `render_svg` 共用）——
+        本方法只负责建位图 + `ImageDraw.Draw` 后调内核，**输出逐字节不变**。
+        """
+        from PIL import Image, ImageDraw
+
+        mode = "RGBA" if alpha else "RGB"
+        if alpha:
+            img = Image.new("RGBA", (screen_w, screen_h), (*background, 0))
+        else:
+            img = Image.new("RGB", (screen_w, screen_h), background)
+        draw = ImageDraw.Draw(img)
+        self._paint(draw, self._view(screen_w, screen_h, camera), alpha=alpha)
         return img
+
+    # ---- 矢量出口（SVG · 与位图出口同几何同顺序）----
+
+    def render_svg_backend(self, screen_w: int = 400, screen_h: int = 500,
+                           camera: Optional[Camera3D] = None,
+                           background: Tuple[int, int, int] = (250, 248, 244),
+                           alpha: bool = False) -> SVGBackend:
+        """`render` 同参同几何，出口换成 `SVGBackend`（可查 `stats()`，不吞跳过计数）。
+
+        `alpha=True` 时背景按 RGBA `(…, 0)` 发射（与 `render` 的
+        `Image.new("RGBA", …, (*background, 0))` 同源）⇒ SVG 里表现为背景矩形的
+        `fill-opacity="0"`（与位图路径「背景透明、部件不透明」同义，不静默丢弃
+        透明度）。
+        """
+        bg = (*background, 0) if alpha else background
+        b = SVGBackend(screen_w, screen_h, background=bg)
+        self._paint(b, self._view(screen_w, screen_h, camera), alpha=alpha)
+        self.last_svg_stats = b.stats()
+        return b
+
+    def render_svg(self, screen_w: int = 400, screen_h: int = 500,
+                   camera: Optional[Camera3D] = None,
+                   background: Tuple[int, int, int] = (250, 248, 244),
+                   alpha: bool = False) -> str:
+        """矢量出口：返回**自包含** SVG 文档（纯标准库，无需 PIL）。
+
+        与 `render(...)` 逐元素同序（画家序），坐标/颜色由 `SVGBackend`
+        按固定小数位格式化 ⇒ 同参两次导出**逐字节相同**。
+        元素数与跳过计数见 `self.last_svg_stats`（或 `render_svg_backend().stats()`）。
+
+        尺寸口径（如实）：**本出口与本类既有位图出口一样不设单边上限**——
+        本件只换出口、不改既有行为，故未在此新增限流（`World3D` 侧另有
+        `MAX_SCREEN_DIM = 4096`，#416；两类口径的收口属另一件事）。
+        风险面也如实不同：位图按 `w*h*3` 字节分配（实测 6000² ⇒ +142.5 MB），
+        矢量出口不做面积分配（实测 6000² ⇒ 9.6 KB 文档）。
+        """
+        return self.render_svg_backend(screen_w, screen_h, camera,
+                                       background, alpha).to_svg()
+
+    # ---- SVG 动画（SMIL · 帧参数由调用方给定 · 确定性）----
+    #
+    # 为什么选 **SMIL**（而不是 CSS keyframes）：
+    #   · 本件要动的是**逐顶点的多边形几何**（尾巴各节的摆动）。SVG 1.1 里
+    #     `points` 是 `<animate>` 可直接驱动的属性，且当两张点表顶点数相同时
+    #     允许线性插值 ⇒ 摆尾是**真实几何**动画，而不是近似。
+    #   · CSS keyframes **不能**可移植地驱动 `points`（它不是 CSS 属性；只有
+    #     新版 `d` 等少数属性可用），用它只能把每个部件包一层 `<g>` 做
+    #     `transform` 级别的近似位移——摆尾会变成整体平移，几何是错的。
+    #   · 自包含性：SMIL 动画就写在元素内部（`<polygon>…<animate/></polygon>`），
+    #     不依赖外部样式表/脚本；Chrome / Firefox / Safari / Inkscape 均支持。
+    #     代价（如实）：较老的 SVG 精简渲染器只认静态首帧——那会看到帧 0 的样子。
+    #
+    # 帧间只有关节角（尾巴波幅）变化 ⇒ 部件集合与画家序不变（见 `_view`），
+    # 故每个部件一条 `points` 动画、按帧 0 的元素顺序即可精确合成。
+
+    @staticmethod
+    def _frame_waves(frames, amplitude: float) -> List[float]:
+        """帧参数 → 每帧的尾巴波幅序列（弧度）。
+
+        · `frames` 是 int N ⇒ 在**一个完整正弦周期**上均匀采样 N 帧
+          （`wave_i = amplitude·sin(2π(i+0.5)/N)`，i = 0…N−1；N=1 ⇒ 复位姿态 0.0）。
+          取**半步偏移**而非 `sin(2πi/N)`：后者在偶数 N 下会把帧全采在正弦的
+          零点上（N=2 时两帧波幅都是 0 ⇒ 动画退化为静止），半步偏移使相位
+          从 π/N 走到 2π−π/N，首尾相差一个整步 ⇒ 循环连续且每帧都有位移。
+        · `frames` 是序列 ⇒ **逐帧显式给定**的波幅（序列长度即帧数）。
+        全部由入参决定，**不引入任何随机源** ⇒ 同参数两次导出逐字节相同。
+        """
+        if isinstance(frames, bool):
+            raise TypeError("frames 不能是 bool：%r" % (frames,))
+        if isinstance(frames, float) and frames.is_integer():
+            return Silhouette3D._frame_waves(int(frames), amplitude)
+        if isinstance(frames, int):
+            n = int(frames)
+            if n < 1:
+                raise ValueError("frames 必须 ≥ 1，得到 %r" % (frames,))
+            if n == 1:
+                return [0.0]
+            return [float(amplitude) * math.sin(2.0 * math.pi * (i + 0.5) / n)
+                    for i in range(n)]
+        seq = [float(w) for w in frames]
+        if not seq:
+            raise ValueError("frames 序列不能为空")
+        return seq
+
+    @staticmethod
+    def _svg_polygons(doc: str):
+        """扫描文档里的 `<polygon …/>` **自闭合**元素 → `[(起点, 终点, 元素文本), …]`。
+
+        为什么不按行切（曾经的写法，抓到一个真缺陷）：元素是否独占一行属于
+        `to_svg()` 的**排版细节**（背景 `<rect>` 的换行有无、缩进几个空格），
+        不是契约——冻结后端一次排版改动就让"最后/最前一个元素被漏掉"，表现为
+        该部件在动画里**卡住**。这里只依赖 `<polygon>` 自闭合这一**契约级**形态。
+        出现非自闭合的 `<polygon …>`（或开标签不成对）⇒ 返回 None，调用方降级。
+        """
+        out = []
+        i = 0
+        while True:
+            j = doc.find("<polygon", i)
+            if j < 0:
+                break
+            k = doc.find(">", j)
+            if k < 0:
+                break
+            if doc[k - 1] != "/":            # 非自闭合 ⇒ 不能安全注入子元素
+                return None
+            out.append((j, k + 1, doc[j:k + 1]))
+            i = k + 1
+        return out
+
+    @staticmethod
+    def _points_attr(elem: str) -> Optional[str]:
+        """取元素上的 `points="…"` 值；无此属性（非多边形）⇒ None。"""
+        elem = elem.strip()          # 行含 4 空格缩进，此处容忍
+        if not elem.startswith("<polygon ") or not elem.endswith("/>"):
+            return None
+        if 'points="' not in elem:
+            return None
+        return elem.split('points="', 1)[1].split('"', 1)[0]
+
+    def animate_svg(self, frames=24, screen_w: int = 400, screen_h: int = 500,
+                    camera: Optional[Camera3D] = None,
+                    background: Tuple[int, int, int] = (250, 248, 244),
+                    alpha: bool = False, amplitude: float = 0.45,
+                    period: float = 2.0, loop: bool = True) -> str:
+        """自包含**动画 SVG**：用本模块已有的尾巴波形（`_set_tail_wave`）+ 既有深度着色。
+
+        参数：
+          · `frames`  int N ⇒ 一个完整正弦周期上均匀采样 N 帧；序列 ⇒ 逐帧显式波幅。
+          · `amplitude` 正弦波幅（弧度，默认 0.45）；`period` 一个周期的秒数（dur）。
+          · `loop=True` ⇒ `repeatCount="indefinite"`；`False` ⇒ `fill="freeze"`（停在末帧）。
+          · 其余（尺寸/相机/背景/alpha）与 `render_svg` 同义。
+
+        帧数语义：动画元素 `values="f0;f1;…;f_{N-1}"` ⇒ 以 `;` 切分的帧数**恒等于**请求的
+        N，时间轴 `dur = period`。单帧（N=1）**退化为静态 SVG**（不发 `<animate>`，不崩）。
+
+        诚实的降级（结果都在 `self.last_anim_info` 里，不静默）：
+          · 帧间可见部件集合/元素数变化（例如某帧被近平面裁掉）⇒ 返回帧 0 的**静态** SVG，
+            `mode="static"`、`reason="element_count_varies"` / `"part_set_varies"`；
+          · 帧间几何完全相同（例如轮廓没有尾巴，波形驱动不到任何部件）⇒ 同样返回静态 SVG，
+            `reason="no_motion"` —— 不伪造一个"其实没动"的动画。
+        调用结束后**复原**全部关节角（不会把动画姿态留在对象上）。逐帧的
+        发射/跳过合计见 `self.last_anim_info["skipped"]`（动画不改 `last_svg_stats`）。
+        """
+        waves = self._frame_waves(frames, amplitude)
+        n = len(waves)
+        if not math.isfinite(period) or period <= 0:
+            raise ValueError("period 必须是有限正数（秒），得到 %r" % (period,))
+
+        bg = (*background, 0) if alpha else background
+        saved = [p.angle for p in self.parts]
+        docs: List[str] = []
+        names_per_frame: List[List[str]] = []
+        skipped: dict = {}
+        try:
+            for w in waves:
+                _set_tail_wave(self, w)
+                b = SVGBackend(screen_w, screen_h, background=bg)
+                view = self._view(screen_w, screen_h, camera)
+                self._paint(b, view, alpha=alpha)
+                docs.append(b.to_svg())
+                names_per_frame.append([p.name for p, _poly, _dz in view])
+                for k, v in b.stats()["skipped"].items():
+                    skipped[k] = skipped.get(k, 0) + v
+        finally:
+            for p, a0 in zip(self.parts, saved):
+                p.angle = a0
+
+        e0 = self._svg_polygons(docs[0])
+        spans = [self._svg_polygons(d) for d in docs]
+        reason: Optional[str] = None
+        animated = 0
+        if n == 1:
+            reason = "single_frame"
+        elif e0 is None or any(sp is None for sp in spans):
+            reason = "non_polygon_element"
+        elif any(len(spans[k]) != len(names_per_frame[k]) for k in range(n)):
+            # 后端跳过了元素（退化多边形等）⇒ 元素与部件不再一一对应，不硬猜
+            reason = "element_count_varies"
+        elif any(ns != names_per_frame[0] for ns in names_per_frame[1:]):
+            reason = "part_set_varies"
+        else:
+            cols = [[self._points_attr(spans[k][i][2]) for k in range(n)]
+                    for i in range(len(e0))]
+            if any(None in c for c in cols):
+                reason = "non_polygon_element"
+            else:
+                moving = [i for i, c in enumerate(cols) if len(set(c)) > 1]
+                animated = len(moving)
+                if not moving:
+                    reason = "no_motion"
+
+        if reason is not None:
+            svg = docs[0]
+        else:
+            dur = "%gs" % float(period)
+            out: List[str] = []
+            pos = 0
+            for i, (start, end, txt) in enumerate(e0):
+                out.append(docs[0][pos:start])
+                pos = end
+                col = cols[i]
+                if len(set(col)) <= 1:
+                    out.append(txt)         # 静止部件：保持普通 `<polygon .../>`
+                    continue
+                child = ('<animate attributeName="points" values="%s" dur="%s" '
+                         'calcMode="linear"%s/>'
+                         % (";".join(col), dur,
+                            ' repeatCount="indefinite"' if loop else ' fill="freeze"'))
+                out.append(txt[:-2] + ">" + child + "</polygon>")
+            out.append(docs[0][pos:])
+            svg = "".join(out)
+
+        mode = "static" if reason is not None else "smil"
+        self.last_anim_info = {
+            "frames": n, "mode": mode, "reason": reason,
+            "animated_parts": animated if mode == "smil" else 0,
+            "static_parts": (len(e0) - animated) if mode == "smil" else len(e0),
+            "duration_s": float(period), "loop": bool(loop),
+            "waves": list(waves), "elements_per_frame": len(e0),
+            "skipped": skipped,
+        }
+        return svg
 
 
 # ---------------------------------------------------------------------------
@@ -670,9 +951,12 @@ def fatfish_skeleton(center: Tuple[float, float, float] = (0, 0.85, 5.0),
     hip_shade = (105, 130, 195)            # 深一档（比裙身 150,180,235 暗很多）
     hip_l = _ellipse((head_c[0] - h * 0.215, 0.47 * h), h * 0.05, h * 0.075)
     hip_r = _ellipse((head_c[0] + h * 0.215, 0.47 * h), h * 0.05, h * 0.075)
-    s.add_part(SilhouettePart("hip_l", hip_l, depth=0.058,
+    # 命名 hip_shade_*（非 hip_*）：下方「腿」段已用 hip_l/hip_r 命名大腿部件，
+    # 重名会让 `joint("hip_l", …)` 命中先添加的阴影（pivot=None ⇒ 旋转空操作），
+    # 大腿永远摆不动（#310）。此处只改名字，不动 joint()/add_part() 的行为。
+    s.add_part(SilhouettePart("hip_shade_l", hip_l, depth=0.058,
                               color=hip_shade, outline=(80, 105, 165)))
-    s.add_part(SilhouettePart("hip_r", hip_r, depth=0.058,
+    s.add_part(SilhouettePart("hip_shade_r", hip_r, depth=0.058,
                               color=hip_shade, outline=(80, 105, 165)))
     # 裙摆中心弧线（两腿之间的裙摆曲线，收束到腿部）
     skirt_mid = [(head_c[0] - h * 0.04, 0.44 * h),
@@ -757,6 +1041,36 @@ def fatfish_skeleton(center: Tuple[float, float, float] = (0, 0.85, 5.0),
 # 姿态（状态 → 四肢/尾巴角度）
 # ---------------------------------------------------------------------------
 
+# 关节命名：`apply_pose` 的「声明」与「实现」共用同一份数据（#380）。
+#
+# 缺陷态：旧 docstring 声明「兼容 shoulder_l/elbow_l/hip_l/knee_l 与
+# upper_l/lower_l/thigh_l/calf_l」，但五个姿态分支只给臂设值 —— 腿的 8 个名字
+# 只出现在归零段，声明与实现不一致（腿只能被归零）。修复取向＝**收窄声明**：
+# 把「仅归零」与「会被姿态驱动」拆成两张显式表，docstring 只声明后者。
+#
+# 判据来源：本件报告 #380（经验标定，追不到理论章节——仓内无「姿态应驱动哪些
+# 关节」的理论规定）。**削掉的判别力**：不再宣称 `apply_pose` 会摆腿；若将来要
+# 摆腿，须同时改本表与 docstring（守卫
+# `tests/test_issue8_175_310_376_380_silhouette3d_guard.py::test_380_*`
+# 会因「声明≠实现」变红）。
+
+# 归零表：每次 `apply_pose` 先把这些关节角复位（覆盖两套模板命名）。
+# 含腿——若调用方用 `joint()` 摆过腿，`apply_pose` 负责复位；但姿态本身不改写它们。
+_ZERO_JOINTS = (
+    "shoulder_l", "upper_l", "shoulder_r", "upper_r",
+    "elbow_l", "lower_l", "elbow_r", "lower_r",
+    "hip_l", "thigh_l", "hip_r", "thigh_r",
+    "knee_l", "calf_l", "knee_r", "calf_r",
+)
+
+# 驱动表：姿态分支实际会**设值**的关节名（两模板命名并列；`_set_tail_wave` 驱动 tail1..3）。
+# 腿不在其中——`hip_*`/`thigh_*`/`knee_*`/`calf_*` 仅归零。
+_POSE_DRIVEN_JOINTS = {
+    "shoulder": ("shoulder_l", "shoulder_r", "upper_l", "upper_r"),
+    "elbow": ("elbow_l", "elbow_r", "lower_l", "lower_r"),
+    "tail": ("tail1", "tail2", "tail3"),
+}
+
 # 尾巴摆动：绕自身 pivot 的旋转（级联：每节 = 上一节角度 + 自身增量）
 def _set_tail_wave(s: Silhouette3D, wave: float) -> None:
     """设置尾巴摆动幅度（wave 弧度，正=向右甩）。"""
@@ -773,11 +1087,27 @@ _EYE_DARK = (70, 55, 70)
 _EYE_LIGHT = (255, 255, 255)
 _MOUTH = (180, 90, 100)
 
+#: 合法取值集合（#663：未知值不再静默退化——显式告警并点名合法集合）。
+#: 取向 = **fail-soft**（`warnings.warn` + 退回默认），理由见 `set_expression` docstring：
+#: 仓内合法调用方 `scene_model._apply_state_to_silhouette` 会传 `state="tired"`（该模块
+#: 文档化的状态之一），而 `tired` 不在表情名映射里 ⇒ fail-closed 会让既有「宽松调用」的
+#: 宿主直接崩。边界：仅对**真未知**值告警；`tired` 这类「宿主有、表情映射无」的值同样告警
+#: （它确实没被渲染成任何表情），是否为其补一个表情属设计者裁面，本件不擅自加映射。
+_EYE_SHAPES = ("normal", "happy", "sad", "surprise", "squint")
+_MOUTH_SHAPES = ("smile", "open", "pout", "sad")
+_EXPRESSIONS = ("happy", "sad", "angry", "surprised", "shy", "neutral")
+
 
 def _eye_poly(cx, cy, rx, ry, shape: str) -> List[Tuple[float, float]]:
     """生成眼型多边形。
     normal=椭圆 / happy=笑眼(上弯弧) / sad=哭眼(下垂) / surprise=惊眼(圆大) / squint=眯眼(横线)
     """
+    if shape not in _EYE_SHAPES:                               # #663：未知眼型显式告警
+        warnings.warn(
+            "silhouette3d._eye_poly: 未知眼型 %r，退化为 'normal'；"
+            "合法取值：%s" % (shape, ", ".join(_EYE_SHAPES)),
+            stacklevel=2)
+        shape = "normal"
     if shape == "happy":       # 笑眼：上弯弧（月牙）
         return [(cx - rx, cy + ry * 0.2), (cx - rx * 0.5, cy - ry * 0.6),
                 (cx, cy - ry * 0.8), (cx + rx * 0.5, cy - ry * 0.6),
@@ -796,6 +1126,12 @@ def _eye_poly(cx, cy, rx, ry, shape: str) -> List[Tuple[float, float]]:
 
 def _mouth_poly(cx, cy, rx, ry, shape: str) -> List[Tuple[float, float]]:
     """嘴型多边形。smile=微笑 / open=张嘴 / pout=嘟嘴 / sad=委屈下垂"""
+    if shape not in _MOUTH_SHAPES:                             # #663：未知嘴型显式告警
+        warnings.warn(
+            "silhouette3d._mouth_poly: 未知嘴型 %r，退化为 'smile'；"
+            "合法取值：%s" % (shape, ", ".join(_MOUTH_SHAPES)),
+            stacklevel=2)
+        shape = "smile"
     if shape == "open":        # 张嘴：椭圆
         return _ellipse((cx, cy), rx, ry * 1.3, 10)
     if shape == "pout":        # 嘟嘴：小圆
@@ -825,55 +1161,76 @@ def set_expression(s: Silhouette3D, expression: str) -> Silhouette3D:
     - surprised→ 惊眼 + 张嘴(大)
     - shy      → 笑眼(小) + 抿嘴 + 腮红加深
     - neutral  → 正常眼 + 微笑
+
+    **幂等**（#376）：眼/嘴/高光的几何基准在首次调用时快照进 `s._expr_base`，
+    每次调用都**从该基准重算**（而非从上一次调用后的几何迭代）。故同一对象上
+    连调 N 次几何不变，且任意表情序列可复原。判据来源：本件报告 #376
+    （经验标定，追不到理论章节；旧行为是以上次结果为输入的几何级数）。
+
+    **未知表情名不再静默退化（#663，取向=fail-soft）**：传入不在上表里的名字时
+    **发 `UserWarning` 并退回 `neutral`**（不抛异常）。取舍理由与边界：
+    - 选 fail-soft 而非 fail-closed：仓内**合法调用方**确实会传未知值——
+      `scene_model._apply_state_to_silhouette` 透传 `entity.state`，而该模块
+      文档化并测试过的状态含 `tired`（见 `STATE_TINT` / `apply_pose` 的 `tired` 分支），
+      `tired` 不在本函数的表情映射里 ⇒ 若 fail-closed，`WorldModel.build()` 会在
+      fatfish 轮廓实体上直接崩，打掉既有「宽松调用」的宿主。
+    - 边界：本函数只**告警 + 保持既有返回**，不擅自为 `tired` 之类补表情映射
+      （那是设计者裁面）；告警文案点名合法取值集合，便于调用方自纠。
     """
+    if expression not in _EXPRESSIONS:                         # #663：未知表情名显式告警
+        warnings.warn(
+            "silhouette3d.set_expression: 未知表情名 %r，退化为 'neutral'；"
+            "合法取值：%s" % (expression, ", ".join(_EXPRESSIONS)),
+            stacklevel=2)
     eye_shape = {"happy": "happy", "sad": "sad", "angry": "squint",
                  "surprised": "surprise", "shy": "happy", "neutral": "normal"}.get(expression, "normal")
     mouth_shape = {"happy": "open", "sad": "sad", "angry": "pout",
                    "surprised": "open", "shy": "smile", "neutral": "smile"}.get(expression, "smile")
 
-    # 找眼睛/嘴的当前坐标（从部件点取中心）
-    eye_ref = next((p for p in s.parts if p.name == "eye_l"), None)
-    if eye_ref is not None:
-        pts = eye_ref.points
-        cx = sum(pt[0] for pt in pts) / len(pts)
-        cy = sum(pt[1] for pt in pts) / len(pts)
-        rx = (max(pt[0] for pt in pts) - min(pt[0] for pt in pts)) / 2
-        ry = (max(pt[1] for pt in pts) - min(pt[1] for pt in pts)) / 2
-        # 两只眼睛各自的原中心（先记录，再改眼型）：高光按「相对眼心的偏移」整体平移
-        old_eye_center = {}
+    # ---- 几何基准：首次调用时快照，之后一律从这里重算（#376 幂等）----
+    if s._expr_base is None:
+        s._expr_base = {
+            p.name: [tuple(pt) for pt in p.points]
+            for p in s.parts
+            if p.name in ("eye_l", "eye_r", "mouth") or p.name.startswith("highlight_")
+        }
+    base = s._expr_base
+
+    def _center(pts):
+        return (sum(pt[0] for pt in pts) / len(pts), sum(pt[1] for pt in pts) / len(pts))
+
+    def _half(pts):
+        return ((max(pt[0] for pt in pts) - min(pt[0] for pt in pts)) / 2,
+                (max(pt[1] for pt in pts) - min(pt[1] for pt in pts)) / 2)
+
+    # 眼（从基准眼型取眼心/半轴，不再量上一次调用后的几何）
+    if base.get("eye_l"):
+        cy = _center(base["eye_l"])[1]
+        rx, ry = _half(base["eye_l"])
         for side in ("l", "r"):
-            pe = next((q for q in s.parts if q.name == f"eye_{side}"), None)
-            if pe is not None and pe.points:
-                old_eye_center[side] = (sum(q[0] for q in pe.points) / len(pe.points),
-                                        sum(q[1] for q in pe.points) / len(pe.points))
-        for side in ("l", "r"):
-            ecx = cx if side == "l" else -cx
-            ocx = old_eye_center.get(side, (ecx, cy))[0]
-            # 更新眼睛部件
+            bpts = base.get(f"eye_{side}")
+            if not bpts:
+                continue
+            ecx = _center(bpts)[0]          # 该眼自身中心（不假设左右镜像）
             for p in s.parts:
                 if p.name == f"eye_{side}":
                     p.points = _eye_poly(ecx, cy, rx, ry, eye_shape)
-            # 高光跟随眼型（像素画高光是灵魂，始终保留，位置随眼动）
+            # 高光跟随眼型（像素画高光是灵魂，始终保留，位置随眼动）：
+            # 从**基准**高光点重算（眼心不变 ⇒ 只叠加上抬 dy）。
+            dy = -ry * 0.3 if eye_shape in ("happy", "squint") else 0.0
             for p in s.parts:
                 if p.name.startswith(f"highlight_{side}"):
-                    # 笑眼/眯眼：高光随眼型上移；其余保持
-                    dy = -ry * 0.3 if eye_shape in ("happy", "squint") else 0.0
-                    pts = p.points
-                    if len(pts) >= 4:
-                        # 保持高光相对眼的偏移：整体平移
-                        # （大 / 小 / 瞳孔中心三点各自保留原始相对位置，不再按名字重算绝对坐标）
-                        shift_x = ecx - ocx
-                        p.points = [(pt[0] + shift_x, pt[1] + dy) for pt in pts]
+                    bp = base.get(p.name)
+                    if bp and len(bp) >= 4:
+                        p.points = [(pt[0], pt[1] + dy) for pt in bp]
 
-    # 嘴
-    mouth_ref = next((p for p in s.parts if p.name == "mouth"), None)
-    if mouth_ref is not None:
-        pts = mouth_ref.points
-        mx = sum(pt[0] for pt in pts) / len(pts)
-        my = sum(pt[1] for pt in pts) / len(pts)
-        rx = max(0.002, (max(pt[0] for pt in pts) - min(pt[0] for pt in pts)) / 2)
-        ry = max(0.002, (max(pt[1] for pt in pts) - min(pt[1] for pt in pts)) / 2)
-        mouth_ref.points = _mouth_poly(mx, my, rx, ry, mouth_shape)
+    # 嘴（同样从基准重算）
+    if base.get("mouth"):
+        mx, my = _center(base["mouth"])
+        mrx, mry = _half(base["mouth"])
+        for p in s.parts:
+            if p.name == "mouth":
+                p.points = _mouth_poly(mx, my, max(0.002, mrx), max(0.002, mry), mouth_shape)
 
     # 腮红深浅（shy 加深：压暗 G/B 通道走向深粉，而不是整体乘系数把颜色推成饱和纯白）
     for p in s.parts:
@@ -886,11 +1243,17 @@ def set_expression(s: Silhouette3D, expression: str) -> Silhouette3D:
 
 
 def apply_pose(s: Silhouette3D, pose: str) -> Silhouette3D:
-    """姿态（状态）→ 四肢/尾巴关节角度。返回同一对象（可链式）。
+    """姿态（状态）→ 手臂/尾巴关节角度。返回同一对象（可链式）。
 
-    兼容两种部件命名：
-    - 手调版 fatfish_skeleton：shoulder_l/elbow_l/hip_l/knee_l
-    - 蒙皮版 fatfish_skinned：upper_l/lower_l/thigh_l/calf_l
+    兼容两种部件命名（下表即 `_POSE_DRIVEN_JOINTS`——**声明与实现同一份数据**）：
+    - 手调版 fatfish_skeleton：shoulder_l/elbow_l（+ tail1..3）
+    - 蒙皮版 fatfish_skinned：upper_l/lower_l（+ tail1..3）
+
+    **腿不在此列**（#380）：`hip_*`/`thigh_*`/`knee_*`/`calf_*` 属 `_ZERO_JOINTS`
+    （每次调用先复位），但五个姿态分支从不给它们设值——旧 docstring 曾把它们
+    列为「兼容命名」，与实现不符。需要腿部姿态时由调用方直接
+    `Silhouette3D.joint(...)`；若要改由 `apply_pose` 驱动，须同步改
+    `_POSE_DRIVEN_JOINTS` 与本 docstring（守卫会因两者不一致变红）。
     """
     # 部件名归一化（旧名 → 可作用于的关节名）
     def j(sil: Silhouette3D, *names: str) -> None:
@@ -903,11 +1266,8 @@ def apply_pose(s: Silhouette3D, pose: str) -> Silhouette3D:
             if any(p.name == n for p in sil.parts):
                 sil.joint(n, val)
                 return
-    # 默认（自然站立，尾巴微垂）
-    for n in ("shoulder_l", "upper_l", "shoulder_r", "upper_r",
-              "elbow_l", "lower_l", "elbow_r", "lower_r",
-              "hip_l", "thigh_l", "hip_r", "thigh_r",
-              "knee_l", "calf_l", "knee_r", "calf_r"):
+    # 默认（自然站立，尾巴微垂）：按归零表复位（含腿——只复位，不设姿态值）
+    for n in _ZERO_JOINTS:
         j(s, n)
     _set_tail_wave(s, 0.15)
 

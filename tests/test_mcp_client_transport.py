@@ -1,4 +1,11 @@
-"""Real stdio subprocess guards for issue #143; synthetic data only."""
+"""Real stdio subprocess guards for issue #143; synthetic data only.
+
+#684：deadline 用例的 `request_timeout` 取 `1.0`——被约束的是**握手往返**超时，
+真实子进程「启动 + initialize」耗时本机实测 p99 < 0.03 s（见 batch682_684 报告），
+旧的 `0.2` 恰落在慢机器的启动耗时分布中位数上 ⇒ 同一提交时红时绿（flaky 掩盖
+真红）。改大超时**不改变**任何断言的语义判据；超时语义用例（`request_timeout=None`
+与非法值）保持原样。
+"""
 from concurrent.futures import ThreadPoolExecutor
 import sys
 import threading
@@ -202,13 +209,13 @@ def test_stubborn_close_reaps_process(transport):
 
 def test_deadline_initialize_reaps_unresponsive_process(transport):
     with pytest.raises(BrainError, match="超时"):
-        transport("initial-silent", request_timeout=0.2)
+        transport("initial-silent", request_timeout=1.0)
     assert transport.clients[-1]._p.poll() is not None
 
 
 @pytest.mark.parametrize("name", ["silent", "chatter", "close-stdout"])
 def test_deadline_failed_call_reaps_client_and_prevents_reuse(transport, name):
-    client = transport(request_timeout=0.2)
+    client = transport(request_timeout=1.0)
     with pytest.raises(BrainError) as error:
         bounded(lambda: client.call(name, {}), client)
     if name in {"silent", "chatter"}:
@@ -221,7 +228,7 @@ def test_deadline_failed_call_reaps_client_and_prevents_reuse(transport, name):
 
 
 def test_deadline_also_bounds_blocked_request_write(transport):
-    client = transport("blocked-stdin", request_timeout=0.2)
+    client = transport("blocked-stdin", request_timeout=1.0)
     with pytest.raises(BrainError, match="超时"):
         bounded(lambda: client.call("echo", {"payload": "x" * 2000000}), client)
     assert client._p.poll() is not None
@@ -245,7 +252,7 @@ def test_deadline_connect_forwards_budget(tmp_path, transport):
     package.mkdir()
     (package / "__init__.py").write_text("", encoding="utf-8")
     (package / "mcp_server.py").write_text(SERVER, encoding="utf-8")
-    agent = connect(python=sys.executable, pythonpath=str(tmp_path), root=str(tmp_path), request_timeout=0.2)
+    agent = connect(python=sys.executable, pythonpath=str(tmp_path), root=str(tmp_path), request_timeout=1.0)
     client = agent.store.client
     transport.clients.append(client)
     with pytest.raises(BrainError, match="超时"):

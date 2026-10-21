@@ -28,15 +28,46 @@ def frames_to_voxel(frames, width=None, height=None):
 
 
 # ============ 二、3D 卷积（时间+空间统一卷积核） ============
+def _require_finite(arr, name):
+    """入口闸（#788）：输入含 NaN/inf ⇒ fail-closed（raise ValueError）。
+
+    改前 conv3d/max_pool3d 对输入体素的有限性**零校验**——含 NaN 的体素
+    静默产出含 NaN 的输出（numpy 静默传播），NaN 一旦进入卷积核 → 特征图
+    全 NaN → 下游训练梯度/loss 全 NaN 且**无崩溃**，回溯定位困难。现入口
+    `np.isfinite` 校验，非有限时抛 ValueError，消息含输入 shape 与非有限
+    位置计数（NaN/inf 分列），帮助定位上游泄漏源（如 physics.predict_at
+    对极端 k 值的 e^{-k·t} 下溢/上溢到 NaN）。
+    同仓先例：world/physics.py `_check_samples`（#662，位置/时间有限性）、
+    core/core.py `_finite_clamp`（#574，importance 值域）——本件堵时空体素输入面。"""
+    a = np.asarray(arr)
+    bad = ~np.isfinite(a)
+    if bad.any():
+        raise ValueError(
+            "%s含非有限值（NaN/inf）：shape=%s，非有限位置数=%d/%d"
+            "（nan=%d，inf=%d）——fail-closed 拒绝静默传播（#788）"
+            % (name, tuple(a.shape), int(bad.sum()), a.size,
+               int(np.isnan(a).sum()), int(np.isinf(a).sum())))
+
+
 def conv3d(voxel, kernel, stride=(1, 1, 1)):
     """3D 卷积：核 (kt, kh, kw) 同时跨时间+空间滑窗 → 时空特征图。
-    核可自定义为时空滤波器（如运动检测核 = 时间差分×空间平滑）。"""
+    核可自定义为时空滤波器（如运动检测核 = 时间差分×空间平滑）。
+
+    输入闸（#788）：voxel 含 NaN/inf 时 raise ValueError（消息含 shape 与
+    非有限位置计数，见 _require_finite）——不再静默产出含 NaN 的特征图。
+
+    边界口径（#598）：输入任一维小于核（含 stride 放大后 ot<0 的情形）时，
+    输出维截断到 0——返回空张量 (0,oh,ow) 等，**不抛异常**；与同文件
+    max_pool3d 的 T//kt 非负截断同口径（下游拿到空特征图可照常 continue）。
+    此前 ot=(T-kt)//st+1 对 T<kt 因 Python // 地板取整得负数，
+    np.zeros 抛 ValueError: negative dimensions。"""
+    _require_finite(voxel, "conv3d 输入体素")
     T, H, W = voxel.shape
     kt, kh, kw = kernel.shape
     st, sh, sw = stride
-    ot = (T - kt) // st + 1
-    oh = (H - kh) // sh + 1
-    ow = (W - kw) // sw + 1
+    ot = max(0, (T - kt) // st + 1)
+    oh = max(0, (H - kh) // sh + 1)
+    ow = max(0, (W - kw) // sw + 1)
     out = np.zeros((ot, oh, ow), dtype=np.float32)
     for t in range(ot):
         for i in range(oh):
@@ -47,7 +78,12 @@ def conv3d(voxel, kernel, stride=(1, 1, 1)):
 
 
 def max_pool3d(feat, size=(2, 2, 2)):
-    """3D 最大池化（降采样时空特征图）"""
+    """3D 最大池化（降采样时空特征图）。
+
+    输入闸（#788）：feat 含 NaN/inf 时 raise ValueError（消息含 shape 与
+    非有限位置计数，见 _require_finite）——与 conv3d 同口径，不再静默
+    传播 NaN（max 对 NaN 的行为是污染整个池化窗，且不可回溯）。"""
+    _require_finite(feat, "max_pool3d 输入特征图")
     T, H, W = feat.shape
     kt, kh, kw = size
     ot, oh, ow = T // kt, H // kh, W // kw
@@ -126,7 +162,18 @@ def motion_speed(centroids, frames_per_unit=1.0):
 def detect_period(signal, min_period=2):
     """周期检测：运动/亮度信号 → 周期（帧），无周期返回 None。
     用「前沿」检测（信号从低→高的跳变位置，间隔即周期）——
-    平台型信号（1,1 相邻）无严格局部极大，局部极大法会漏检。"""
+    平台型信号（1,1 相邻）无严格局部极大，局部极大法会漏检。
+
+    #57（本件）：`min_period` 此前在函数体内**零引用**（声明参数不兑现）——
+    实测 `min_period=2/3/5/99` 对同一信号都返回同一周期。现让它参与判定：
+    读出的候选周期 `period < min_period` 时返回 `None`（视作「低于最小可辨
+    周期 ⇒ 无有效周期」），与既有 `if count < 2: return None` 的返回 `None`
+    语义一致（该分支同样以 `None` 表「无周期」）。默认 `min_period=2` 下，
+    既有回归读数不变（最小真周期本就 ≥2）。
+    判据来源：公开 issue #57（声明参数零引用）＋ 本函数既有 `None`=无周期口径。
+    边界（削掉的判别力）：只做下界过滤，**不**校验 `min_period` 自身合法性
+    （`min_period<=0` 等价于不过滤）；同型面全仓共 29 处，本件只修有实害的 3 处。
+    """
     sig = np.asarray(signal, dtype=np.float32)
     edges = []
     for i in range(1, len(sig)):
@@ -139,11 +186,30 @@ def detect_period(signal, min_period=2):
     period, count = Counter(intervals).most_common(1)[0]
     if count < 2:
         return None  # 无重复间隔 → 非周期（此前 count=1 且间隔多时误判为周期）
+    if period < min_period:
+        return None  # #57：低于声明的最小可辨周期 ⇒ 无有效周期
     return period
 
 
 def extract_spatiotemporal_primitives(frames):
-    """时空原语提取：运动/方向/速度/周期（白箱确定性）"""
+    """时空原语提取：运动/方向/速度/周期（白箱确定性）
+
+    #798：入口 fail-closed 校验——空帧列表 / 少于 2 帧时 raise ValueError（领域消息），
+    不再把 numpy 内部错误（``zero-size array to reduction operation minimum which
+    has no identity``，出自 ``frames_to_voxel`` 对空数组取 min/max 归一化）漏给调用方。
+    最小帧数取 **2**（判据）：本函数的全部时序算子——``MOTION_KERNEL``（kt=2）、
+    ``frame_diff``/``frame_rise`` 的 ``np.diff(axis=0)``、``detect_period`` 的前沿
+    间隔——都以「相邻两帧」为最小可分辨单元；单帧的时间维为 1，conv3d 输出空特征
+    图、diff/rise 全空 ⇒ 一切时空原语都是「未测量」却伪装成「测得 0」（静止/无周期），
+    与其静默返回伪读数，不如 fail-closed（与 physics._check_samples 的
+    「样本不足：需要 >= N 个」同款口径，#662 先例）。"""
+    n_frames = len(frames) if hasattr(frames, "__len__") else None
+    if n_frames is None or n_frames < 2:
+        raise ValueError(
+            "extract_spatiotemporal_primitives：帧列表为空/不足（至少需要 2 帧，"
+            "得到 %s 帧）——时空原语的时序算子（运动核/帧差/前沿检测）以相邻两帧"
+            "为最小可分辨单元" % ("?" if n_frames is None else n_frames)
+        )
     voxel = frames_to_voxel(frames)
     # ① 3D 卷积：运动核 → 时空特征图（运动响应）
     motion_feat = conv3d(voxel, MOTION_KERNEL)

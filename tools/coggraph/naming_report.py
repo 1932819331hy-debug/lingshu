@@ -25,8 +25,17 @@ import json
 import os
 import re
 
+# Q4 规范标识词（判据来源：本文件 docstring 第 9 行 Q4「标题命中规范标识词（INN/ISO/GB/RFC/药典…）」）。
+# 旧式 `\b(...)\b` 在两类情形形同虚设（issue #315）：
+#   ① `\b` 是**词边界**，而汉字在 Python re 里属 \w ⇒ 标识词嵌在汉字串中时（如「依据国家标准制定」
+#      「遵守INN规则」）两侧都不构成边界，恒不命中；
+#   ② `GB[/T]` 是**单字符类**，只匹配 `GB/` 或 `GBT`，`GB/T 12345`、`GB 12345` 全部漏判。
+# 修法：拉丁词改用「非 ASCII 字母数字」显式环视边界（汉字非 ASCII 字母数字 ⇒ 汉字紧邻也能命中，
+# 而 ISOLATION/INNOVATION 之类英文粘连仍被挡）；GB 改为 `GB(?:/T|\s+)\s*\d+`（GB / GB/T 两种写法）。
+# 判别力变化：新口径**新增**对「汉字/数字紧邻」写法（ISO9001、药典2020、GB/T12345）的识别——
+# 这些旧 `\b` 同样漏判；未删任何原有命中，也未放宽英文粘连的拦截。
 NORM_MARKERS = re.compile(
-    r"\b(INN|ISO|IEC|IEEE|W3C|RFC\s*\d+|GB[/T]\s*\d+|药典|国家标准|行业标准|注册商标|专利)\b", re.I)
+    r"(?<![A-Za-z0-9])(?:INN|ISO|IEC|IEEE|W3C|RFC\s*\d+|GB(?:/T|\s+)\s*\d+|药典|国家标准|行业标准|注册商标|专利)(?![A-Za-z])", re.I)
 
 
 def main(argv=None):
@@ -44,8 +53,26 @@ def main(argv=None):
         d = json.load(f)
 
     nodes = g["nodes"]
+    # Q1 判据（docstring 第 6 行）：该节点有显式边 / 被正文互引。
+    # 旧口径 `for e in g["edges"] + d["edges"]: deg[...] += 1` 把**结构性派生边**
+    # 一并计度，于是 q1 在真实管线里恒真、「alias 候选」不可达（issue #359）：
+    #   ① R1/R2/R3/R4 派生边只是元数据巧合（同桶/同源/同标签/同日）——任何有
+    #      bucket 的节点都被 R1 挂到桶枢纽、被 R2 挂到源枢纽、被 R4 挂到日枢纽，
+    #      度恒 > 0；它们不构成「连到稳定概念节点」。
+    #   ② R5 自身标题行递归：derive_edges 的 R5 在正文里搜标题，而节点正文首行是
+    #      `# 功能名：<自身标题>`；同名组内 g2/g3 的这行匹配到组首 g1，产出
+    #      g2->g1 / g3->g1 的「互引」——这是同名声明，不是被别的概念引用。
+    # 故 Q1 只认：显式边，或**提及者标题 ≠ 被提及标题**的 R5 正文互引。
+    title_of = {n["id"]: (n.get("title") or "").strip() for n in nodes}
     deg = collections.Counter()
-    for e in g["edges"] + d["edges"]:
+    for e in g["edges"]:
+        deg[e["s"]] += 1
+        deg[e["t"]] += 1
+    for e in d["edges"]:
+        if e.get("rule") != "R5_body_crossref":
+            continue
+        if title_of.get(e["s"], "") == title_of.get(e["t"], ""):
+            continue                      # 自身标题行递归（同名声明），非概念互引
         deg[e["s"]] += 1
         deg[e["t"]] += 1
 
@@ -53,15 +80,25 @@ def main(argv=None):
     groups = collections.defaultdict(list)
     for n in nodes:
         t = (n.get("title") or "").strip()
-        if len(t) >= args.min_title:
+        # #627：规范锚词豁免长度闸。「药典/专利/国家标准/INN/ISO/IEC/IEEE/W3C」等
+        # 标题本身即 Q4 规范标识词，字数常 < 默认 --min-title=6 ⇒ 被闸挡在 groups 之外，
+        # Q4 永远不会被评估 ⇒ 默认参数下这类节点零「强规范锚」，报告对这一盲区零披露。
+        # NORM_MARKERS 命中的标题进候选集，让 Q4 至少能被裁决（本行即该豁免，一行修）。
+        if len(t) >= args.min_title or NORM_MARKERS.search(t):
             groups[t].append(n)
 
     # Q2/Q3 的"被正文提及"只数**被提及**方向：derive_edges 的 R5 是
     # add(me, owner, ...)（s=提及者、t=被提及的规范概念节点），把 e["s"] 也算进来
     # 会把"这条正文提及了多少个概念"当成"被多少个节点正文提及"。
+    # #606：R5 还把同名节点自己的标题行（`# 功能名：<自身标题>`）记成互引边
+    # （#359 已认定的 phantom，Q1 的 deg 侧已滤）——r5_in 若全收，同名组会被
+    # 自己的 phantom 提及顶上去：2 名组真实外部提及只有 2，加 1 条 phantom 后
+    # r5_in=3 ⇒ q3=True ⇒ 误判「已锚定」逃出隔离区。故与上方 deg 完全同口径过滤。
     r5_in = collections.Counter()
     for e in d["edges"]:
         if e.get("rule") == "R5_body_crossref":
+            if title_of.get(e["s"], "") == title_of.get(e["t"], ""):
+                continue                  # #606：同名声明 phantom，与 Q1 deg 同口径过滤
             r5_in[e["t"]] += 1          # t = 被提及者
 
     rows = []

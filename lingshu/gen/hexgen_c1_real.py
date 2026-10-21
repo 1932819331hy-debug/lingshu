@@ -59,7 +59,13 @@ SHAPES = ("circle", "triangle", "square", "rectangle", "diamond", "hexagon",
 COLORS = ("red", "green", "blue", "yellow", "orange", "purple", "pink",
           "black", "brown", "gray", "white")
 PATTERNS = ("plain", "striped", "dotted")
-#   方位短语（prompt 被截断到 64 字符 ⇒ 一律按**前缀**匹配）→ 允许的格子集合（r0..r8）
+#   方位短语（prompt 被**截断** ⇒ 一律按**前缀**匹配）→ 允许的格子集合（r0..r8）
+#   ⚠ #736：本表**逐字保留**（含历史上按当时语料回填的截断键 `upper le`/`right s`/`top cen`/`bott` …
+#   ——它们决定「已能解析的输入」的读数，动它们会改既有读数），**新覆盖一律走 `_zone_cells` 的
+#   推导分支**（见其 docstring）：本表解不出的截断形态由「以它开头的键」求并集补出。
+#   旧实现只做本表的最长前缀匹配 ⇒ 表外截断点**静默**返回 `cells=None`（实测本机 8 条完整模板
+#   按 64 字符截断时 **6/8** 漏判；65/66/67/68 分别漏 6/4/2/1 条）。推导后漏判只剩「空串 / 无匹配
+#   词」，且**本表能解析的输入读数逐字不变**（守门 `tests/test_issue736_zone_truncation_cover.py`）。
 ZONE_CELLS = {
     "upper left": {"r0"}, "upper le": {"r0"}, "upper l": {"r0"}, "top left": {"r0"},
     "top center": {"r1"}, "top cente": {"r1"}, "top cent": {"r1"}, "top cen": {"r1"},
@@ -73,6 +79,36 @@ ZONE_CELLS = {
     "lower right": {"r8"}, "lower ri": {"r8"}, "bottom right": {"r8"},
     "top": {"r0", "r1", "r2"}, "bott": {"r6", "r7", "r8"}, "bottom": {"r6", "r7", "r8"},
 }
+
+
+def _zone_cells(zone_text):
+    """**截断的**方位短语 → 允许的格子集合（issue #736）。判据（两条，均可源端复核）：
+
+    ① **表内最长前缀**（与旧实现逐字同口径）：`zone_text` 以某键开头 ⇒ 取**最长**那个键的值。
+       这一支保证「旧表已能解析的输入」读数**逐字不变**（含 `'top c'` 命中键 `'top'` 这类
+       「被更粗的键遮蔽」的既有读数——那是同族另一面，不在本条点名范围，**不擅自扩面**）。
+    ② **推导支**（表内解不出时才走）：取**所有以 `zone_text` 开头的键**的值**求并集**——
+       `zone_text` 是这些完整/半完整短语的**前缀**，方位只能落进它们的并集
+       （`'le'` ⇒ `left*` ⇒ {r0,r3,r6}；`'lower l'` ⇒ {r6}；`'ri'` ⇒ {r2,r5,r8}；
+       `'bo'` ⇒ {r6,r7,r8}；`'upper r'` ⇒ {r2}）。空串 / 无匹配 ⇒ `None`
+       （判据不适用 ⇒ 保守不判，与旧口径一致）。
+
+    ⚠ 为什么改成「表 + 推导」而不是继续往表里补截断点：截断点是**截断长度**的函数，补不完
+    （每条短语的每个前缀都要列），且漏一个就是**静默** `None`。推导把覆盖与截断长度解耦。"""
+    if not zone_text:
+        return None
+    hit = [p for p in ZONE_CELLS if zone_text.startswith(p)]
+    if hit:
+        return set(ZONE_CELLS[max(hit, key=len)])
+    cut = [p for p in ZONE_CELLS if p.startswith(zone_text)]
+    if not cut:
+        return None
+    out = set()
+    for p in cut:
+        out |= ZONE_CELLS[p]
+    return out
+
+
 RING = 8
 TOL = 40                     # 前景阈值：网格中点；随报告给出面积曲线证明不敏感
 TOL_GRID = (20, 30, 40, 60, 80)
@@ -112,11 +148,7 @@ def parse_prompt(p):
     if pat and pat not in ("striped", "dotted"):
         return None
     zone_text = re.sub(r"\s*(area)?\s*,?\s*(plain)?\s*$", "", rest.strip()).strip()
-    cells = None
-    for phrase in sorted(ZONE_CELLS, key=len, reverse=True):      # 最长前缀优先
-        if zone_text.startswith(phrase):
-            cells = ZONE_CELLS[phrase]
-            break
+    cells = _zone_cells(zone_text)          # #736：表内最长前缀优先 + 表外截断推导
     return {"n": NUM_WORDS[num], "color": color, "pattern": pat or "plain",
             "shape": shape, "zone_text": zone_text, "cells": cells}
 
@@ -572,7 +604,7 @@ def _feat_vec(f):
 
 
 # ==================== 4. 纹理特征（花纹：平涂 vs 有花纹） ====================
-def texture_features(img, sil, core, bg=None):
+def texture_features(img, core, bg=None):
     """物体内部的**纹理**读数（尺度无关）：
       · `tex_rel` = 核心区亮度标准差 / 物体色到背景的距离 —— **平涂 vs 有花纹**的判别量。
         为何不用 R273 的「占空比」：本语料的花纹是**颜色调制**而不是挖洞，实测三类花纹的
@@ -635,7 +667,7 @@ def measure_item(it, tol=TOL, d=6, erode_r=ERODE_R):
         if not px.any():
             px = core if core.any() else sil
         med_rgb = np.median(it["img"][px], axis=0)
-        tex = texture_features(it["img"], sil, core, bg=bg)
+        tex = texture_features(it["img"], core, bg=bg)
         core_hp = erode(sil, HP_RADIUS + 1)
         if core_hp.sum() < 40:
             core_hp = core
@@ -798,15 +830,23 @@ def fit(measured, ids):
     #   **切点口径**：极值中点与中位数中点**都算**。R278 实测（量化剖面）：圆类极值（0.289）**高于**非圆类最小值
     #   （0.115）⇒ 极值中点（0.202）落在六边形（0.115~0.136）**上方**、门不生效（3 个六边形仍读成圆）。
     #   中位数中点不受个别噪声件拉动 ⇒ 取它作实际门，并把极值间隔与两个切点都报出（纪律 ④：口径并列）。
-    #   加计数规则的面积门：**只在标定集上**按计数精确匹配率选（选型键说得出它量的是什么）
+    #   加计数规则的面积门：**只在标定集上**按计数精确匹配率选（选型键说得出它量的是什么）。
+    #   `objects_of(...)` 的实参只含 `(img, tol, d)`、**不含 `fr`** ⇒ 它是这个选格循环的
+    #   **循环不变量**：原写法把它放在 `for fr in EXTRA_COMP_GRID` 内层，同一张图被
+    #   重复测量 `len(EXTRA_COMP_GRID)` 次（标定集 37 件 ⇒ 148 次前景/聚类/补洞，而非 37 次），
+    #   代价 ×4 而读数一字不变。提到 `fr` 循环外：逐图测一次，四个候选只复用同一份簇列表。
+    _cl_by_id = {}
+    for it in measured["items"]:
+        if it["id"] not in ids or not it["truth"]:
+            continue
+        _cl_by_id[it["id"]] = objects_of(it["img"], tol=TOL, d=measured.get("d", 4))[0]
     cgrid = {}
     for fr in EXTRA_COMP_GRID:
         ok = 0
         for it in measured["items"]:
-            if it["id"] not in ids or not it["truth"]:
+            if it["id"] not in _cl_by_id:
                 continue
-            cl = [t for t in objects_of(it["img"], tol=TOL, d=measured.get("d", 4))[0]]
-            ok += int(count_objects(cl, frac=fr) == it["truth"]["n"])
+            ok += int(count_objects(_cl_by_id[it["id"]], frac=fr) == it["truth"]["n"])
         cgrid[str(fr)] = ok
     frac_pick = max(EXTRA_COMP_GRID, key=lambda f: cgrid[str(f)])
     cut_prom_ext = round((max(prom_c) + min(prom_n)) / 2, 6) if (prom_c and prom_n) else None
@@ -847,8 +887,12 @@ def fit(measured, ids):
                 #   后者会被「类内极差小的维」骗：R283 实测 (triangle,diamond) 上 `harm5` 的相对
                 #   间隔 1.845 盖过 `peak_prom` 的 1.722，可 harm5 的绝对间隔只有 0.133（噪声级），
                 #   于是门生成在错误的维上、混淆一点没动。d′ 直接把「信噪比」当选择键。
-                sd = float(np.sqrt((np.var(va, ddof=1) if len(va) > 1 else 0.0)
-                                   + (np.var(vb, ddof=1) if len(vb) > 1 else 0.0)) / 2.0) ** 0.5
+                #   #232（A2）：合并标准差＝sqrt((σa²+σb²)/2)。原写法
+                #   `(sqrt(σa²+σb²)/2)**0.5` 实为 (σa²+σb²)^{1/4}/√2——方差和 <1 时
+                #   sd 被抬高 ⇒ d′ 被压低（真门漏生成）；>1 时反向（假门）。实测：
+                #   均值差 5σ、σa²+σb²=4 时旧式 d′=5.0，真值 3.5355。
+                sd = float(np.sqrt(((np.var(va, ddof=1) if len(va) > 1 else 0.0)
+                                    + (np.var(vb, ddof=1) if len(vb) > 1 else 0.0)) / 2.0))
                 dp = (abs(float(np.mean(va)) - float(np.mean(vb))) / sd) if sd > 1e-9 else 0.0
                 if g > 0 and dp >= 2.0:
                     if best is None or dp > best[0]:
@@ -1012,29 +1056,38 @@ def adjudicate(measured, ratio=ADJ_RATIO):
     不轻易改写真值）。单件组（n=1）**不可裁定**，如实计入 `unadjudicable`。
 
     返回 {ratio, n_groups, adjudicable_groups, covered, n_obj, flagged, unadjudicable}。"""
+    # #232（A3）：组＝**seed（件）**而非物体——docstring 宣称「同一个三元组有多个
+    # seed（组）…单件组（n=1）不可裁定」，旧口径 `len(v)` 却按物体计数：1 件 3 物体
+    # 即被判「可裁定」，组内 hp 悬殊即产出「疑似未兑现」假阳（实测 ratio 5.0/3.6
+    # 两条）。裁定判据仍在**物体级**（每件物体的 hp 对照组内最高），可裁定性在
+    # **seed 级**（同三元组 ≥2 件才可比）。
     grp = {}
     for it in measured["items"]:
         t = it["truth"]
         if not t:
             continue
         key = (t["shape"], t["color"], t["pattern"])
-        for o in measured["by_id"].get(it["id"], []):
-            grp.setdefault(key, []).append((it["id"], t["shape"], t["color"], t["pattern"],
-                                            float(o["hp_rel"])))
+        hps = [float(o["hp_rel"]) for o in measured["by_id"].get(it["id"], [])]
+        grp.setdefault(key, []).append(
+            (it["id"], t["shape"], t["color"], t["pattern"], hps))
     flagged, unadj, adj_groups, covered = [], 0, 0, 0
-    for key, v in sorted(grp.items()):
-        if len(v) < 2:
-            unadj += len(v)
+    n_obj_total = 0
+    for key, items in sorted(grp.items()):
+        n_obj = sum(len(x[4]) for x in items)
+        n_obj_total += n_obj
+        if len(items) < 2:                    # 单 seed（件）组：物体再多也不可比
+            unadj += n_obj
             continue
         adj_groups += 1
-        covered += len(v)
-        top = max(x[4] for x in v)
-        for iid, sh, co, pat, hp in v:
-            if hp < top / ratio:
-                flagged.append({"id": iid, "group": f"{sh}/{co}/{pat}", "hp": round(hp, 5),
-                                "group_max": round(top, 5), "ratio": round(top / max(hp, 1e-9), 2)})
+        covered += n_obj
+        top = max(h for x in items for h in x[4])
+        for iid, sh, co, pat, hps in items:
+            for hp in hps:
+                if hp < top / ratio:
+                    flagged.append({"id": iid, "group": f"{sh}/{co}/{pat}", "hp": round(hp, 5),
+                                    "group_max": round(top, 5), "ratio": round(top / max(hp, 1e-9), 2)})
     return {"ratio": ratio, "n_groups": len(grp), "adjudicable_groups": adj_groups,
-            "covered": covered, "n_obj": sum(len(v) for v in grp.values()),
+            "covered": covered, "n_obj": n_obj_total,
             "flagged": flagged, "unadjudicable": unadj}
 
 
@@ -1121,8 +1174,16 @@ def evaluate(measured, fit_, ids, tag="", loo=False):
                             f"/{'+'.join(sorted(t['cells'])) if t['cells'] else '?'}"
                             f" 读 {p['shape']}/{p['color']}/{p['pattern']}/{p['cell']}"
                             f"{' 触边' if p['clipped'] else ''}")
-    maj_s = Counter(it["shape"] for it in items).most_common(1)[0][0]
-    maj_c = Counter(it["color"] for it in items).most_common(1)[0][0]
+    #   空集保护：`ids` 与 `measured["items"]` 无交集时 `items` 为空 ⇒ `Counter(...).most_common(1)`
+    #   返回 `[]`，裸 `[0][0]` 抛 `IndexError: list index out of range`（空标定/空留出集可达：
+    #   `main` 对每个 tag 都调本函数，`split_ids` 在件数极少时可给出空的一半）。
+    #   基线在无样本时**无定义** ⇒ 如实报 `None`，与同函数既有口径一致
+    #   （`:1135-1136 maj_p = ...most_common(1); maj_ = maj_p[0][0] if maj_p else None`、
+    #    `:1140/:1154 maj_n` 同款写法——纪律 ④ 口径并列）。
+    maj_s = Counter(it["shape"] for it in items).most_common(1)
+    maj_c = Counter(it["color"] for it in items).most_common(1)
+    maj_s = maj_s[0][0] if maj_s else None
+    maj_c = maj_c[0][0] if maj_c else None
     #   **基线口径**：花纹/数量的真值按**物体**加权（准确率是逐物体算的，按「件」算基线不可比）：
     #   某件的物体数 = 真值数量 n（有 prompt 时），故 pattern 基线 = Σ(n·1[该件花纹=多数类]) / Σn
     tp_w = [("plain" if it["truth"]["pattern"] == "plain" else "patterned", it["truth"]["n"])

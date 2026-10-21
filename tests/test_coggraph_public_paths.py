@@ -126,7 +126,12 @@ class CoggraphPublicPathTests(unittest.TestCase):
             write_text(str(self.root / rel), text)
 
     def run_script(self, script, *args):
-        p = subprocess.run([sys.executable, "-X", "utf8", str(script)] + [str(a) for a in args],
+        extra = [str(a) for a in args]
+        # #620：本件预置的是离线**非官方桩**（已声明其指纹）⇒ 查看器与一键链路
+        #   须经显式开关才走自备轨（夹具语义不变，不放宽默认路径）
+        if str(script).endswith(("build_viewer.py", "view_memory.py")):
+            extra += ["--allow-unofficial-cyto"]
+        p = subprocess.run([sys.executable, "-X", "utf8", str(script)] + extra,
                            env=self.env, capture_output=True, text=True,
                            encoding="utf-8", timeout=120)
         self.assertEqual(p.returncode, 0, "%s 退出码 %d\nstderr:\n%s" % (script.name, p.returncode, p.stderr))

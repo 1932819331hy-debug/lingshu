@@ -28,6 +28,8 @@ import uuid
 from dataclasses import dataclass, field, asdict
 from typing import Dict, List, Optional, Tuple
 
+from .coord_contract import clamp_xz              # 第 4 轮 #4
+
 
 # 方块类型（体素世界的基本构成）
 BLOCK_AIR = 0
@@ -70,24 +72,28 @@ class VoxelWorld:
       - occupancy_at(t)：某时刻的 4D 时空占用（体素快照）
       - simulate(steps)：推进 N 步（实体按速度移动）
 
-    资源上界（lingshu #325 / #368）：
-      build_flatland 按 size² 建 dict、simulate 每步给每实体追加一个轨迹点，
-      三处都无上界 ⇒ 传入大 size / 大 steps / 长时推进可把内存吃穿。现加三条
-      上界（判据来源：**经验标定，追不到理论出处**——本仓理论稿未给体素世界
-      规模口径；取同仓 HISTORY_MAX 一类「常量 + 钳制」的既有手法）：
+    资源上界（lingshu #325 / #368 / #701）：
+      build_flatland 按 size² 建 dict、按 trees 放树、simulate 每步给每实体追加一个
+      轨迹点，四处都无上界 ⇒ 传入大 size / 大 trees / 大 steps / 长时推进可把内存
+      或 CPU 吃穿。现加四条上界（判据来源：**经验标定，追不到理论出处**——本仓理论稿
+      未给体素世界规模口径；取同仓 HISTORY_MAX 一类「常量 + 钳制」的既有手法）：
 
         MAX_SIZE  —— 区块边长上限，超出即钳到上界（size² 方块数随之有界）。
         MAX_STEPS —— 单次 simulate 步数上限，超出即钳到上界（防单次调用耗尽 CPU）。
         MAX_TRAIL —— 每实体时空轨迹保留点数上限，超出丢弃最旧（防长期推进无界增长）。
+        MAX_TREES —— 单次 build_flatland 放树数上限，超出即钳到上界（防单次调用耗尽 CPU）。
 
       削掉的判别力：MAX_TRAIL 生效后，轨迹只保留最近 MAX_TRAIL 个点，
       `trail()` 不再是「A→B 完整记录」、`occupancy_at(t)` 的按下标取值只对
-      保留窗口内有效（更早的历史被丢弃，无法回取）。未超上界时行为与旧版逐字相同。
+      保留窗口内有效（更早的历史被丢弃，无法回取）。MAX_TREES 生效后，
+      `build_flatland(trees > MAX_TREES)` 只放 MAX_TREES 棵（返回的 count 与
+      方块布局按钳后值给，超出部分无声丢弃）。未超上界时行为与旧版逐字相同。
     """
 
     MAX_SIZE = 128      # 区块边长上限：size²×2 层方块，128²×2≈3.3e4，可控
     MAX_STEPS = 10000   # 单次 simulate 步数上限
     MAX_TRAIL = 4096    # 每实体时空轨迹保留点数上限（超出丢弃最旧）
+    MAX_TREES = 4096    # 单次 build_flatland 放树数上限（与 MAX_TRAIL 同量级）
 
     def __init__(self, size: int = 16, ground_level: int = 1, seed: int = 0):
         self.size = min(int(size), self.MAX_SIZE)  # 区块边长（钳到 MAX_SIZE）
@@ -102,6 +108,7 @@ class VoxelWorld:
 
     def build_flatland(self, trees: int = 2, water: bool = True) -> int:
         """生成平地世界：地面（草/土）+ 可选树 + 可选水。返回方块数。"""
+        trees = min(int(trees), self.MAX_TREES)  # 放树数（钳到 MAX_TREES）
         count = 0
         for x in range(self.size):
             for z in range(self.size):
@@ -175,8 +182,9 @@ class VoxelWorld:
                 ny = max(float(self.ground_level + 0.5), e.pos[1] + e.velocity[1])  # 不穿地
                 nz = e.pos[2] + e.velocity[2]
                 # 边界约束
-                nx = max(0.5, min(self.size - 0.5, nx))
-                nz = max(0.5, min(self.size - 0.5, nz))
+                # ⚠ 第 4 轮 #4：**只**收 x/z 边界语义；本站点与本体口径的差异（不量化、
+                #   y 由地面约束管）**保留**并在此写明 —— 统一的是语义，不是行为。
+                nx, nz = clamp_xz(nx, nz, self.size)
                 e.pos = (nx, ny, nz)
                 self._record_trail(eid, self._trail_point(e))
                 moved_entities.add(eid)
@@ -196,15 +204,46 @@ class VoxelWorld:
     # ---- 时空轨迹与占用 ----
 
     def trail(self, entity_id: str) -> List[Dict]:
-        """实体的时空轨迹（A→B 完整记录）。"""
-        return self._trails.get(entity_id, [])
+        """实体的时空轨迹（A→B 完整记录）。
+
+        #719：返回**副本**（`list(...)`），不再交回内部列表本体。旧实现
+        `return self._trails.get(entity_id, [])` 让调用方拿到 `_trails[eid]`
+        本身 ⇒ 一次 `trail(eid).clear()` 即把时空历史抹掉（`occupancy_at(t)`
+        随之返回空——#134 修复后它已是时空真值来源），`append({"t": 999, …})`
+        则可凭空捏造任意时刻的占用点；两者都不经任何写接口、无留痕。
+        口径与同族只读查询一致（`spacetime_consistency.drift_events()` /
+        `prediction_history()` 都返回 `list(...)` 拷贝）；**不加**
+        `copy.deepcopy` —— 调用方拿到的是轨迹点 dict 的浅拷贝，本仓无任何
+        调用方依赖「拿到同一个 list 对象后原地改它」（`core.py` 门面只把
+        结果放进返回值 JSON 序列化）。
+        边界（如实标注）：浅拷贝 ⇒ 调用方**仍可**改轨迹点 dict 内部（如
+        `trail(eid)[0]["t"] = 999`）；本件只闭合「列表本体」这一面。
+        """
+        return list(self._trails.get(entity_id, []))
 
     def occupancy_at(self, t: int) -> List[Dict]:
-        """t 时刻的 4D 时空占用（该时刻所有实体的空间位置）。"""
+        """t 时刻的 4D 时空占用（该时刻所有实体的空间位置）。
+
+        #134：按轨迹点内的 `t` 字段查找，而非**列表下标**。旧实现
+        `trail[t]` 把「第 t 个记录点」当成「t 时刻」——于是晚生成的实体
+        出现在它尚不存在的时刻（`spawn_entity` 在 `_step=3` 时首个点 t=3，
+        旧码却让它出现在 t=0），而在场时刻反而缺席；`move_entity` 追加点
+        却不推进 `_step`（同一 t 多个点），下标口径进一步错位。
+        同一 t 有多个点时取**最后一个**（该时刻的最终状态）。
+        判据来源：triage #134（判定成立）——判据即「返回的每一项
+        `o["t"] == t`，且 t 时刻在场的实体都出现」。
+        削掉的判别力（如实声明）：`MAX_TRAIL` 裁剪后更早时刻的点已丢弃，
+        此时按 t 查不到即返回缺席（旧下标口径会返回一个张冠李戴的错位点，
+        属更坏的行为）。
+        """
         occ = []
         for eid, trail in self._trails.items():
-            if t < len(trail):
-                occ.append({"entity": eid, **trail[t]})
+            point = None
+            for p in trail:              # 同 t 多点 ⇒ 后者覆盖（最终状态）
+                if p.get("t") == t:
+                    point = p
+            if point is not None:
+                occ.append({"entity": eid, **point})
         return occ
 
     def world_state(self) -> Dict:

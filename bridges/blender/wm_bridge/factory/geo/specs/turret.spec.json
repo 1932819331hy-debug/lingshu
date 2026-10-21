@@ -1,0 +1,714 @@
+{
+ "joints": [
+  {
+   "axis": "z",
+   "easing": "bezier",
+   "kind": "spin",
+   "link": "TURRET_yaw",
+   "period_s": 2.0
+  }
+ ],
+ "links": [
+  {
+   "anchor": [
+    0,
+    0,
+    0
+   ],
+   "name": "TURRET_root",
+   "parent": null,
+   "parts": [
+    {
+     "bevel": 0.016,
+     "kind": "cylinder",
+     "material": {
+      "color": [
+       0.07,
+       0.075,
+       0.085
+      ],
+      "metallic": 1.0,
+      "role": "metal",
+      "roughness": 0.4
+     },
+     "material_name": "M_dark",
+     "name": "TURRET_base",
+     "pos": [
+      0.0,
+      0.0,
+      0.1
+     ],
+     "rot_deg": [
+      0.0,
+      0.0,
+      0.0
+     ],
+     "segments": 8,
+     "size": [
+      1.44,
+      1.44,
+      0.2
+     ]
+    },
+    {
+     "bevel": 0.008,
+     "kind": "cylinder",
+     "material": {
+      "color": [
+       0.55,
+       0.36,
+       0.13
+      ],
+      "metallic": 1.0,
+      "role": "metal",
+      "roughness": 0.28
+     },
+     "material_name": "M_brass",
+     "name": "TURRET_ring",
+     "pos": [
+      0.0,
+      0.0,
+      0.235
+     ],
+     "rot_deg": [
+      0.0,
+      0.0,
+      0.0
+     ],
+     "segments": 32,
+     "size": [
+      1.2,
+      1.2,
+      0.07
+     ]
+    }
+   ]
+  },
+  {
+   "anchor": [
+    0,
+    0,
+    0.27
+   ],
+   "name": "TURRET_yaw",
+   "parent": "TURRET_root",
+   "parts": [
+    {
+     "bevel": 0.018,
+     "kind": "cylinder",
+     "material": {
+      "color": [
+       0.07,
+       0.075,
+       0.085
+      ],
+      "metallic": 1.0,
+      "role": "metal",
+      "roughness": 0.4
+     },
+     "material_name": "M_dark",
+     "name": "TURRET_body",
+     "pos": [
+      0.0,
+      0.0,
+      0.21
+     ],
+     "rot_deg": [
+      0.0,
+      0.0,
+      0.0
+     ],
+     "segments": 10,
+     "size": [
+      0.92,
+      0.92,
+      0.42
+     ]
+    },
+    {
+     "bevel": 0.012,
+     "kind": "cylinder",
+     "material": {
+      "color": [
+       0.18,
+       0.19,
+       0.21
+      ],
+      "metallic": 1.0,
+      "role": "metal",
+      "roughness": 0.45
+     },
+     "material_name": "M_steel",
+     "name": "TURRET_cap",
+     "pos": [
+      0.0,
+      0.0,
+      0.47
+     ],
+     "rot_deg": [
+      0.0,
+      0.0,
+      0.0
+     ],
+     "segments": 10,
+     "size": [
+      0.68,
+      0.68,
+      0.1
+     ]
+    },
+    {
+     "axis": "y",
+     "bevel": 0.005,
+     "kind": "cylinder",
+     "material": {
+      "color": [
+       0.18,
+       0.19,
+       0.21
+      ],
+      "metallic": 1.0,
+      "role": "metal",
+      "roughness": 0.45
+     },
+     "material_name": "M_steel",
+     "name": "TURRET_barrel_0",
+     "pos": [
+      0.23,
+      0.07,
+      0.3
+     ],
+     "rot_deg": [
+      0.0,
+      0.0,
+      -45.0
+     ],
+     "segments": 12,
+     "size": [
+      0.09,
+      0.62,
+      0.09
+     ]
+    },
+    {
+     "axis": "y",
+     "kind": "cylinder",
+     "material": {
+      "color": [
+       0.55,
+       0.36,
+       0.13
+      ],
+      "metallic": 1.0,
+      "role": "metal",
+      "roughness": 0.28
+     },
+     "material_name": "M_brass",
+     "name": "TURRET_muzzle_0",
+     "pos": [
+      0.113137085,
+      0.4313351365,
+      0.3
+     ],
+     "rot_deg": [
+      0.0,
+      0.0,
+      -45.0
+     ],
+     "segments": 12,
+     "size": [
+      0.124,
+      0.05,
+      0.124
+     ]
+    },
+    {
+     "axis": "y",
+     "bevel": 0.005,
+     "kind": "cylinder",
+     "material": {
+      "color": [
+       0.18,
+       0.19,
+       0.21
+      ],
+      "metallic": 1.0,
+      "role": "metal",
+      "roughness": 0.45
+     },
+     "material_name": "M_steel",
+     "name": "TURRET_barrel_1",
+     "pos": [
+      -0.23,
+      0.07,
+      0.3
+     ],
+     "rot_deg": [
+      0.0,
+      0.0,
+      -135.0
+     ],
+     "segments": 12,
+     "size": [
+      0.09,
+      0.62,
+      0.09
+     ]
+    },
+    {
+     "axis": "y",
+     "kind": "cylinder",
+     "material": {
+      "color": [
+       0.55,
+       0.36,
+       0.13
+      ],
+      "metallic": 1.0,
+      "role": "metal",
+      "roughness": 0.28
+     },
+     "material_name": "M_brass",
+     "name": "TURRET_muzzle_1",
+     "pos": [
+      0.113137085,
+      -0.4313351365,
+      0.3
+     ],
+     "rot_deg": [
+      0.0,
+      0.0,
+      -135.0
+     ],
+     "segments": 12,
+     "size": [
+      0.124,
+      0.05,
+      0.124
+     ]
+    },
+    {
+     "axis": "y",
+     "bevel": 0.005,
+     "kind": "cylinder",
+     "material": {
+      "color": [
+       0.18,
+       0.19,
+       0.21
+      ],
+      "metallic": 1.0,
+      "role": "metal",
+      "roughness": 0.45
+     },
+     "material_name": "M_steel",
+     "name": "TURRET_barrel_2",
+     "pos": [
+      0.23,
+      0.07,
+      0.3
+     ],
+     "rot_deg": [
+      0.0,
+      0.0,
+      -225.0
+     ],
+     "segments": 12,
+     "size": [
+      0.09,
+      0.62,
+      0.09
+     ]
+    },
+    {
+     "axis": "y",
+     "kind": "cylinder",
+     "material": {
+      "color": [
+       0.55,
+       0.36,
+       0.13
+      ],
+      "metallic": 1.0,
+      "role": "metal",
+      "roughness": 0.28
+     },
+     "material_name": "M_brass",
+     "name": "TURRET_muzzle_2",
+     "pos": [
+      -0.113137085,
+      -0.4313351365,
+      0.3
+     ],
+     "rot_deg": [
+      0.0,
+      0.0,
+      -225.0
+     ],
+     "segments": 12,
+     "size": [
+      0.124,
+      0.05,
+      0.124
+     ]
+    },
+    {
+     "axis": "y",
+     "bevel": 0.005,
+     "kind": "cylinder",
+     "material": {
+      "color": [
+       0.18,
+       0.19,
+       0.21
+      ],
+      "metallic": 1.0,
+      "role": "metal",
+      "roughness": 0.45
+     },
+     "material_name": "M_steel",
+     "name": "TURRET_barrel_3",
+     "pos": [
+      -0.23,
+      0.07,
+      0.3
+     ],
+     "rot_deg": [
+      0.0,
+      0.0,
+      -315.0
+     ],
+     "segments": 12,
+     "size": [
+      0.09,
+      0.62,
+      0.09
+     ]
+    },
+    {
+     "axis": "y",
+     "kind": "cylinder",
+     "material": {
+      "color": [
+       0.55,
+       0.36,
+       0.13
+      ],
+      "metallic": 1.0,
+      "role": "metal",
+      "roughness": 0.28
+     },
+     "material_name": "M_brass",
+     "name": "TURRET_muzzle_3",
+     "pos": [
+      -0.113137085,
+      0.4313351365,
+      0.3
+     ],
+     "rot_deg": [
+      0.0,
+      0.0,
+      -315.0
+     ],
+     "segments": 12,
+     "size": [
+      0.124,
+      0.05,
+      0.124
+     ]
+    },
+    {
+     "bevel": 0.012,
+     "kind": "box",
+     "material": {
+      "color": [
+       0.18,
+       0.19,
+       0.21
+      ],
+      "metallic": 1.0,
+      "role": "metal",
+      "roughness": 0.45
+     },
+     "material_name": "M_steel",
+     "name": "TURRET_counter",
+     "pos": [
+      0.0,
+      -0.4,
+      0.22
+     ],
+     "rot_deg": [
+      0.0,
+      0.0,
+      0.0
+     ],
+     "size": [
+      0.5,
+      0.36,
+      0.24
+     ]
+    },
+    {
+     "kind": "cylinder",
+     "material": {
+      "color": [
+       0.18,
+       0.19,
+       0.21
+      ],
+      "metallic": 1.0,
+      "role": "metal",
+      "roughness": 0.45
+     },
+     "material_name": "M_steel",
+     "name": "TURRET_mast",
+     "pos": [
+      0.0,
+      -0.4,
+      0.5
+     ],
+     "rot_deg": [
+      0.0,
+      0.0,
+      0.0
+     ],
+     "segments": 10,
+     "size": [
+      0.07,
+      0.07,
+      0.44
+     ]
+    },
+    {
+     "bevel": 0.006,
+     "kind": "cylinder",
+     "material": {
+      "color": [
+       0.18,
+       0.19,
+       0.21
+      ],
+      "metallic": 1.0,
+      "role": "metal",
+      "roughness": 0.45
+     },
+     "material_name": "M_steel",
+     "name": "TURRET_dish",
+     "pos": [
+      0.0,
+      -0.4,
+      0.72
+     ],
+     "rot_deg": [
+      0.0,
+      0.0,
+      0.0
+     ],
+     "segments": 28,
+     "size": [
+      0.68,
+      0.68,
+      0.035
+     ]
+    },
+    {
+     "kind": "sphere",
+     "material": {
+      "color": [
+       0.55,
+       0.36,
+       0.13
+      ],
+      "metallic": 1.0,
+      "role": "metal",
+      "roughness": 0.28
+     },
+     "material_name": "M_brass",
+     "name": "TURRET_hub",
+     "pos": [
+      0.0,
+      -0.4,
+      0.72
+     ],
+     "rot_deg": [
+      0.0,
+      0.0,
+      0.0
+     ],
+     "segments": 18,
+     "segments_v": 10,
+     "size": [
+      0.14,
+      0.14,
+      0.14
+     ]
+    },
+    {
+     "kind": "sphere",
+     "material": {
+      "color": [
+       0.9,
+       0.5,
+       0.06
+      ],
+      "emission": [
+       1.0,
+       0.5,
+       0.06
+      ],
+      "emission_strength": 5.0,
+      "metallic": 0.0,
+      "role": "emissive",
+      "roughness": 0.35
+     },
+     "material_name": "M_glow",
+     "name": "TURRET_lamp_0",
+     "pos": [
+      0.0,
+      0.34,
+      0.45
+     ],
+     "rot_deg": [
+      0.0,
+      0.0,
+      0.0
+     ],
+     "segments": 18,
+     "segments_v": 10,
+     "size": [
+      0.09,
+      0.09,
+      0.09
+     ]
+    },
+    {
+     "kind": "sphere",
+     "material": {
+      "color": [
+       0.9,
+       0.5,
+       0.06
+      ],
+      "emission": [
+       1.0,
+       0.5,
+       0.06
+      ],
+      "emission_strength": 5.0,
+      "metallic": 0.0,
+      "role": "emissive",
+      "roughness": 0.35
+     },
+     "material_name": "M_glow",
+     "name": "TURRET_lamp_1",
+     "pos": [
+      0.2944486373,
+      -0.17,
+      0.45
+     ],
+     "rot_deg": [
+      0.0,
+      0.0,
+      0.0
+     ],
+     "segments": 18,
+     "segments_v": 10,
+     "size": [
+      0.09,
+      0.09,
+      0.09
+     ]
+    },
+    {
+     "kind": "sphere",
+     "material": {
+      "color": [
+       0.9,
+       0.5,
+       0.06
+      ],
+      "emission": [
+       1.0,
+       0.5,
+       0.06
+      ],
+      "emission_strength": 5.0,
+      "metallic": 0.0,
+      "role": "emissive",
+      "roughness": 0.35
+     },
+     "material_name": "M_glow",
+     "name": "TURRET_lamp_2",
+     "pos": [
+      -0.2944486373,
+      -0.17,
+      0.45
+     ],
+     "rot_deg": [
+      0.0,
+      0.0,
+      0.0
+     ],
+     "segments": 18,
+     "segments_v": 10,
+     "size": [
+      0.09,
+      0.09,
+      0.09
+     ]
+    }
+   ]
+  },
+  {
+   "anchor": [
+    0.113137085,
+    0.4313351365,
+    0.57
+   ],
+   "name": "TURRET_tip_0",
+   "parent": "TURRET_yaw",
+   "parts": []
+  },
+  {
+   "anchor": [
+    0.113137085,
+    -0.4313351365,
+    0.57
+   ],
+   "name": "TURRET_tip_1",
+   "parent": "TURRET_yaw",
+   "parts": []
+  },
+  {
+   "anchor": [
+    -0.113137085,
+    -0.4313351365,
+    0.57
+   ],
+   "name": "TURRET_tip_2",
+   "parent": "TURRET_yaw",
+   "parts": []
+  },
+  {
+   "anchor": [
+    -0.113137085,
+    0.4313351365,
+    0.57
+   ],
+   "name": "TURRET_tip_3",
+   "parent": "TURRET_yaw",
+   "parts": []
+  }
+ ],
+ "name": "turret",
+ "notes": "hex-model/build_models.py::build_turret 的 spec 化基准。pos 口径 = loc + R(rot)·off（把烘进网格的局部偏移折进件原点）；easing=bezier 是**实测**（wmtest_models.blend 的 TURRET_yawAction：25 键 / 步长 6 / BEZIER / AUTO_CLAMPED），不是默认值。",
+ "scene": {
+  "fps": 24,
+  "frame_end": 143,
+  "frame_start": 0,
+  "seed": 0,
+  "units": "m",
+  "world_size": 50.0
+ },
+ "schema": "wmfactory.spec/1"
+}

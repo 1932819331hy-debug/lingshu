@@ -66,7 +66,9 @@ DAY2 = DAY1 + 86400
 
 
 def day_label(ts):
-    return time.strftime("%Y-%m-%d", time.localtime(ts))
+    # issue #360：R4 分日改用 UTC 日历日（derive_edges.py 的 gmtime）⇒ 夹具按同一口径
+    # 取标签，否则本件在非 UTC 机器上会因日界差异而误红。
+    return time.strftime("%Y-%m-%d", time.gmtime(ts))
 
 
 def a_group(tmp):
@@ -180,7 +182,9 @@ def e_group(tmp):
     with open(os.path.join(out, "cytoscape.min.js"), "w", encoding="utf-8") as f:
         f.write(_stub)
     import hashlib as _hl
-    cmd = [sys.executable, "-X", "utf8", VIEWER, "--graph", g, "--derived", dv, "--out", out]
+    # #620：桩为非官方副本 ⇒ 自备轨须经显式开关（夹具语义不变）
+    cmd = [sys.executable, "-X", "utf8", VIEWER, "--graph", g, "--derived", dv, "--out", out,
+           "--allow-unofficial-cyto"]
     p = subprocess.run(cmd, capture_output=True, text=True, encoding="utf-8", cwd=REPO,
                        env=dict(os.environ, PYTHONDONTWRITEBYTECODE="1",
                                 LINGSHU_CYTO_SHA256=_hl.sha256(_stub.encode()).hexdigest()))

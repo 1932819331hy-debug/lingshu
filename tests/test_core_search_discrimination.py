@@ -4,6 +4,12 @@
 评分分母必须是并集（Jaccard 相似度），而不是查询的 bigram 数（覆盖率）：后者只要文档含
 查询的每个 bigram 就恒为 1.0，与文档长度 / 其余内容无关。断言只比序关系，不锁定分数值。
 
+**适用路径：非 FTS（LIKE 预筛 / 全表回退）路径。** 本文件的判据（含「零匹配文档得 0」）
+只对候选生成走 legacy LIKE 预筛 / 回退时成立；FTS5 路径（``LINGSHU_FTS=1``）的候选集
+与打分契约不同（零匹配文档根本不进结果集），其契约由 ``tests/test_fts_retrieval.py`` /
+``tests/test_fts_context.py`` 覆盖。在 FTS 全局开启下跑本文件属「换了被测路径」，
+故用例前置断言当前未启用 FTS（见 ``test_document_without_query_scores_zero``）。
+
 运行: python -X utf8 -m pytest tests/test_core_search_discrimination.py -v
 """
 import os as _os, sys as _sys, tempfile
@@ -11,6 +17,7 @@ import os as _os, sys as _sys, tempfile
 _sys.path.insert(0, _os.path.dirname(_os.path.dirname(_os.path.abspath(__file__))))
 
 from lingshu.core.core import SpacetimeMemoryEngine  # noqa: E402
+from lingshu.core.retrieval import enabled as _fts_enabled  # noqa: E402
 
 _Q = "超时"
 # 互不相同的汉字填充：bigram 不重复 => 文档变长必然稀释与查询的重叠率
@@ -48,6 +55,12 @@ def test_irrelevant_content_lowers_score_and_ranking():
 
 def test_document_without_query_scores_zero():
     """不含查询词的文档得 0，不因预筛 / 回退路径白拿分。"""
+    # 前置：本文件的判据针对非 FTS（LIKE 预筛 / 回退）路径。FTS5 路径下零匹配文档
+    # 不进候选集（契约见 tests/test_fts_retrieval.py），本判据不适用。
+    assert not _fts_enabled(), (
+        "test_core_search_discrimination 的断言只对非 FTS（LIKE 预筛/回退）路径成立；"
+        "检测到 LINGSHU_FTS=1：被测路径已切到 FTS5，请勿在全局开启 FTS 时跑本文件"
+        "（FTS 路径契约见 tests/test_fts_retrieval.py、tests/test_fts_context.py）。")
     # 两条都不含查询词字面 => LIKE 预筛落空走全表回退；
     # 其中一条折叠空白后与查询共享 bigram，另一条与查询零重叠。
     related, unrelated = "网络超 时间 指标", "天气与食物记录"

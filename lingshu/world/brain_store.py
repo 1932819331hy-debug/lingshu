@@ -32,16 +32,35 @@
   （见 `_ENV_ALLOW_NAMES` / `_ENV_ALLOW_PREFIXES`），其余继承变量一律**不透传**——
   `AEIS_DESIGNER_KEY` / `*_API_KEY` / `*_TOKEN` / `*_SECRET` / `*_PASSWORD` 等
   凭据**不再随继承环境交给脑侧子进程**（旧法「只剔 `MDCG_*`」是黑名单，对凭据面
-  fail-open）。继承的 `MDCG_*` 仍被剔除（防在役库被无意命中）；凭据若确需传入，
+  fail-open）。**该断言现已无旁路**：原先仅余的 `LC_*` 宽前缀会顺带放行
+  `LC_TOKEN` / `LC_PASSWORD` 这类凭据形状名（#495，复核 #680 §一.3），已按同一
+  手法收敛为 13 个区域名具名（见 `_ENV_ALLOW_NAMES`）⇒ 前缀白名单为空。继承的 `MDCG_*` 仍被剔除（防在役库被无意命中）；凭据若确需传入，
   必须经 `extra_env` **显式**声明（有意为之、可审计）。**`HIVE_` 前缀不再放行**
   （#227 续）：脑侧子进程（`python -X utf8 -m md_cg.mcp_server`）只在
   `cg(op=ccg, action=units)` 工具面上经 `md_cg/units.py` 具名读 `HIVE_JOBS_DIR` /
   `HIVE_EXE`（二者已入 `_ENV_ALLOW_NAMES`），凭据形状的 `HIVE_API_KEY` /
-  `HIVE_ORCH_TOKEN(_FILE)` / `HIVE_SUBAGENT_API_KEY` 一律不透传。再注入下面的显式覆盖；
+  `HIVE_ORCH_TOKEN(_FILE)` / `HIVE_SUBAGENT_API_KEY` 一律不透传。**`PYTHON` /
+  `LINGSHU_` 前缀亦不再放行**（#652③）：`PYTHONSTARTUP` / `PYTHONHOME` 等解释器
+  启动劫持名、以及**身侧**逃生口 `LINGSHU_ALLOW_CWD_IMPORTS` 原被宽前缀连带放行；
+  已按同一手法改具名（见 `_ENV_ALLOW_NAMES`）。再注入下面的显式覆盖；
 - `pythonpath` 必须显式给出（参数或 `BRAIN_PYTHONPATH`），否则 `ValueError`；
 - `root` 未给出且 `BRAIN_ROOT` 为空时，脑侧将回落到其缺省根——**调用方务必
   显式给隔离/目标根**（测试与生产都不例外）；
 - `MDCG_STG_STATE=1` 由本层缺省注入（M1 状态读依赖 state_chain 开关）。
+
+**父进程配置面（#652①，勿与上面的白名单混淆）**：`BRAIN_PYTHON` /
+`BRAIN_PYTHONPATH` / `BRAIN_ROOT` 是在**本进程**里、**`_brain_env` 之前**被读的
+（`MCPClient.__init__`）——它们决定「拉起哪个解释器 / 从哪个目录取模块 / 库根在哪」。
+上面的 `_ENV_ALLOW_NAMES` / `_ENV_ALLOW_PREFIXES` **管不到它们**：白名单只决定
+「往子进程 env 里放什么」。故「白名单拦住了 `BRAIN_*` 不进子进程」**不能**说明这
+三个变量安全。处置：显式参数优先；env 兜底时 `BRAIN_PYTHON` / `BRAIN_PYTHONPATH`
+做 fail-closed 校验（绝对路径＋存在性＋**解释器形状/脑包结构**＋**受信根**，见
+`_require_env_interpreter` / `_require_env_dir`；#748 收窄）。**受信根默认必填**：
+未声明 `LINGSHU_BRAIN_PYTHON_ROOTS` / `LINGSHU_BRAIN_PYTHONPATH_ROOTS` 时，
+env 兜底面一律**拒**（一段继承/残留的 `BRAIN_PYTHONPATH` 不再静默决定被执行的
+模块）——要用 env 面就先显式声明受信根。可达性（如实）：前提是已能设置本进程
+环境变量 ⇒ 对「已能设置 env 的攻击者」而言仍属**提权/持久化放大器**，非默认可达
+RCE；受信根收的是**默认配置**这一档，不是「env 面＝安全边界」。
 
 用法（隔离示例；测试件见 `tests/test_brain_store.py`）：
 
@@ -68,6 +87,7 @@ import json
 import math
 import os
 import queue
+import re
 import subprocess
 import sys
 import threading
@@ -119,23 +139,217 @@ _ENV_ALLOW_NAMES = frozenset({
     # hive 服务/执行器侧（`hive/serve_start.py` / `hive/exec.py` / `hive/orch.py`，
     # 由蜂巢自身进程树拉起）被读，**不在** `md_cg.mcp_server` 的读取面上。
     "HIVE_JOBS_DIR", "HIVE_EXE",
+    # #652③：原 `PYTHON` / `LINGSHU_` **宽前缀**收敛为**具名**（前缀过宽会把
+    # 解释器启动/行为劫持名与**身侧**逃生口一并放行给脑侧子进程）。具名清单＝
+    # 「脑侧子进程真读的」＋「部署方继承同义配置的余地」两类：
+    #   · CPython 配置/行为面：`PYTHONPATH` / `PYTHONUTF8` / `PYTHONIOENCODING`
+    #     三者由 `_brain_env` 显式注入（此处保留是为部署方继承同义配置）；
+    #     其余为纯行为开关（字节码缓存 / 缓冲 / 告警 / 故障处理器 / 哈希种子 /
+    #     用户 site / 安全路径 / 开发模式）——**均非「启动期执行任意代码」面**；
+    #   · 脑侧真读的 `LINGSHU_*` 只有 `LINGSHU_KB` / `LINGSHU_DB`
+    #     （`md_cg/whitebox_kb/**` 白盒引擎的知识库/数据库路径）。
+    # **不收**：`PYTHONSTARTUP` / `PYTHONHOME` / `PYTHONINSPECT` /
+    # `PYTHONEXECUTABLE`（解释器启动期劫持面）与 `LINGSHU_ALLOW_CWD_IMPORTS`
+    # （`lingshu/_pathguard.py` 的**身侧**逃生口，脑侧零读取点 ⇒ 透传纯属扩大面）。
+    "PYTHONPATH", "PYTHONUTF8", "PYTHONIOENCODING",
+    "PYTHONDONTWRITEBYTECODE", "PYTHONUNBUFFERED", "PYTHONWARNINGS",
+    "PYTHONFAULTHANDLER", "PYTHONHASHSEED", "PYTHONNOUSERSITE",
+    "PYTHONSAFEPATH", "PYTHONDEVMODE",
+    "LINGSHU_KB", "LINGSHU_DB",
+    # #495（复核 #680 §一.3 残留）：原 `("LC_",)` 是**宽前缀**，顺带放行任意
+    # `LC_*` 名——含凭据形状的 `LC_TOKEN` / `LC_PASSWORD`，即上文「`*_TOKEN` /
+    # `*_PASSWORD` 不再透传」对 LC_ 族**不成立**。按 #227 续 / #652③ 同一手法
+    # 第三次收敛为**具名**：POSIX + glibc 的 13 个区域名（`LC_` 前缀面随之清空）。
+    # 非标准 `LC_*` 名本无区域语义，确需者走 `extra_env` 显式声明。
+    "LC_ALL", "LC_COLLATE", "LC_CTYPE", "LC_MESSAGES", "LC_MONETARY",
+    "LC_NUMERIC", "LC_TIME",
+    "LC_PAPER", "LC_NAME", "LC_ADDRESS", "LC_TELEPHONE", "LC_MEASUREMENT",
+    "LC_IDENTIFICATION",
 })
 
-#: 子进程 env **白名单·前缀**（部署方显式配置面）。`PYTHON*` 覆盖 PYTHONPATH /
-#: PYTHONUTF8 / PYTHONHOME / PYTHONIOENCODING / PYTHONDONTWRITEBYTECODE 等。
-#: 刻意**不含 `MDCG_`**——继承的 `MDCG_*` 仍须剔除（防在役库被无意命中），
-#: `MDCG_ROOT` / `MDCG_STG_STATE` 由 `_brain_env` 显式注入。
-#: 亦**不含 `HIVE_`**（#227 续）：前缀过宽会把凭据形状名整体放行；脑侧确需的两个
-#: 非凭据名 `HIVE_JOBS_DIR` / `HIVE_EXE` 走上面的 `_ENV_ALLOW_NAMES` **具名**放行。
-_ENV_ALLOW_PREFIXES = ("PYTHON", "LINGSHU_", "LC_")
+#: 子进程 env **白名单·前缀**（部署方显式配置面）。刻意**不含 `MDCG_`**——继承的
+#: `MDCG_*` 仍须剔除（防在役库被无意命中），`MDCG_ROOT` / `MDCG_STG_STATE` 由
+#: `_brain_env` 显式注入。**不含 `HIVE_`**（#227 续）：前缀过宽会把凭据形状名整体
+#: 放行；脑侧确需的两个非凭据名 `HIVE_JOBS_DIR` / `HIVE_EXE` 走上面的
+#: `_ENV_ALLOW_NAMES` **具名**放行。**不含 `PYTHON` / `LINGSHU_`**（#652③ 续收敛）：
+#: 同为「前缀过宽」——`PYTHON` 连带放行 `PYTHONSTARTUP` / `PYTHONHOME` 等解释器
+#: 启动劫持名，`LINGSHU_` 连带放行身侧逃生口 `LINGSHU_ALLOW_CWD_IMPORTS`；两条
+#: 前缀已按 #227 续的同一手法改**具名**（见上）。**`LC_` 亦已清空**（#495）：
+#: 同一「前缀过宽」失效模式第三次命中——前缀面把 `LC_TOKEN` / `LC_PASSWORD`
+#: 这类凭据形状名一并放行，故 13 个区域名改入 `_ENV_ALLOW_NAMES` 具名。
+#: 结论：**前缀白名单为空**——「不声明就不给」现在是完整的（无前缀旁路）。
+_ENV_ALLOW_PREFIXES = ()
+
+#: 子进程 env **黑名单·拒传**（issue #750 残余面 ③ · **deny 优先于 allow**）：
+#: 这两个名字决定子进程的**导入安全态 / 组件解析根**——`LINGSHU_ALLOW_CWD_
+#: IMPORTS` 是 `lingshu/_pathguard.py` 的身侧逃生口（开了等于放弃 cwd 解析面
+#: 保护），`LINGSHU_COMPONENT_ROOT` 是 `component_resolver` 的显式组件根
+#: （改写白名单组件的解析面）。父进程一旦把它们透传给脑子子进程，等于**改写
+#: 孙进程的保护态**（#750 原报告实测：`LINGSHU_` 宽前缀时代曾整体透传）。
+#: #652③/#495 已把前缀白名单收敛为空、二者不再透传；本层再把「永不透传」
+#: 钉成**结构化黑名单**——未来白名单若再放宽（重引入前缀 / 具名误收），
+#: deny 仍先行拦截。脑侧子进程（`md_cg.mcp_server`）对二者零读取点；
+#: 确需给子进程重定向组件根的部署走 `extra_env` **显式**声明。
+_ENV_DENY_NAMES = frozenset({
+    "LINGSHU_ALLOW_CWD_IMPORTS",
+    "LINGSHU_COMPONENT_ROOT",
+})
 
 
 def _env_is_allowed(name: str) -> bool:
-    """继承的环境变量名是否在白名单内（大小写无关：Windows 上 `os.environ` 键为大写）。"""
+    """继承的环境变量名是否在白名单内（大小写无关：Windows 上 `os.environ` 键为大写）。
+
+    #750 残余面 ③：`_ENV_DENY_NAMES` **优先**于白名单——黑名单名一律拒传
+    （防白名单未来再放宽时连带复活「子进程保护态被父进程改写」面）。
+    """
     up = str(name).upper()
+    if up in _ENV_DENY_NAMES:
+        return False
     if up in _ENV_ALLOW_NAMES:
         return True
     return any(up.startswith(p) for p in _ENV_ALLOW_PREFIXES)
+
+
+#: **父进程配置面**（issue #652①）——这三个名字在 `MCPClient.__init__` 里、**在
+#: `_brain_env` 之前**被读，用于决定「拉起哪个解释器 / 从哪个目录取模块 / 库根在
+#: 哪」。它们**不受 `_ENV_ALLOW_NAMES` / `_ENV_ALLOW_PREFIXES` 约束**：白名单只
+#: 决定「往子进程 env 里放什么」，管不到父进程读取的这三个变量。因此
+#: 「白名单拦住了 `BRAIN_*` 不进子进程」**不能**说明这三个变量安全。
+#: 可达性（如实）：前提是已能设置本进程环境变量；具备该能力者本已可影响本进程
+#: 启动（如 `PYTHONPATH`），故本面属**提权/持久化放大器**，非默认可达 RCE。
+#: 处置：`BRAIN_PYTHON` / `BRAIN_PYTHONPATH` 走**显式参数优先**，env 兜底时做
+#: fail-closed 校验（见 `_require_env_interpreter` / `_require_env_dir`；**受信根
+#: 默认必填**——未声明即拒）；`BRAIN_ROOT` 属数据根（脑侧可自建），只做声明不做
+#: 存在性校验。
+_ENV_PARENT_CONFIG = ("BRAIN_PYTHON", "BRAIN_PYTHONPATH", "BRAIN_ROOT")
+
+#: 部署方声明的**受信根**面（`os.pathsep` 多根）。**默认必填**（#748）：env 兜底
+#: 值未声明受信根即拒——否则「存在且含 md_cg 的目录」就够格，而造这样一个目录
+#: 零成本（攻击者侧），报告里的 payload 原样仍成立。声明后，值的归一化路径必须
+#: 落在其中某个根之下，否则 fail-closed。
+_BRAIN_PYTHON_ROOTS_ENV = "LINGSHU_BRAIN_PYTHON_ROOTS"
+_BRAIN_PYTHONPATH_ROOTS_ENV = "LINGSHU_BRAIN_PYTHONPATH_ROOTS"
+
+#: 可接受的解释器**文件名形状**（`BRAIN_PYTHON` 兜底值）。
+_PY_EXE_RE = re.compile(r"^python(\d+(\.\d+)?)?(\.exe)?$", re.IGNORECASE)
+
+
+def _require_under_trusted_roots(value: str, roots_env: str, var: str,
+                                 required: bool = False) -> str:
+    """受信根校验（#748）。
+
+    `required=True`（env 兜底面的默认处置）：`roots_env` **未声明 ⇒ 拒**——
+    env 给出的执行面（解释器 / 模块搜索目录）在**默认配置下不被采信**，
+    部署方要么走显式参数 `python=` / `pythonpath=`（推荐路径），要么显式声明
+    受信根把 env 面打开。`required=False` 只做「声明了就必须落在根内」。
+
+    声明了 `roots_env` 时：`value` 的归一化路径须落在其中某个根之下，否则
+    fail-closed。归一化 = `os.path.normcase(os.path.realpath(...))`（两侧同口径）。
+
+    残留面（如实，**本件不消除**）：能设置本进程 env 者同样能设置该受信根变量
+    ⇒ 对「已能设置 env 的攻击者」而言本面仍属**提权/持久化放大器**（与 main
+    既有定性一致），非默认可达 RCE。本件收的是**默认配置**这一档：一段从父环境
+    继承/残留的 `BRAIN_PYTHONPATH` 不再静默决定被执行的模块。
+    """
+    declared = os.environ.get(roots_env)
+    if not declared:
+        if required:
+            raise ValueError(
+                "%s 来自 env，但未声明受信根 %s ⇒ 默认不采信 env 给出的执行面"
+                "（#748 fail-closed）。请改用显式参数（`python=` / `pythonpath=`），"
+                "或把该目录加入 %s 后再试：%r" % (var, roots_env, roots_env, value))
+        return value
+    real = os.path.normcase(os.path.realpath(value))
+    for root in declared.split(os.pathsep):
+        if not root:
+            continue
+        root_real = os.path.normcase(os.path.realpath(root))
+        if real == root_real or real.startswith(root_real.rstrip("\\/") + os.sep):
+            return value
+    raise ValueError(
+        "%s 的值不在受信根内：%r（%s 已声明受信根；#748 fail-closed）"
+        % (var, value, roots_env))
+
+
+def _require_env_interpreter(value: str) -> str:
+    """`BRAIN_PYTHON` 兜底值校验（#652①，fail-closed；#748 收窄）。
+
+    该值决定**被拉起的可执行程序**，故要求绝对路径且是已存在的文件——
+    相对路径会按本进程 cwd 解析（cwd 可受外部影响），是比绝对路径更弱的面。
+    显式参数 `python=`（含 CLI `--brain-python`）不经本校验：那是调用方的显式
+    配置面，允许裸命令名（由 PATH 解析）。
+
+    #748 在上述两条之后追加两道（只收窄 env 兜底面）：
+
+    1. **解释器形状**：basename 须命中 `_PY_EXE_RE`（`python` / `python3` /
+       `python3.12` / `python.exe` / `python312.exe` …）。「存在性」不是白名单：
+       攻击者的毒目录本身存在、毒 `.cmd` 本身存在 ⇒ 旧口径放行任意可执行
+       （`.cmd` / `.bat` / 任意名），实测仍跑到攻击者的 `md_cg/mcp_server.py`
+       （#748：RCE 半成立）。
+    2. **受信根**（**默认 fail-closed**）：env 兜底面**必须**声明
+       `LINGSHU_BRAIN_PYTHON_ROOTS`，且归一化路径须落在其中某个根之下，
+       否则拒。未声明受信根 ⇒ 不采信 env 给出的解释器（改用显式参数 `python=`，
+       或声明受信根后再试）。
+
+    残留面（如实）：能设置本进程 env 者同样能设置受信根变量 ⇒ 对「已能设置 env
+    的攻击者」而言本面仍属**提权/持久化放大器**（与 main 既有定性一致），非默认
+    可达 RCE。形状校验挡住的是「任意可执行（如 `.cmd`）」这一档；受信根把默认
+    配置收成 fail-closed（一段继承/残留的 `BRAIN_PYTHON` 不再静默决定被执行的程序）。
+    """
+    if not os.path.isabs(value):
+        raise ValueError(
+            "BRAIN_PYTHON 必须是绝对路径（相对路径按本进程 cwd 解析，"
+            "该 cwd 不受本模块控制；#652① fail-closed）。显式参数 `python=` "
+            "不受此限，可传裸命令名")
+    if not os.path.isfile(value):
+        raise ValueError(
+            "BRAIN_PYTHON 指向的不是已存在的文件：%r（#652① fail-closed）"
+            % (value,))
+    if not _PY_EXE_RE.match(os.path.basename(value)):
+        raise ValueError(
+            "BRAIN_PYTHON 指向的不是解释器（解释器形状不符，须形如 python / "
+            "python3 / python3.12 / python.exe）：%r（#748 fail-closed）"
+            % (value,))
+    return _require_under_trusted_roots(value, _BRAIN_PYTHON_ROOTS_ENV,
+                                        "BRAIN_PYTHON", required=True)
+
+
+def _require_env_dir(value: str, var: str) -> str:
+    """`BRAIN_PYTHONPATH` 兜底值校验（#652①，fail-closed；#748 收窄）。
+
+    该值经 `_brain_env` 写进子进程 `PYTHONPATH`，CPython 启动期即按它解析模块
+    （含自动导入 `sitecustomize`）⇒ 等于「子进程启动期执行哪个目录的代码」。
+    故要求绝对路径且是已存在的目录。显式参数 `pythonpath=` 不经本校验。
+
+    #748 追加两道（只收窄 env 兜底面）：
+
+    1. **脑包结构**：目录下须解析出 `md_cg/__init__.py` 与
+       `md_cg/mcp_server.py`。同样地「存在性」不是白名单——攻击者的毒目录本身
+       就是一个存在的目录（#748）。
+    2. **受信根**（**默认 fail-closed**）：env 兜底面**必须**声明
+       `LINGSHU_BRAIN_PYTHONPATH_ROOTS`，且归一化路径须落在其中某个根之下，
+       否则拒。未声明受信根 ⇒ 不采信 env 给出的模块搜索目录（改用显式参数
+       `pythonpath=`，或声明受信根后再试）。
+
+    残留面（如实）：能设置本进程 env 者同样能设置受信根变量 ⇒ 对「已能设置 env
+    的攻击者」而言本面仍属**提权/持久化放大器**（与 main 既有定性一致），非默认
+    可达 RCE；结构校验挡住的是「任意存在的目录」这一档，受信根把默认配置收成
+    fail-closed。
+    """
+    if not os.path.isabs(value):
+        raise ValueError(
+            "%s 必须是绝对路径（#652① fail-closed；显式参数 `pythonpath=` 不受此限）"
+            % (var,))
+    if not os.path.isdir(value):
+        raise ValueError(
+            "%s 指向的不是已存在的目录：%r（#652① fail-closed）" % (var, value))
+    if not (os.path.isfile(os.path.join(value, "md_cg", "__init__.py"))
+            and os.path.isfile(os.path.join(value, "md_cg", "mcp_server.py"))):
+        raise ValueError(
+            "%s 指向的目录下未解析出 md_cg 脑包（须含 md_cg/__init__.py 与 "
+            "md_cg/mcp_server.py）：%r（#748 fail-closed）" % (var, value))
+    return _require_under_trusted_roots(value, _BRAIN_PYTHONPATH_ROOTS_ENV, var,
+                                        required=True)
 
 
 class BrainError(RuntimeError):
@@ -187,8 +401,17 @@ class MCPClient:
         if request_timeout is not None and (
                 not math.isfinite(request_timeout) or request_timeout <= 0):
             raise ValueError("request_timeout 必须是正的有限秒数或 None")
-        python = python or os.environ.get("BRAIN_PYTHON") or sys.executable
-        pythonpath = pythonpath or os.environ.get("BRAIN_PYTHONPATH")
+        # #652①：显式参数优先；env 兜底值**不可信**（父进程 env 决定被执行的
+        # 程序与模块）⇒ fail-closed 校验（绝对路径＋存在性＋形状/结构，
+        # #748）。见模块 docstring「父进程配置面」。
+        if not python:
+            env_python = os.environ.get("BRAIN_PYTHON")
+            python = (_require_env_interpreter(env_python) if env_python
+                      else sys.executable)
+        if not pythonpath:
+            env_pp = os.environ.get("BRAIN_PYTHONPATH")
+            if env_pp:
+                pythonpath = _require_env_dir(env_pp, "BRAIN_PYTHONPATH")
         root = root or os.environ.get("BRAIN_ROOT")
         if not pythonpath:
             raise ValueError(
@@ -363,6 +586,7 @@ class BrainNode:
     tags: List[str] = field(default_factory=list)
     spatial_coordinates: Optional[Dict[str, float]] = None   # {"x","y","z"}（米）
     state_attributes: Optional[Dict[str, str]] = None        # {"state": ...}
+    temporal_coordinate: Optional[float] = None
 
 
 @dataclass
@@ -380,14 +604,49 @@ class _ConnShim:
     ——issue #366：实体名跨场景不唯一，不作台账键）。
     其它 SQL 抛 NotImplementedError（不静默吞）；状态事件未入账时抛
     `BrainError`（同样不静默吞）。legacy 侧 `commit()` 为无操作。
+
+    **能力声明（issue #596）**：本垫片补齐 `DBAPI` 形状的连接协议
+    （`execute` / `executemany` / `commit` / `rollback`）并**显式声明边界**
+    ——`atomic_batch = False`（不保证批量原子性）。消费方
+    （`scene_model.ingest_scene` 的写入段）据此选路，不再用 AttributeError
+    做能力探测：声明为假 ⇒ 直接逐条，不走「批量→失败→回滚→重试」。
+
+    **状态输入的三种语义**（falsy 状态 = 「无状态可写」合法静默 / 非空且未落账
+    必抛 `BrainError` / 非空且落账成功正常返回）见 `execute` 的 docstring
+    ——那里写清了"为什么静默是对的"，免得下一轮把它当缺陷再报一次。
     """
 
     UPDATE_PREFIX = "UPDATE NODES SET STATE_ATTRIBUTES"
+
+    #: 能力声明：`False` = 本连接**不保证** `executemany` 的批量原子性。
+    #: 真 sqlite 连接没有这个属性 ⇒ 消费方 `getattr(conn, "atomic_batch", True)`
+    #: 取缺省真，走批量；本垫片声明为假，消费方直接逐条。
+    #: 为什么必须声明而不是"补上 executemany 就等于有事务"：见 `rollback`。
+    atomic_batch = False
 
     def __init__(self, store: "BrainStore"):
         self.store = store
 
     def execute(self, sql, params=None):
+        """翻译一条 legacy 状态写语句 → 脑侧状态事件。
+
+        **三态语义（钉在这里；别当缺陷再报一次）** —— 对齐仓内既有口径
+        `tests/test_state_write_observable.py` 的 T3：「空状态（`名称|类别|坐标|`）
+        属**无状态可写**，不报警、重建回落 neutral」。
+
+        | 输入 | 行为 | 告警 | 台账 |
+        |---|---|---|---|
+        | **falsy 状态**（`None` / `""`，或 payload 无 `state` 键） | 「**无状态可写**」⇒ **合法静默**：`BrainStore.record_state` 第一句就 `if not state: return False`（**不发 RPC**），本方法**不抛** | **无** | **不落** |
+        | **非空状态 + `record_state` 返回 False** | 账该落却没落（脑端 RPC 回 `ok=False`）⇒ 抛 `BrainError` | **必须可见**（调用方 `ingest_scene` 转 `RuntimeWarning`，见 T2） | 不落 |
+        | **非空状态 + 落账成功** | 正常返回 `self`（DBAPI 形状） | 无 | 落 1 条 |
+
+        为什么 falsy **不**等同于"写失败"（这是仓内既有口径，不是本件新发明）：
+        `ingest_scene` 对**第 4 字段留空**的行给出 `state=""` —— 那是**格式合法**
+        的输入，语义是"该实体本轮没有状态"，不是"状态写失败了"（T3 的既有断言）。
+        若把它当失败，则所有不带状态的场景行每次导入都刷 `RuntimeWarning`
+        ⇒ 告警失去判别力，T2「台账不可写必须告警」也就跟着不可信了。
+        反过来，**非空**状态失败必须响亮——这正是上面第二行的抛错。
+        """
         if not isinstance(sql, str) or not sql.strip().upper().startswith(self.UPDATE_PREFIX):
             raise NotImplementedError("brain conn 垫片只翻译状态写语句；收到：%r"
                                       % (str(sql)[:80],))
@@ -401,6 +660,41 @@ class _ConnShim:
                 "节点正文已写入、台账未落，重建世界会与节点内容不一致"
                 % (node_id, state))
         return self
+
+    def executemany(self, sql, seq_of_params):
+        """逐条翻译落账（与逐条 `execute` 路径**逐位等价**），返回处理条数。
+
+        为什么"批量"在这里只能是逐条（issue #596）：本垫片背后是**跨进程 RPC**
+        （`store.record_state` → `client.call("cg", {op: state_event})`），物理上
+        **不存在真事务**——第 k 条失败时，前 k−1 条已即时落进 append-only 事件台账，
+        撤不回来。故此处逐条调用 `execute`，语义与逐条路径完全相同，只是把连接
+        **协议的形状**补齐，让消费方不必再用 AttributeError 探测能力。
+
+        任一条抛错立即向上抛（不吞、不假装部分成功）。调用方判断"能否靠批量兜底"
+        的唯一依据是 `atomic_batch`——本类恒 `False`，所以 `ingest_scene` 在脑侧
+        直接走逐条，不会先批量再回退。
+        """
+        n = 0
+        for params in (seq_of_params or ()):
+            self.execute(sql, params)
+            n += 1
+        return n
+
+    def rollback(self):
+        """**显式无操作** —— 这不是"假装回滚成功"，是确无可回滚。
+
+        物理事实（决定本方法只能是 no-op）：`record_state` → `client.call("cg", …)`
+        是对**另一进程（脑端 MCP）**的 RPC，每条状态事件在 `execute` 返回时就已
+        即时落账（append-only 台账），本层**没有隐式事务可撤销**。
+
+        写进协议是为了让调用方不必用 AttributeError 探测能力（issue #596），
+        **不是**承诺"批量失败可以靠它回退"。调用方必须看 `atomic_batch`：本类为
+        `False` ⇒ 批量部分失败不可回退 ⇒ 消费方**不得**走"批量→失败→rollback→
+        逐条重试"——那会把已成功落账的事件**重复落账**（append-only），且重试若
+        成功连告警都不会发（实测 3 实体、第 2 条失败 ⇒ 5 次 state_event、
+        台账 4 行、首实体 2 行、0 告警）。
+        """
+        return None
 
     def commit(self):        # noqa: D102 —— 事件已即时落账，无事务
         pass
@@ -417,6 +711,19 @@ class BrainStore:
         self.conn = _ConnShim(self)          # legacy ingest_scene 的直写出口
 
     # ---- M1 读向 ----
+    def read_content(self, node_id: str) -> str:
+        """按已知记忆 ID 经 MCP 完整读取正文，包含脑端的续读页。"""
+        return self._content(self.client.call("cg", {"op": "read", "node_id": node_id}))
+
+    def _content(self, node: Dict) -> str:
+        parts = [str(node.get("content") or "")]
+        page = node
+        while page.get("truncated"):
+            page = self.client.call("cg", {"op": "read", "node_id": str(node["id"]),
+                                            "offset": page["next_offset"]})
+            parts.append(page["content"])
+        return "\n".join(part.rstrip("\n") for part in parts)
+
     def _state_map(self, subjects: Optional[List[str]] = None) -> Dict[str, str]:
         """活动状态槽位投影：subject → value（slot=「状态」）。
 
@@ -470,10 +777,14 @@ class BrainStore:
     DEFAULT_ACCEPT_STATES = frozenset({"ACCEPT", "BLINDSPOT", "DEFER"})
 
     def get_nodes_by_tag(self, tag: str, limit: int = 200,
-                         accept_states: Optional[set] = None) -> List[BrainNode]:
+                         accept_states: Optional[set] = None,
+                         seed_query: Optional[str] = None,
+                         view: Optional[str] = None) -> List[BrainNode]:
         """cg(op=read) 取候选 → **适配器侧按 tag 过滤**（裁定三：零脑改）→ BrainNode。
 
         坐标取 `frontmatter.spatial.coords3d`（裁定二）；状态取槽位投影。
+        limit 为标签过滤前的候选预算；保留既有 max(1, int(limit)) 地板，
+        所以 limit=0 仍请求一个候选，不表示空查询。状态投影另受 500 条预算约束。
 
         `limit` 译为脑端条数参数 `k`（issue #2）：脑端 `cg(op=read)` 的条数口径
         是 `k`（`_int_arg(a, "k", 20)`）；`limit` 在非 `budget_tokens` 路径**不被
@@ -499,8 +810,10 @@ class BrainStore:
         want = max(1, int(limit))
         k = want
         while True:
-            resp = self.client.call("cg", {"op": "read", "query": self.seed_query,
-                                           "k": k})
+            args = {"op": "read", "query": self.seed_query if seed_query is None else seed_query, "k": k}
+            if view is not None:
+                args["view"] = view
+            resp = self.client.call("cg", args)
             out: List[BrainNode] = []
             for item in (resp.get("results") or resp.get("items") or []):
                 node = item.get("node") or item
@@ -520,10 +833,11 @@ class BrainStore:
                               "z": float(sp.get("z", 0.0))}
                 out.append(BrainNode(
                     id=str(node.get("id") or fm.get("id") or ""),
-                    content=str(node.get("content") or ""),
+                    content=self._content(node),
                     tags=tags,
                     spatial_coordinates=coords,
-                    state_attributes=None))
+                    state_attributes=None,
+                    temporal_coordinate=fm.get("created_at")))
             if len(out) >= want:
                 break                             # 本场景候选已够 limit
             meta = resp.get("meta") or {}
@@ -650,13 +964,14 @@ def connect(python: Optional[str] = None, pythonpath: Optional[str] = None,
 # ---------------------------------------------------------------------------
 
 
-def load_world_from_brain(agent_or_store, tag: str = "spatial"):
-    """M1 便捷：脑为底重建世界模型（scene_model.load_world_from_memory 零改动）。"""
+def load_world_from_brain(agent_or_store, tag: str = "spatial", limit: int = 200):
+    """M1 便捷：按显式候选预算重建世界模型（默认 200，非全库枚举）。"""
     from .scene_model import load_world_from_memory
-    return load_world_from_memory(agent_or_store, tag=tag)
+    return load_world_from_memory(agent_or_store, tag=tag, limit=limit)
 
 
-def ingest_scene_to_brain(agent: BrainAgent, scene_desc: str, tag: str = "spatial"):
+def ingest_scene_to_brain(agent: BrainAgent, scene_desc, tag: str = "spatial",
+                          relations=None):
     """M2 便捷：场景描述入脑（scene_model.ingest_scene 零改动；状态经 conn 垫片入账）。"""
     from .scene_model import ingest_scene
-    return ingest_scene(agent, scene_desc, tag=tag)
+    return ingest_scene(agent, scene_desc, tag=tag, relations=relations)

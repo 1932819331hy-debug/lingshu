@@ -12,6 +12,7 @@ from __future__ import annotations
 
 import argparse
 import collections
+import datetime
 import io
 import json
 import os
@@ -42,6 +43,55 @@ def neutral_path(p):
     return tail_seg(p) if is_abs_path(p) else p
 
 
+#: t 的可接受范围上界（issue #616）：time.localtime 可表示域的顶点
+#: 3000-12-31T23:59:59Z（epoch 32535215999）。NaN/±inf 与任何数的比较
+#: 恒为 False，链式区间判定 `0 <= v <= _TS_MAX` 一并拒收。
+_TS_MAX = 32535215999.0
+
+
+def ts_to_float(v, nid):
+    """把 _audit.jsonl 记录的 t 归一成 epoch 秒（issue #531 / #616）。
+
+    _audit.jsonl 的生产方在仓外，t 无类型契约：数字须落在 time.localtime
+    可表示域 [0, _TS_MAX]（#616：#531 只挡类型不挡范围——NaN/inf/越界
+    epoch 原样放行，在下游 ``time.localtime(...)`` 处 OSError/ValueError
+    ⇒ 整轮构建崩溃）；字符串尝试按 ISO 日期解析（无时区视为 UTC，与
+    derive_edges R4 的 gmtime 口径一致）；None/空串沿旧口径记 0；非法值
+    stderr 告警并返回 None，调用方跳过该记录——不再整轮崩溃。
+    """
+    if v is None or v == "":
+        return 0
+    if isinstance(v, (int, float)):
+        if 0 <= v <= _TS_MAX:
+            return v
+        print("[warn] session_chains: 节点 %r 的 t=%r 越界（不在 localtime 可表示域），已跳过该记录"
+              % (nid, v), file=sys.stderr)
+        return None
+    if isinstance(v, str):
+        s = v.strip()
+        if not s:
+            return 0
+        dt = None
+        try:
+            dt = datetime.datetime.fromisoformat(s)
+        except ValueError:
+            if s.endswith("Z"):
+                try:
+                    dt = datetime.datetime.fromisoformat(s[:-1] + "+00:00")
+                except ValueError:
+                    dt = None
+        if dt is not None:
+            if dt.tzinfo is None:
+                dt = dt.replace(tzinfo=datetime.timezone.utc)
+            return dt.timestamp()
+        print("[warn] session_chains: 节点 %r 的 t=%r 非法，已跳过该记录"
+              % (nid, v), file=sys.stderr)
+        return None
+    print("[warn] session_chains: 节点 %r 的 t=%r 类型非法，已跳过该记录"
+          % (nid, v), file=sys.stderr)
+    return None
+
+
 def main(argv=None):
     ap = argparse.ArgumentParser(description="会话链构建器")
     ap.add_argument("--audit", required=True, help="_audit.jsonl 路径")
@@ -53,7 +103,8 @@ def main(argv=None):
 
     t0 = time.time()
     node_sess, node_ts = {}, {}
-    with io.open(args.audit, encoding="utf-8", errors="replace") as f:
+    # utf-8-sig 剥 BOM：json.loads 首行遇 U+FEFF 直接抛异常被 except 吞掉，首条 add 事件丢失（issue #412 同族）。
+    with io.open(args.audit, encoding="utf-8-sig", errors="replace") as f:
         for line in f:
             if '"add"' not in line:
                 continue
@@ -64,9 +115,31 @@ def main(argv=None):
             if d.get("op") != "add":
                 continue
             nid = d.get("id")
-            if nid and nid not in node_ts:
-                node_ts[nid] = d.get("t") or 0
-                node_sess[nid] = d.get("session") or "unknown"
+            sid = d.get("session")
+            # #616：session 与 t 同为仓外生产、无类型契约——数字/映射等
+            # 非字符串值通过真值判定，却在下游 "session:"+s 拼接与枢纽
+            # label 处 TypeError ⇒ 整轮构建崩溃。#300 的修复建议本就要求
+            # 加该防护。与 #531 同口径：告警并跳过该记录（缺/空 session
+            # 仍按 #300 静默跳过，不告警）。
+            if sid is not None and not isinstance(sid, str):
+                print("[warn] session_chains: 节点 %r 的 session=%r 类型非法，已跳过该记录"
+                      % (nid, sid), file=sys.stderr)
+                continue
+            if nid and nid not in node_sess and sid:
+                # #300：缺会话 id 的节点**不并入**伪会话 "unknown"。
+                #   旧实现 `d.get("session") or "unknown"` 把一切无归属节点塞进同一
+                #   伪会话，再按时间戳两两串成 sequential 边 —— 不同进程/不同来源的
+                #   无归属节点被伪造成「同一会话的先后活动」，是凭空造出的关系。
+                #   判据来源：经验标定，追不到（缺陷 #300；本文件无对应理论章节）。
+                #   判别力取舍：不再产出 session:unknown 枢纽与其 sequential 边；
+                #   代价是无归属节点在本产物里彻底不出现（它们本就没有会话归属可言）。
+                # #531：t 无类型契约（生产方在仓外）；非法值告警并跳过该记录，
+                # 不整轮崩溃。
+                ts = ts_to_float(d.get("t"), nid)
+                if ts is None:
+                    continue
+                node_ts[nid] = ts
+                node_sess[nid] = sid
 
     with io.open(args.graph, encoding="utf-8") as f:
         g = json.load(f)
@@ -97,8 +170,11 @@ def main(argv=None):
             prev = nid
         chains.append({"session": s, "nodes": len(items),
                        "span": [items[0][0], items[-1][0]],
-                       "range": [time.strftime("%Y-%m-%d %H:%M", time.localtime(items[0][0])),
-                                 time.strftime("%Y-%m-%d %H:%M", time.localtime(items[-1][0]))]})
+                       # #639：range 展示串改用 UTC（gmtime），与 R4 日枢纽（#360）同判据——
+                       # 同一 graph.json/_audit.jsonl 在任意 TZ 的机器上必须产出逐字相同的
+                       # 产物（可复现性优先于本地墙钟语义；span 仍是 epoch 数值不受影响）。
+                       "range": [time.strftime("%Y-%m-%d %H:%M", time.gmtime(items[0][0])),
+                                 time.strftime("%Y-%m-%d %H:%M", time.gmtime(items[-1][0]))]})
 
     chains.sort(key=lambda c: -c["nodes"])
     out = {
@@ -113,7 +189,13 @@ def main(argv=None):
         },
         "hubs": hubs,
         "edges": edges,
-        "chains": chains[:40],
+        # #648：chains 全量落盘，不再 chains[:40]——旧口径让同一份产物自相矛盾：
+        #   meta.sessions 写全量（45）、hubs/edges 不截断，chains 却只落前 40 条 ⇒
+        #   第 41 名起的会话「枢纽在、边在、链不在」。体积考量实测不成立：45 会话
+        #   产物 35180 B 中 chains 段 4680 B（13%），被截的 5 条仅 ~585 B（1.7%），
+        #   大头 edges（26185 B，74%）本就不截断；且 chains 无任何下游代码读
+        #   （build_viewer 只取 hubs/edges）。单一口径：meta.sessions == len(chains)。
+        "chains": chains,
     }
     os.makedirs(args.out, exist_ok=True)
     if args.write:
@@ -124,6 +206,9 @@ def main(argv=None):
              out["meta"]["counts"]["sequential_edges"], out["meta"]["counts"]["hub_edges"], len(hubs)))
     for c in chains[:8]:
         print("  %s  %s ~ %s  %d 节点" % (c["session"], c["range"][0], c["range"][1], c["nodes"]))
+    # #648：明细行是纯展示 top-N（数据本身全量在产物里），超样时显式披露，不再隐含
+    if len(chains) > 8:
+        print("  …（明细仅列前 8 条，共 %d 条，全量见 session_chains.json）" % len(chains))
     return 0
 
 

@@ -32,6 +32,7 @@ class VPrim:
     confidence: float = 0.5
     ts: float = field(default_factory=time.time)
     source: str = "detect"              # yoloworld/locate/diff/control
+    eid: str = ""                      # 可选：检测/跟踪器给出的稳定实例身份
 
     # ---- 派生 ----
 
@@ -77,7 +78,18 @@ def _center(b: BBox) -> Tuple[float, float]:
 
 
 def _overlap(a: BBox, b: BBox) -> float:
-    """重叠面积占较小者比例 [0,1]。"""
+    """重叠面积占较小者比例 [0,1]（与坐标单位/缩放无关）。
+
+    #309（成立）：分母此前写作 `max(1.0, min(a_area, b_area))`——用 1.0 防除零，
+    等于假定面积至少 1 像素²。但在 `inter > 0` 的分支里两框面积都 ≥ inter > 0，
+    除零根本不会发生；该钳位只把**小面积/归一化坐标**下的比值压低：
+    同一对框整体缩放后关系从 `overlap` 变 `adjacent`（实测 ①像素 0.64/overlap
+    vs 归一化 0.16/adjacent；②亚像素框真实 0.766 读成 0.49）。
+    现改为 `inter / min(a_area, b_area)`；宽高都 ≥1 的像素框结果不变。
+    判据来源：经验标定（本件 #309；仓内无「vprim 重叠率」理论章节——
+    docs/theory/世界模型与语义时空图_完整理论整理与实现路线.md 未涉及）。
+    削掉的判别力：无（钳位仅造成单位依赖，不是有意的判别口径）。
+    """
     ix = max(0, min(a[2], b[2]) - max(a[0], b[0]))
     iy = max(0, min(a[3], b[3]) - max(a[1], b[1]))
     inter = ix * iy
@@ -85,7 +97,8 @@ def _overlap(a: BBox, b: BBox) -> float:
         return 0.0
     a_area = (a[2] - a[0]) * (a[3] - a[1])
     b_area = (b[2] - b[0]) * (b[3] - b[1])
-    return inter / max(1.0, min(a_area, b_area))
+    # inter > 0 ⇒ 两框面积皆 > 0，无除零风险（#309）
+    return inter / min(a_area, b_area)
 
 
 def spatial_relation(a: BBox, b: BBox) -> Dict:
@@ -152,6 +165,23 @@ def count_vprims(vprims: List[VPrim], category: str = None) -> Dict:
     }
 
 
+#: 锚点坐标组（**有符号**）。写出侧 `anchor_text()`/`describe()` 用 `int(v)`，
+#: 负坐标是常见产物（检测框溢出画面、退化框 `x2<x1`）——理由见 `parse_anchor`
+#: docstring 的 #730/#753 段。本常量是坐标组的**唯一真源**：读回侧
+#: （`parse_anchor`）与扫描侧（`ANCHOR_SCAN_PATTERN`）都从它拼出，两侧**不可能**
+#: 再各自收窄格式。#718 的第二份副本（core 内联 `\d+`）正是「单点真源被破坏」
+#: 的形态：扫描侧先按无符号过滤，负坐标锚点连匹配都过不了（`regex_hits=0`），
+#: 根本没机会进 `parse_anchor`，空间关系表整体静默失效。
+ANCHOR_COORD_PATTERN = r"-?\d+"
+
+#: 锚点**扫描形态**：从任意文本里**定位**锚点 token `类别@(x1,y1,x2,y2)`。
+#: 与 `parse_anchor` 共用 `ANCHOR_COORD_PATTERN`（单一真源）。core 的
+#: `_vprim_context_for_claim` 在其惰性导入处取用本常量——**勿**再内联字面量。
+ANCHOR_SCAN_PATTERN = (
+    r"[\w\-]+@\(" + ",".join([ANCHOR_COORD_PATTERN] * 4) + r"\)"
+)
+
+
 def parse_anchor(text: str) -> Optional[VPrim]:
     """从视觉锚点文本解析 VPrim：`cat@(x1,y1,x2,y2)`（推理链引用用）。
 
@@ -160,18 +190,38 @@ def parse_anchor(text: str) -> Optional[VPrim]:
         `person-1` 之外的 `obj.2` / `a/b` / 含非 \\w 的类别会被截断成末段
         （`obj.2@(...)` 读回 `2`）——现放宽到非空白/非 `@`/非括号。
       - describe() 尾部的 `conf=` 一并读回；旧实现丢弃该字段 ⇒ 一律回默认 0.5。
+      - 坐标允许**负号**（#730）：写出侧 `int(v)` 天然带 `-`，而检测框溢出画面
+        （目标部分在画布外）时 x1/y1 为负是常见形态——`docs/second_third_batch_usage.md`
+        自带的 `bbox=[px-20, py-30, px+20, py+30]` 配方在目标靠左/靠上时就产出负坐标；
+        世界侧 `Camera3D.unproject` 对负像素同样线性可逆，全仓无任何非负钳位
+        （`world3d.build_camera_observation` / `add_vprim` 只校验有限数）。故坐标
+        本就是**有符号**量，读回侧正则必须收 `-?\\d+`；旧式 `\\d+` 是读回侧单方面
+        收窄了格式 ⇒ 自家 `anchor_text()`/`describe()` 的负坐标产物读不回。
+      - `axb` 段（宽高）同样允许**负号**（#753）：`describe()` 的宽高由 `x2-x1`/
+        `y2-y1` 求得，x2<x1 的退化框（如目标被检出框反向包含）会产出 `-40x-40`。
+        旧式宽高段只收非负数字 ⇒ 该段**整体匹配不上**，而 `conf=` 被同一个可选组
+        `(?: 空白 + 宽高 + conf=值 )?` 包住 ⇒ 连带吞掉 conf 组，置信度**静默降级**
+        为默认 0.5（不报错、不告警）。故宽高与坐标一样是有符号量，读回侧须收可选
+        负号；conf 组并改用**具名组**，避免以后再加捕获组时位置索引错位。
       - 正则不再带可变长前缀（旧式 `([\\w\\-]+)@\\(` 的无边界前缀在长词串上
         平方回溯：`'a'*16000` 实测 0.69s，调用方 core.world3d build / vprim_query
         对库内 content 不截断 → 可被内容拖垮）。现改为先定位字面量 `@(`
         （正则以 `@` 起首，只在该字面量处展开，整体线性），再线性回扫取类别。
     类别自身含空白时格式与 vprims_to_scene_text 的 `[视觉原语…] ` 前缀无法区分，
     不在支持范围（保持「紧邻 `@(` 的非空白串」这一口径）。
+      - 坐标组改为由模块级常量 `ANCHOR_COORD_PATTERN` 拼出，且扫描形态
+        `ANCHOR_SCAN_PATTERN` 与它**同源**（#718）：本函数在 #730 放宽负号后，
+        core 的 `_vprim_context_for_claim` 仍内联着**第二份坐标组副本**
+        （写死 `\\d+`）——扫描先于解析把负坐标锚点滤掉（`regex_hits=0`），
+        本函数的放宽在扫描入口被整体架空。单点真源被破坏，故两侧合流到
+        同一个常量，**不再**存在可各自收窄格式的第二份副本。
     """
     import re
 
     m = re.search(
-        r"@\((\d+),(\d+),(\d+),(\d+)\)"
-        r"(?:\s+\d+x\d+\s+conf=([0-9]*\.?[0-9]+))?", text)
+        r"@\((" + ANCHOR_COORD_PATTERN + r"),(" + ANCHOR_COORD_PATTERN
+        + r"),(" + ANCHOR_COORD_PATTERN + r"),(" + ANCHOR_COORD_PATTERN + r")\)"
+        r"(?:\s+-?\d+x-?\d+\s+conf=(?P<conf>[0-9]*\.?[0-9]+))?", text)
     if not m:
         return None
     i = m.start()
@@ -182,7 +232,7 @@ def parse_anchor(text: str) -> Optional[VPrim]:
         return None
     cat = text[j:i]
     x1, y1, x2, y2 = (int(g) for g in m.groups()[:4])
-    conf = float(m.group(5)) if m.group(5) else 0.5
+    conf = float(m.group("conf")) if m.group("conf") else 0.5
     return VPrim(category=cat, bbox=(x1, y1, x2, y2),
                  confidence=conf, source="anchor")
 

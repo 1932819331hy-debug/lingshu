@@ -52,11 +52,55 @@ _WRITE_GUARD_WHITELIST = {
     ("LayeredStore", "_tx"):
         "装饰器实现本体：@_transactional 的 wrapper 调用的就是它——若给它再套装饰器即"
         "无限递归。其自身即事务边界（正常 commit / 异常 rollback 后原样抛）。",
-    ("LayeredStore", "increment_access"):
+    ("LayeredStore", "_commit_locked"):
+        "**事务内提交**辅助（#665）：@_transactional 方法体内的 `self.conn.commit()` 一律"
+        "改走它——只有最外层（depth==1）真提交，内层退回 SAVEPOINT RELEASE。它不自己开"
+        "事务，只委托自身 `self.conn.commit()` / `RELEASE SAVEPOINT`，故不挂装饰器。",
+    ("LayeredStore", "increment_access_many"):
+        "**旁路写**形态（`increment_access` 的批量入口，PR #513 把两处实现收成这一个单点）："
         "另开独立连接 `sqlite3.connect(self.db_path, timeout=0)` 并自带 try/finally: "
         "obs.close()，**不共用** self.conn；PR #202 明确列为「另一议题」（访问计数为统计"
         "性质，拿不到锁即放弃，不阻断检索主流程）。其写不落在 self.conn 的事务面上，"
         "故不适用本装饰器。",
+    ("LayeredStore", "_strip_incident_edges"):
+        "#168 抽出的**删边助手**：只接收调用方（`delete_node` / `decay_cycle` / "
+        "`_trim_self_snapshots`，三者均已挂 @_transactional）传入的游标 `c`，在**同一**"
+        "事务内执行 `action_logs` 审计 INSERT ＋ `DELETE FROM edges`。给它再套 "
+        "@_transactional 会另起一层 `self._tx()` 边界（中途 commit/rollback），把调用方"
+        "的原子事务切开——故按「共享调用方事务边界的内部助手」豁免。",
+    ("SpacetimeMemoryEngine", "export_all"):
+        "#383 起本方法在本连接不在事务中时显式 `BEGIN`（**延迟读事务**，WAL 下整趟"
+        "导出共用一个快照）并在读完后 `commit` 收尾。该 `commit()` 结的是**读事务**"
+        "（快照隔离），本方法对库**零写**——不是写点，故不挂 @_transactional（`_tx`"
+        "的边界也不会给 SELECT 开读快照）。同理 `_existing_tables` / `rows` 只读。",
+
+    # ---- PR #429（结构事件受保护留史）：以下方法**自身即事务边界** ----
+    # 共同理由：它们要么自开 `_structure_event_transaction`（BEGIN IMMEDIATE / SAVEPOINT），
+    # 要么接收调用方传入的游标在**同一**事务内写；挂 @_transactional 会在其外再套一层
+    # `_tx()` 边界，而 `_tx` 出口**会 commit**（见上一条）⇒ 把调用方尚未完成的事务
+    # 提前提交。实测后果：终裁的 `UPDATE verifier_standards` 先落盘，随后外层工作单元回滚
+    # 已无法撤销它（tests/test_structure_events.py 的故障回滚用例即钉此）。
+    ("LayeredStore", "_structure_event_transaction"):
+        "#429 的结构事件工作单元**本体**：自开 BEGIN IMMEDIATE / SAVEPOINT，出口 commit 或"
+        "回滚——它就是事务边界。给它再套 @_transactional 会另起一层边界（提前 commit），"
+        "与已豁免的 `_tx` 同类。",
+    ("LayeredStore", "_insert_structure_event"):
+        "#429 抽出的**留史助手**：只接收调用方传入的游标，在同一事务内执行 nodes INSERT ＋"
+        "action_logs 审计 INSERT。给它再套 @_transactional 会中途 commit 调用方事务。"
+        "与已豁免的 `_strip_incident_edges` 同款。",
+    ("LayeredStore", "migrate_v17_coordinates"):
+        "#429 起迁移的数据变更、事件节点与操作记录收进自开的 `_structure_event_transaction`；"
+        "本方法即事务边界，再叠 @_transactional 会在出口提前 commit、破坏「留史失败即回滚迁移」"
+        "（tests/test_structure_events.py 钉此）。",
+    ("LayeredStore", "adjudicate_verifier_standard"):
+        "#429 起本方法要么用调用方经 `_cursor` 传入的事务，要么自开"
+        "`_structure_event_transaction`；挂 @_transactional 会提前 commit 调用方事务。",
+    ("SpacetimeMemoryEngine", "adjust_attention_weight"):
+        "#429 起自开 `_structure_event_transaction`，把「内存权重 + engine_meta 持久化"
+        "+ 留史」收进一个工作单元，异常时回退内存权重后原样抛；本方法即事务边界。",
+    ("SpacetimeMemoryEngine", "adjudicate_verifier_standard"):
+        "同 `adjust_attention_weight`：#429 起因引擎侧自开工作单元，把裁决、engine_meta"
+        "持久化与留史收进同一事务，失败时盘上与内存配置一并回退。",
 }
 
 

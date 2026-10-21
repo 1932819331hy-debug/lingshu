@@ -64,6 +64,84 @@ def hit_set(data):
     return {(h["file"], h["line"], h["rule"]) for h in data["new_violations"]}
 
 
+def _marker_line(rel: str, marker: str, nth: int = 1) -> int:
+    """按片段文本在文件内定位第 nth 处出现，返回 1-based 行号。
+
+    **形态锚**（不钉死绝对行号）——与下方 EXPECTED_MARKERS 同一口径：行号锚会被
+    后续无关增删顶漂（P2 在 stable_lease.py 上方插行，使该命中 67→88，直接让本文件
+    的 4 条断言全红）。片段若被删除/改写则当场失败，判别力不降、断言不恒真。
+    """
+    lines = (REPO_ROOT / rel).read_text(encoding="utf-8").splitlines()
+    hits = [i + 1 for i, text in enumerate(lines) if marker in text]
+    assert len(hits) >= nth, \
+        "形态锚未命中：%s 里找不到第 %d 处 %r" % (rel, nth, marker)
+    return hits[nth - 1]
+
+
+# 真实仓库当前的两条命中，各以**形态锚**定位（见 _marker_line 说明）：
+#   · stable_lease —— 手写同核 exp(-γ·t)（R1，既有，已登记 baseline）
+#   · activation   —— #53 节点对级条件衰减 `d *= cond_match(...)`（R3b 形状级命中，已登记 baseline）
+_STABLE_LEASE_SPEC = ("lingshu/world/stable_lease.py",
+                      'decayed_conf = lease["confidence"] * math.exp(-self.gamma * age)', 1)
+_ACTIVATION_SPEC = ("lingshu/core/activation.py",
+                    "d *= cond_match(cur_cs.get(src), cur_cs.get(dst))", 1)
+
+
+#: 2026-10-14 新增：物理阻尼（8 处）与色调映射软肩（1 处）的 R1「形状级」命中。
+#: 与 `_ACTIVATION_SPEC` 同类——R1 的口径是「`exp(` 括号内以负号开头」，属形状级；
+#: 这些公式来自牛顿力学与呈现层光学，不是 time_core 的时间可信度核。已登记 baseline
+#: 并逐条注明性质（见 `tools/time_core_lint_baseline.txt` 的 2026-10-14 段）。
+_PHYSICS_DAMPING_SPECS = (
+    ("lingshu/world/physics.py", "e = [math.exp(-k * x) for x in tau]", 1),
+    ("lingshu/world/physics.py", "e = [math.exp(-k * x) for x in tau]", 2),
+    ("lingshu/world/physics.py", "e = math.exp(-kk * tau)", 1),
+    ("lingshu/world/physics.py", "e = math.exp(-z * w * tt)", 1),
+    ("lingshu/world/physics.py", "return (1.0 + w * tt) * math.exp(-w * tt)", 1),
+    ("lingshu/world/physics.py", "e = math.exp(-z * w * tt)", 2),
+    ("lingshu/world/physics.py", 'out["amplitude_ratio_per_period"] = math.exp(', 1),
+    ("lingshu/world/physics.py", 'out["amplitude_ratio_per_period"] = math.exp(', 2),
+)
+_SHADE_SHOULDER_SPEC = ("lingshu/world/shade_paint.py",
+                        "return SHOULDER + span * (1.0 - math.exp(-(v - SHOULDER) / span))", 1)
+
+#: 2026-10-15 新增（#607）：_KEEP_WORD 补 gamma/alpha/rho/tau/discount/lr 后，
+#: physics.py 新增 6 条 R3(c) `* tau` 形状级命中。该文件的 tau 一律是
+#: predict_at / projectile_state 的**流逝时间变量**（`tau = float(t) - t0`），
+#: 乘 tau 是运动学外推（p = p0 + v0·τ + ½a·τ² 等），不是保持率/衰减因子——
+#: 与 `_ACTIVATION_SPEC`（R3 形状级）同类，已逐条核实后登记 baseline 并注明
+#: 判据（见 `tools/time_core_lint_baseline.txt` 的 2026-10-15 #607 段）。
+_PHYSICS_TAU_SPECS = (
+    ("lingshu/world/physics.py", "vscale(a, 0.5 * tau * tau)", 1),   # 473 匀加速闭式（#662 +6 后行号）
+    ("lingshu/world/physics.py", "vscale(a, 0.5 * tau * tau)", 2),   # 477 抛体闭式
+    ("lingshu/world/physics.py", "e = math.exp(-kk * tau)", 1),      # 481 与已登记 R1 同行
+    ("lingshu/world/physics.py", 'model["omega"] * tau', 1),         # 488 圆周角度推进
+    ("lingshu/world/physics.py", 'model["v_up"] * tau', 1),          # 491 圆周竖直漂移
+    ("lingshu/world/physics.py", "v0[i] * tau", 1),                  # 937 抛体闭式返回
+)
+
+
+#: 2026-10-15 **物理仿真深化**（drag2 / slope_friction / rolling / collision +
+#: `Environment`/`simulate`）新增的命中。性质已在 lint 头部豁免表下**逐条复核**：
+#: R1 全部是物理阻尼/振子闭式解与 `_log_cosh`（softplus，纯函数）；
+#: R3 全部是运动学外推（`tau` 是流逝时间 t-t0，不是保持率）。
+#: 登记判据与先例同类（`_ACTIVATION_SPEC` / `_PHYSICS_DAMPING_SPECS` / `_PHYSICS_TAU_SPECS`）。
+_PHYSICS_DEEPENING_R1_SPECS = (
+    ("lingshu/world/physics.py", "math.log1p(math.exp(-2.0 * a))", 1),   # _log_cosh（softplus）—— drag2 位置闭式
+)
+_PHYSICS_DEEPENING_R3_SPECS = (
+    ("lingshu/world/physics.py", "u = u0 + g * tau / vt", 1),                        # drag2 tanh 参数
+    ("lingshu/world/physics.py", "float(drift[i]) * tau", 1),                        # drag2 横向匀速漂移
+    ("lingshu/world/physics.py", "s = v_s0 * tau + 0.5 * a * tau * tau", 1),         # slope_friction 沿坡位移
+    ("lingshu/world/physics.py", "v_s = v_s0 + a * tau", 1),                         # slope_friction 沿坡速度
+    ("lingshu/world/physics.py", "u_dir[i] * s + float(drift[i]) * tau", 1),         # slope_friction 世界坐标分解
+)
+
+
+def _anchor(spec):
+    rel, marker, nth = spec
+    return (rel, _marker_line(rel, marker, nth))
+
+
 def write_module(directory: Path, name: str, body: str) -> Path:
     directory.mkdir(parents=True, exist_ok=True)
     path = directory / name
@@ -479,7 +557,7 @@ def test_real_repo_default_baseline_exit_zero():
     assert data["summary"]["new"] == 0
     assert data["summary"]["total"] >= 1, "baseline 里没有任何真实命中，规则可能失效"
     registered = {(h["file"], h["line"], h["rule"]) for h in data["registered_violations"]}
-    assert ("lingshu/world/stable_lease.py", 67, "R1") in registered
+    assert _anchor(_STABLE_LEASE_SPEC) + ("R1",) in registered
     assert data["stale_baseline_entries"] == []
 
 
@@ -489,7 +567,7 @@ def test_real_repo_empty_baseline_exit_one_hits_stable_lease(empty_baseline):
     assert res.returncode == 1
     assert data["summary"]["new"] >= 1
     hits = hit_set(data)
-    assert ("lingshu/world/stable_lease.py", 67, "R1") in hits
+    assert _anchor(_STABLE_LEASE_SPEC) + ("R1",) in hits
     assert data["summary"]["new"] == len(data["new_violations"])
 
 
@@ -497,7 +575,8 @@ def test_real_repo_empty_baseline_text_mode_shows_hit(empty_baseline):
     res = run_lint("--baseline", str(empty_baseline))
     out = res.stdout.decode("utf-8")
     assert res.returncode == 1
-    assert "lingshu/world/stable_lease.py:67:R1" in out
+    rel, line = _anchor(_STABLE_LEASE_SPEC)
+    assert "%s:%d:R1" % (rel, line) in out
     assert "[新]" in out
 
 
@@ -520,15 +599,46 @@ def test_text_mode_runs_from_other_cwd(tmp_path):
     assert "退出码 0" in res.stdout.decode("utf-8")
 
 
-# ------------------------------------------- 判定回归：真实仓库当前唯一违规
+# ------------------------------------------- 判定回归：真实仓库当前命中集
 def test_real_repo_current_hit_set_is_exactly_stable_lease(empty_baseline):
-    """真实仓库（空 baseline）当前**有且只有** stable_lease.py:67:R1 一条。
+    """真实仓库（空 baseline）当前命中集**恰好**是下述各条（各以形态锚定位）。
 
     这是判定回归：若新增了其它命中，须先按 lint 头部豁免表复核，
     再决定登记 baseline 还是加豁免——不要直接改这条断言。
+
+    命中集历史变更（均按上述程序逐条复核后更新）：
+      · 1 → 2 条：`activation.py` 的 `d *= cond_match(...)`（#53 节点对级条件衰减修正）
+        ——R3(b) 的口径是「**任何** `*= …` 都命中」（形状级），而 `cond_match`
+        返回的是条件空间重合率、与 time_core 的时间衰减核不是同一量，且 `d` 是
+        装载期局部标量（无状态自指、无逐 tick 演化）⇒ 判「不按时间衰减核违规」，
+        **登记 baseline 并注明判据与削掉的判别力**（见 baseline 该行注释）。
+      · 2 → 11 条：2026-10-14 物理阻尼（8×R1）与色调映射软肩（1×R1）形状级命中
+        （`_PHYSICS_DAMPING_SPECS` / `_SHADE_SHOULDER_SPEC`，登记判据见 baseline）。
+      · 11 → 17 条：2026-10-15 #607 词表补 tau 后 physics.py 的 6 条 R3(c)
+        `* tau` 形状级命中（`_PHYSICS_TAU_SPECS`）——tau 是 predict_at 的流逝
+        时间变量（运动学外推），非保持率；逐条核实后登记（见 baseline #607 段）。
+      · 17 → 23 条：2026-10-15 **物理仿真深化**（drag2 / slope_friction / rolling /
+        collision + `Environment`/`simulate`）在 physics.py 行号之上插入大量新代码
+        ⇒ 既有条目全部 stale、同一违规以新行号出现。按 lint 头部豁免表**逐条复核 20 条**
+        后判定：R1 全部是**物理阻尼/振子闭式解**（fit_damped 基函数、predict_at('damped')
+        解析解、欠阻尼包络 exp(-ζωt)、(1+ωt)exp(-ωt) 临界阻尼、对数衰减率
+        exp(-2πζ/√(1-ζ²))）与 `_log_cosh`（softplus，纯函数）；R3 全部是**运动学外推**
+        （p0+v0·τ+½a·τ²、θ=θ0+ω·τ、s=v_s0·τ+½a·τ²、drag2 的 tanh 参数与横向漂移），
+        `tau` 是流逝时间 (t-t0) 而非保持率。**无一条**是 time_core 的时间可信度衰减核
+        ⇒ 照既有豁免类登记 baseline（**非**放宽判据），并逐条补写性质注释。
     """
     data = payload(run_lint("--baseline", str(empty_baseline), "--json"))
-    assert hit_set(data) == {("lingshu/world/stable_lease.py", 67, "R1")}
+    assert hit_set(data) == (
+        {
+            _anchor(_STABLE_LEASE_SPEC) + ("R1",),
+            _anchor(_ACTIVATION_SPEC) + ("R3",),
+        }
+        | {_anchor(sp) + ("R1",) for sp in _PHYSICS_DAMPING_SPECS}
+        | {_anchor(_SHADE_SHOULDER_SPEC) + ("R1",)}
+        | {_anchor(sp) + ("R3",) for sp in _PHYSICS_TAU_SPECS}
+        | {_anchor(sp) + ("R1",) for sp in _PHYSICS_DEEPENING_R1_SPECS}
+        | {_anchor(sp) + ("R3",) for sp in _PHYSICS_DEEPENING_R3_SPECS}
+    )
 
 
 # 判定回归的「形态锚」：(文件, 该文件内必须仍出现的源码片段, 第 n 次出现)
@@ -566,11 +676,21 @@ def test_judgement_regressions_not_reported(empty_baseline, rel, marker, nth):
 
 # ------------------------------------------------------------- baseline 机制
 def test_shipped_baseline_registers_stable_lease():
+    """出货 baseline 必须登记真实仓库当前的两条命中（各以形态锚定位行号）。
+
+    ★本断言此前钉死 `stable_lease.py:67:R1` —— 那是**手写行号锚**（本仓明文禁止），
+    被 P2 在该文件上方插行顶漂（67→88）后整批红。改用形态锚：行号由源码片段现算，
+    片段被删除/改写则当场失败，判别力不降。
+    """
     text = BASELINE.read_text(encoding="utf-8")
-    assert "lingshu/world/stable_lease.py:67:R1" in text
+    rel, line = _anchor(_STABLE_LEASE_SPEC)
+    assert "%s:%d:R1" % (rel, line) in text
+    rel2, line2 = _anchor(_ACTIVATION_SPEC)
+    assert "%s:%d:R3" % (rel2, line2) in text
     entries, errors = T.parse_baseline(text)
     assert errors == []
-    assert ("lingshu/world/stable_lease.py", 67, "R1") in entries
+    assert (rel, line, "R1") in entries
+    assert (rel2, line2, "R3") in entries
     # 每条登记都要有性质注释（机械可核：登记行后必须有 `#`）
     for raw in text.split("\n"):
         if "lingshu/" in raw and raw.lstrip().startswith("lingshu/"):

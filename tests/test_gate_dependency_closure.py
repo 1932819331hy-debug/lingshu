@@ -52,8 +52,20 @@ except ModuleNotFoundError:              # pragma: no cover
 REPO = os.path.dirname(os.path.dirname(os.path.abspath(__file__)))
 
 SCAN_DIRS = ("tests", "tools", "scripts")
-LOCAL_TOP = {"lingshu", "tools", "scripts", "tests", "experiments"}
-DIST_ALIAS = {"pil": "pillow", "yaml": "pyyaml", "pytest": "pytest"}
+#: 仓内可导入顶层名（**不是**第三方发行包 ⇒ 不要求 pyproject 声明）。
+#: ★ 判据：凡 `tests/` `tools/` `scripts/` 下会 `import` 的仓内包，其**顶层名**
+#:   必须登记在此；漏登记 ⇒ 本判据把它误判成「未声明的第三方依赖」而红。
+#:   本表看不出「住哪」—— `bridges/blender/wm_bridge` 这样的**非仓根**仓内包
+#:   只能靠人工登记（pyproject 的 packages.find 只收 `lingshu*`，它本就不是发行包）。
+#: ★ `wm_bridge` 于 2026-10-16 补入（冻结态全量回归唯一红灯的根因）：
+#:   它被 git 跟踪（`bridges/` 下 73 个文件），但此前 `tests/` 里**没有任何文件
+#:   真的 import 它** —— `test_issue427_shade_paint_guard.py` 只在注释与路径串里
+#:   提到它。影视层守卫（`test_film_contract_guard.py` / `test_film_criteria_guard.py`）
+#:   是首个真 import 它的用例（自行把 `bridges/blender` 插进 sys.path），
+#:   于是这个自 #286 起就存在的登记缺口第一次暴露。反向守卫见影视判据守卫 [H] 组。
+LOCAL_TOP = {"lingshu", "tools", "scripts", "tests", "experiments", "wm_bridge"}
+DIST_ALIAS = {"pil": "pillow", "yaml": "pyyaml", "pytest": "pytest",
+               "markdown_it": "markdown-it-py"}
 
 
 def _handler_reraises(handler):
@@ -177,7 +189,7 @@ def _declared():
 def test_scanner_is_alive():
     """量具自检：扫描器必须真的读到文件、且必须认出已知的两种形态。"""
     if tomllib is None:                                # pragma: no cover
-        pytest.skip("需要 tomllib（Python ≥3.11）解析 pyproject.toml；本仓 requires-python>=3.10")
+        pytest.skip("需要 tomllib（Python ≥3.11）解析 pyproject.toml；本仓 requires-python>=3.12")
     found = _scan()
     assert found, "扫描器没扫到任何第三方导入 ⇒ 它坏了（或 SCAN_DIRS 失效），本判据此时无判别力"
     assert "numpy" in found, "没扫到 `numpy`（已知的普通形态导入）⇒ 扫描器坏了"
@@ -190,7 +202,7 @@ def test_scanner_is_alive():
 def test_every_hard_third_party_import_is_declared():
     """判据：门禁会执行的硬依赖必须已在 pyproject 声明（dependencies 或任一 extra）。"""
     if tomllib is None:                                # pragma: no cover
-        pytest.skip("需要 tomllib（Python ≥3.11）解析 pyproject.toml；本仓 requires-python>=3.10")
+        pytest.skip("需要 tomllib（Python ≥3.11）解析 pyproject.toml；本仓 requires-python>=3.12")
     found = _scan()
     declared, raw = _declared()
     undeclared = {}

@@ -44,24 +44,53 @@
 
 ## 代码主体
 
-身体侧模块化导出 v0.1 已入仓——**`lingshu` Python 包**（core 存算一体 7 件 ·
-world 世界模型 24 件 · nn 自研神经网络 14 件 · gen 图像生成 7 件）：
+身体侧模块化导出 v0.1 已入仓——**`lingshu` Python 包**（core 存算一体 15 件 ·
+world 世界模型 41 件 · nn 自研神经网络 14 件 · gen 图像生成 7 件）：
 
 ```bash
 pip install -e .             # 轻核：core 纯标准库，零依赖可跑
 pip install -e ".[full]"     # 含 numpy / Pillow（world / nn / gen 的常规路径）
 ```
 
-**已测版本矩阵**（2026-10-08 实测，供选版参考）：Python 3.12.x · numpy 2.3.5 / 2.4.2 / 2.5.3 ·
-Pillow 12.2.0 / 12.3.0——`pyproject.toml` 中 extras 的版本区间由此收敛，**区间外未测不承诺**。
+结构事件与版本历史的写入接口、授权及同步边界见
+[结构历史与受保护写服务](docs/structure-events.md)。
 
-> 已知红（如实标注）：`tests/test_hex_text.py` 两处断言（`test_spatial_detect_finds_single_object`
-> = 6/16、`test_multimodal_check_clean_vs_corrupt` = 7/12，均低于阈值）在上述**全部版本组合**下
-> 读数**逐位一致**——**与 numpy / Pillow 版本无关**，上游同跑读数相同。详见
+**已测版本矩阵**（2026-10-08 实测，供选版参考）：Python 3.12.x · numpy 2.3.5 / 2.4.2 / 2.5.3 ·
+Pillow 12.3.0——`pyproject.toml` 中 extras 的版本区间由此收敛，**区间外未测不承诺**。
+
+> 曾登记为「已知红」的 `tests/test_hex_text.py` 两处断言（`test_spatial_detect_finds_single_object`
+> 6/16、`test_multimodal_check_clean_vs_corrupt` 7/12）**已随根因修复转绿**：`9bc4985`
+> （`image_to_grid` 晶格横向越出画幅 √3 倍，采纳自 PR #116）＋ `54cb5cb`（`hex_hier` 形状辅助
+> 损失按 OBJ 布局连续分组）。两条现随 `tests/` 自动收集真跑（`pytest tests/test_hex_text.py`
+> = 6 passed），门禁 `gate.yml` 的 `--deselect` 已摘除。原读数与讨论见
 > [issue #4](https://github.com/FuRongJun-1999/lingshu/issues/4)。
 
 依赖分层、环境自适应降级点与精修记录见
 [docs/intake/body-export-v0.1/](docs/intake/body-export-v0.1/)（导出说明 / 双清单审计 / 逐文件指纹清单）。
+
+### 桥接（进程外适配器 · 不进 wheel）
+
+[`bridges/`](bridges/) 是**进程外**适配器（当前为 Blender 世界模型桥
+[`bridges/blender/wm_bridge/`](bridges/blender/wm_bridge/)）：它在**宿主进程之外**（Blender 运行时）
+充当世界模型的外部观察者 / 真值源，并供货几何与锚点，经 stdio/HTTP 与仓内对接。
+它**刻意不进 `lingshu` 包、不进 wheel**——`pyproject.toml` 的 `packages.find` 只收 `lingshu*`，
+仓内依赖列表也不引入 `bpy`（Blender 内置模块，非 PyPI 包，无法在 `pyproject.toml` 声明）；
+运行它需宿主自带 **Blender 运行时**，缺失时 fail-closed 明确报错。
+设计与三条硬边界见 [DESIGN.md](bridges/blender/wm_bridge/DESIGN.md)。
+
+## 场景推演（可运行提案）
+
+`lingshu.world.scenario.ScenarioContext` 将同一组记忆用于角色材料、世界状态、
+故事提纲、历史证据和有界因果推演，保留四栏条件、来源及脑端资格。
+它是只读消费入口；角色子知识不会进入现实证据线，未实现的正文生成不冒充完成。
+安装轻核后即可运行五任务合成演示：
+
+```sh
+python -X utf8 -m lingshu.world.scenario_cli demo --mode all
+```
+
+现有 SQLite 图、脑端 MCP、PNG 呈现和独立验收见 [运行与交付](docs/scenario_usage.md)。
+待项目理论核的设计点见 [场景推演整合 v0.1](docs/plans/场景推演整合_v0.1.md)。
 
 ## 联系与贡献
 
@@ -74,6 +103,8 @@ Pillow 12.2.0 / 12.3.0——`pyproject.toml` 中 extras 的版本区间由此收
 **能被独立复跑**为准（[issue #1](https://github.com/FuRongJun-1999/lingshu/issues/1)
 是一个好例子——触发链、最小复现、判据三样都齐）。
 缺少证据、无法复现的描述，我们会先回帖请求补充证据再处置。
+
+安全相关缺陷的提交口径见 [`SECURITY.md`](.github/SECURITY.md)：含可直接利用细节的走私密通道，其余仍走公开 issue。
 
 ---
 

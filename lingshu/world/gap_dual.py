@@ -49,6 +49,7 @@ class GapDual:
         self.decay = decay          # λ_gap 衰减参数
         self._meta_history: List[float] = []
         self._last_meta = 0.0
+        self._prev_meta = 0.0       # #124：上一读数（trend 按方向判，非固定阈值）
 
     def compute_d_task(self, graph_paths: Optional[Dict] = None,
                        task_conditions: Optional[set] = None) -> Dict:
@@ -63,27 +64,64 @@ class GapDual:
                     "usable_paths": 0, "blindspot": True,
                     "note": "无可用知识路径 → D_task=∞ → BLINDSPOT 合法停止"}
 
-        usable = [p for p in graph_paths.values() if p.get("available")]
+        usable = [(pid, p) for pid, p in graph_paths.items()
+                  if p.get("available")]
         if not usable:
             return {"d_task": float("inf"), "path_count": len(graph_paths),
                     "usable_paths": 0, "blindspot": True,
                     "note": "全部路径不可达 → BLINDSPOT"}
 
-        # D_task = min 可用路径的距离（条件缺口惩罚：任务条件未覆盖则 dist 加权）
-        best = min(usable, key=lambda p: p.get("dist", float("inf")))
-        d_task = float(best.get("dist", float("inf")))
+        # #518：dist **缺失 / NaN / None** 的可用路径不参与选路——其距离无定义，
+        # 混进 `min` 会引出三种病（改前实测）：① cond_gap=0 的无 dist 路径按
+        # 字典序压过有限距离路径 ⇒ 明明存在有限 D_task 却报 BLINDSPOT；
+        # ② NaN 参与比较恒 False ⇒ 结果随 dict 插入顺序漂移；③ None 直接
+        # TypeError。选路面＝可用且 dist 为有限数的路径；该面为空 ⇒ 按 :16/:44
+        # 判 BLINDSPOT（与 #124「唯一可用路径缺 dist ⇒ ∞ ⇒ BLINDSPOT」同一口径，
+        # 从单路径推广到多路径）。
+        def _finite_dist(p: Dict):
+            try:
+                d = float(p.get("dist"))
+            except (TypeError, ValueError):
+                return None
+            return d if math.isfinite(d) else None
 
-        # 条件缺口：任务条件 vs 最佳路径条件集
-        cond_gap = 0
-        if task_conditions and best.get("cond_set"):
-            missing = task_conditions - set(best["cond_set"])
-            cond_gap = len(missing)
-        elif task_conditions:
-            cond_gap = len(task_conditions)
+        # #681：`_finite_dist` 的结果（已转 float 的有限值）**同一口径**用于
+        # 过滤、排序键与读数。旧实现过滤用 `_finite_dist`，排序键与读数却取原值
+        # `p.get("dist")` ⇒ 两套口径：数值字符串按字典序选路（"10" < "9" 为真，
+        # 静默错选）；字符串与浮点混用且 `_cond_gap` 平局时 `'<' not supported
+        # between float and str` 穿透（TypeError）。现将三者统一为 best_d。
+        valid = [(pid, p, _finite_dist(p)) for pid, p in usable
+                 if _finite_dist(p) is not None]
+        if not valid:
+            return {"d_task": float("inf"), "path_count": len(graph_paths),
+                    "usable_paths": len(usable), "blindspot": True,
+                    "cond_gap": None, "best_path": "",
+                    "note": "可用路径的 dist 全部缺失/非有限 → D_task=∞ → BLINDSPOT（#518）"}
+
+        # #124：D_task = min_{p 可用} dist(C_task, CondSet(p))（模块头 :12-13 的
+        # v1.2 图上定义）——「条件缺口」是这条距离的一部分：缺任务的条件的路径
+        # 更远。选路先比缺口（小者优先），缺口相同再比 dist。旧实现只按 dist
+        # 选路，`cond_gap` 在选完才算且不回写 ⇒ 注释 :73 承诺的「条件缺口惩罚」
+        # 从未生效（复现：p_far 完整覆盖 {a,b} 却输给缺 b 的 p_close）。
+        # `best_path` 取 path_id——docstring 规定 id 在**键**上，旧实现读
+        # `best["id"]`（值里没有）故任何合法输入下恒为空串。
+        # 判据来源：模块头 :12-13（v1.2 图上定义）+ triage #124 §问题 2/3。
+        def _cond_gap(p: Dict) -> int:
+            if task_conditions:
+                return len(set(task_conditions) - set(p.get("cond_set") or ()))
+            return 0
+
+        best_id, best, best_d = min(
+            valid, key=lambda kv: (_cond_gap(kv[1]), kv[2]))
+        d_task = best_d
+        cond_gap = _cond_gap(best)
+        # #124：可用路径缺 dist ⇒ d_task=∞，按 :16/:44 规定即为 BLINDSPOT
+        # （旧实现恒返回 blindspot=False，下游按 blindspot 分支会误判为可执行）。
+        blindspot = not math.isfinite(d_task)
 
         return {"d_task": round(d_task, 4), "path_count": len(graph_paths),
-                "usable_paths": len(usable), "blindspot": False,
-                "cond_gap": cond_gap, "best_path": best.get("id", ""),
+                "usable_paths": len(usable), "blindspot": blindspot,
+                "cond_gap": cond_gap, "best_path": best_id,
                 "note": "D_task 可增可减——学习后路径可用性提升则下降"}
 
     def update_meta(self, d_task: float, blindspot: bool,
@@ -92,15 +130,36 @@ class GapDual:
 
         观测代理：盲区事件（BLINDSPOT）+ 新条件暴露 + 时间衰减。
         返回当前 D_meta 估计（结构性边界，非数值计算进 D_norm）。
+
+        `d_task`：**本方法不使用**（#456）。按模块头 :4-10 的 D_task/D_meta
+        符号区分，D_meta 是「未被建模的现实总量」这一**结构性边界**，与当前
+        任务的操作性距离 D_task 解耦（D_meta 不纳入 D_norm 数值计算，映射
+        声明 DEV-002）。该形参为调用面兼容保留——显式接收并如实记录为无
+        操作，不静默吞掉名字，也不假装它生效（与 `brain_store.
+        BrainEngine.add_perception` 对 `skip_dedup` 的处理同一口径）。
+        判据来源：issue #456（实测 d_task 取 0.0/0.3/1.0/±1e6/±inf 共 7 值，
+        10 步读数逐位相同，而 blindspot/new_conditions_seen 的变化均有响应）。
+
+        #124：D_meta 是「未被建模的现实总量」，契约方向是**单调不减**（模块头
+        :6）。旧实现把 `cred_blend` 当更新式直接写回：无盲区、无新条件（即
+        「无干预」，growth=0）时估计值按 retain=1-decay 几何衰减，10 步后只剩
+        34.87% —— 方向与声明正好相反。现取**单调包络**：平滑值只作候选，
+        估计值取历史最大 ⇒ 无事件时 d/dt=0（持平，不再下降），有事件时 d/dt>0。
+        `decay` 仍参与动力学：增量须超过 `last·decay` 才能抬高估计值。
+        判据来源：模块头 :6 与 :91 docstring 的结构性论证（d(D_meta)/dt ≥ 0）。
+        削掉的判别力（如实声明）：`decay` 不再能拉低已有估计值——「不做功则
+        衰减」的旧行为被契约方向取代，指数衰减在读数上不可再观测。
         """
-        # 结构性增长：盲区/新条件暴露 → 增长；时间衰减 → 缓慢下降（需做功维持）
+        # 结构性增长：盲区/新条件暴露 → 增长（时间衰减只决定吸收速度）
         growth = 0.0
         if blindspot:
             growth += 1.0                     # 盲区暴露 → 未建模总量增加
         growth += new_conditions_seen * 0.5   # 新条件暴露
-        # 衰减（不做功则增长；做了功才可维持/下降）——统一时间核指数平滑
-        self._last_meta = max(0.0, cred_blend(self._last_meta, growth,
-                                              retain=1.0 - self.decay))
+        self._prev_meta = self._last_meta     # trend 按方向判（#124）
+        # 单调包络：平滑候选与历史最大取大 ⇒ 无事件不下降
+        self._last_meta = max(self._last_meta,
+                              cred_blend(self._last_meta, growth,
+                                         retain=1.0 - self.decay))
         self._meta_history.append(self._last_meta)
         if len(self._meta_history) > 1000:
             self._meta_history = self._meta_history[-1000:]
@@ -108,9 +167,17 @@ class GapDual:
 
     def state(self) -> Dict:
         """当前状态快照（D_task 计算 + D_meta 估计）。"""
+        # #124：trend 按**方向**判（与上一读数比较），不再用固定阈值 0.1——
+        # 旧判据在读数下降时仍报 "growing"（0.9→0.81 也报 growing）。
+        if self._last_meta > self._prev_meta:
+            trend = "growing"
+        elif self._last_meta < self._prev_meta:
+            trend = "declining"
+        else:
+            trend = "stable"
         return {
             "d_meta_est": round(self._last_meta, 4),
-            "d_meta_trend": "growing" if self._last_meta > 0.1 else "stable",
+            "d_meta_trend": trend,
             "meta_samples": len(self._meta_history),
             "note": "D_meta 为结构性边界估计（类比层），不纳入 D_norm 数值计算",
         }

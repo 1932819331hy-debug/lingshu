@@ -248,12 +248,30 @@ def selfsup_finetune(img_arr: np.ndarray, kernel_name: str = "center_surround",
                      mask_ratio: float = 0.25, seed: int = 7) -> Dict:
     """自监督：掩码重建——随机遮蔽部分 cell，用当前核从邻域预测被遮 cell，
     以重建误差的数值梯度微调 7 参数（有限差分——梯度本身可审计）。
-    返回 {kernel, loss_curve, init_loss, final_loss}。"""
+    返回 {kernel, loss_curve, init_loss, final_loss}。
+
+    `init_loss` / `final_loss` 是**同一个固定评估掩码**下的训练前／训练后读数
+    （评估掩码在训练前抽一次、全程不变 ⇒ 两个读数同口径、可比）。训练用的
+    每-epoch 掩码照旧逐轮重抽，`loss_curve` 仍是**各 epoch 训练掩码下**的曲线
+    （监控用途，口径不变）。
+
+    #593：此前 `final_loss` 取 `loss_curve[-1]`——那是末 epoch 训练掩码下的读数，
+    与训练前抽的 `init_loss` 掩码是两次**独立抽样**，两者不可相互比较。修法把
+    训练前那一次抽样提为评估掩码、训练后在同一掩码下重算，故训练路径逐位不变。
+
+    `epochs <= 0` 表示「不训练」：`loss_curve` 为空，`final_loss` 回落为
+    `init_loss`（没有训练就不存在「训练后」的读数），核保持为输入核。
+    """
     gray = (0.299 * img_arr[..., 0] + 0.587 * img_arr[..., 1]
             + 0.114 * img_arr[..., 2]).astype(np.float32) if img_arr.ndim == 3 else img_arr.astype(np.float32)
     feat, grid = image_to_grid(gray[..., None].repeat(3, axis=2), cells_across)
     lum = feat[..., :1]                                  # 亮度通道 (rows,cols,1)
     rng = np.random.default_rng(seed)
+    # #593：评估掩码——训练前抽一次、全程固定，`init_loss` / `final_loss` 都在它下面
+    # 取值 ⇒ 同口径可比。此处正是 #593 之前 `init_loss` 抽的那一次 ⇒ `rng` 的抽样
+    # 序列（进而各 epoch 训练掩码、核、`loss_curve`）与改前**逐位不变**；此后各
+    # epoch 的掩码仍由 `rng` 逐轮重抽（本行不再额外消耗 `rng`）。
+    eval_hole = rng.random(lum.shape[:2]) < mask_ratio
     rows, cols = lum.shape[:2]
     w = DEFAULT_KERNELS[kernel_name].copy()
     loss_curve = []
@@ -270,7 +288,7 @@ def selfsup_finetune(img_arr: np.ndarray, kernel_name: str = "center_surround",
         pred = hex_conv(masked, wv)[..., :1]
         return float(((pred[hole] - lum[hole]) ** 2).mean())
 
-    init_loss = recon_loss(w, rng.random(lum.shape[:2]) < mask_ratio)
+    init_loss = recon_loss(w, eval_hole)                 # #593：评估掩码（非训练掩码）
     for _ in range(epochs):
         hole = rng.random(lum.shape[:2]) < mask_ratio      # 每步抽一次；步内共用
         grads = np.zeros(7, dtype=np.float32)
@@ -282,9 +300,13 @@ def selfsup_finetune(img_arr: np.ndarray, kernel_name: str = "center_surround",
         w -= lr * grads
         w /= (abs(w).sum() + 1e-8)                        # 归一化（核能量守恒——白箱约束）
         loss_curve.append(recon_loss(w, hole))
+    # #593：训练后读数在**同一评估掩码**下重算（不再取 `loss_curve[-1]`——那是训练
+    # 掩码下的读数，与 `init_loss` 不可比）。零轮训练 ⇒ 无「训练后」读数，回落 init
+    # （沿用 #591 的「空曲线即无训练后读数」表述）。
+    final_loss = recon_loss(w, eval_hole) if loss_curve else init_loss
     return {"kernel": w, "kernel_name": kernel_name, "init_loss": round(init_loss, 5),
-            "final_loss": round(loss_curve[-1], 5), "loss_curve": loss_curve,
-            "algo": ALGO, "epochs": epochs, "lr": lr}
+            "final_loss": round(final_loss, 5),
+            "loss_curve": loss_curve, "algo": ALGO, "epochs": epochs, "lr": lr}
 
 
 def save_consolidated(kernels: Dict[str, np.ndarray], meta: Dict, path: str) -> str:
@@ -292,20 +314,50 @@ def save_consolidated(kernels: Dict[str, np.ndarray], meta: Dict, path: str) -> 
 
     原子落盘：先写同目录临时档再 os.replace 顶替目标档——写入中途失败（含
     元数据不可序列化）时目标档保持原样，不会被先截断成空档/半截坏档。
+    每次保存独占一个定长短名临时档，仅清理自己成功创建的文件；同进程并发保存互不
+    消费临时档。最终内容取最后一次成功 replace，不承诺调用顺序或合并。
+
+    #498（#393 修复的副作用）：`os.replace` 把目标换成**新 inode** ⇒ ①新档权限
+    取 `0o666 & ~umask`，不继承旧档刻意收紧的权限位（`0600` 固化档被静默放宽成
+    `0644`）；②目标是符号链接时替换的是**链接本身**（链接被换成普通档，真实
+    固化位置不再更新）。旧实现 `open(path, "w")` 截断写同一 inode，两者都保留。
+    修法：目标先 `realpath` 穿透链接（临时档建在真实目标同目录 ⇒ 同卷原子性
+    不丢），`os.replace` 前把旧档权限位拷到临时档（目标不存在则跳过，用 umask
+    默认）。用 `& 0o7777` 字面量而不在顶层 `import stat`（避免打掉 #156 组件
+    发现的「未知裸名」判据 D2/D4a）。边界：只搬权限位，不搬属主/属组。
     """
+    import uuid
+
     payload = {"algo": ALGO, "consolidated": True,
                "kernels": {k: [round(float(x), 6) for x in v] for k, v in kernels.items()},
                **meta}
-    os.makedirs(os.path.dirname(path) or ".", exist_ok=True)
-    tmp = f"{path}.tmp-{os.getpid()}"
+    target = os.path.realpath(path)
+    os.makedirs(os.path.dirname(target) or ".", exist_ok=True)
+    tmp = os.path.join(os.path.dirname(target), f".lingshu-save.tmp-{os.getpid()}-{uuid.uuid4().hex}")
+    owns_tmp = False
     try:
-        with open(tmp, "w", encoding="utf-8") as f:
+        with open(tmp, "x", encoding="utf-8") as f:
+            owns_tmp = True
             json.dump(payload, f, ensure_ascii=False, indent=1)
             f.flush()
             os.fsync(f.fileno())
-        os.replace(tmp, path)
-    except BaseException:
         try:
+            os.chmod(tmp, os.stat(target).st_mode & 0o7777)
+        except FileNotFoundError:
+            pass
+        os.replace(tmp, target)
+    except BaseException:
+        if not owns_tmp:
+            raise
+        try:
+            # #498 反向腿：临时档可能刚被 chmod 成旧档的**只读位**——Windows 上只读
+            # 档删不掉（`os.unlink` ⇒ PermissionError）⇒ 失败路径留下 `.tmp-` 残件。
+            # 清理前先尽力恢复可写（POSIX 上 unlink 只看目录权限，此步无害）。
+            if os.path.exists(tmp):
+                try:
+                    os.chmod(tmp, 0o600)
+                except OSError:
+                    pass
             os.unlink(tmp)
         except OSError:
             pass

@@ -18,13 +18,18 @@
      类间差 ≈ 0 而件内 > 0 的维不可分（比值 = +∞）：记进 `indistinguishable_dims`，
      该维比值输出 null、排序时排最前，且**不参与** `median_ratio`——不写成 0.0
      （0 = 「件内比类间还稳」= 最优，正好把最坏情形藏成最好）。
+     同理（#356）：若**没有任何 prompt 有 ≥2 张可读图**，「件内散布」本身**无定义**
+     ⇒ `within_prompt_defined=False`、`within_prompt_sd`/比值/`median_ratio` 逐项 null，
+     也不补成 0.0。
+     命令行 `--seeds` 值域 1..len(SEEDS)、`--prompts` ≥ 1（#355；越界即 argparse 报错，
+     不再静默截断/产出空语料）。
 
 红线：白箱（零 LLM、纯 stdlib+numpy+PIL）；读图/量测**只读复用** `hexgen_c1_real` 的确定性实现；
       生成侧只用**本地 Qwen-Image-2.1 管线**（即被研究的黑箱本体，与既有语料同源同参数）。
 命令行：
-    python experiments/hexgen_multi_seed.py --gen            # 只生成
-    python experiments/hexgen_multi_seed.py --measure         # 只量测（需已有语料）
-    python experiments/hexgen_multi_seed.py                  # 两步都做
+    python -X utf8 -m lingshu.gen.hexgen_multi_seed --gen      # 只生成
+    python -X utf8 -m lingshu.gen.hexgen_multi_seed --measure   # 只量测（需已有语料）
+    python -X utf8 -m lingshu.gen.hexgen_multi_seed             # 两步都做
     --prompts 8 --seeds 5     # 子集大小与每 prompt 张数
 """
 import argparse
@@ -38,8 +43,11 @@ import time
 import numpy as np
 from PIL import Image
 
-sys.path.insert(0, ".")
-sys.path.insert(0, "experiments")
+#   #108 修：删去原先的 `sys.path.insert(0, ".")` / `sys.path.insert(0, "experiments")`——
+#   import 期把**相对路径**写进 `sys.path`，其解析目标由判定时的 cwd 决定（判据同
+#   `lingshu/_pathguard.py::_is_relative_entry`：相对条目非受控面；issue #288·D-2）。
+#   本模块只用包内相对 import（`from . import ...`），不需要这两个条目；`experiments/`
+#   目录在本仓不存在（`git ls-files experiments` 为空）。
 from . import hexgen_c1_real as C          # 只读复用：解析器/读出链/度量（旁路，不改它）
 
 QWEN = (r"<local-path>"
@@ -156,6 +164,23 @@ def measure(items, d=4):
     return out, fit0
 
 
+def _stab_order_key(r):
+    """`summarize` ① 号指标的**规范行序**键（issue #735）。
+
+    ① 号块按「**相邻**两张是否一致」比较，而相邻关系由 `reads` 的**行序**决定——行序是
+    调用方给的、指标语义里没有它。故比较前先按本键排成**规范序**：先 seed（数值序；外部
+    调用方可能给字符串/None ⇒ 退化到 `str` 序，仍确定性），再按读出内容（同 seed 重复渲染
+    时用它定序）。键是**全序** ⇒ 排序结果只由 `reads` 的**多重集**决定 ⇒ 稳定性读数与行序无关；
+    命令行两条路径（`--gen`/`--measure`）产出的行序恰为 seed 升序 ⇒ 读数**逐位不变**。"""
+    seed = r.get("seed")
+    try:
+        sk = (0, float(seed))
+    except (TypeError, ValueError):
+        sk = (1, str(seed))
+    return (sk, str(r.get("n_read")), str(r.get("shapes")), str(r.get("colors")),
+            str(r.get("patterns")), str(r.get("cells")))
+
+
 def summarize(reads, items):
     """三件事的数字：①读出稳定性 ②真值兑现率 ③件内方差 vs 类间差。"""
     by_sid = {}
@@ -164,10 +189,15 @@ def summarize(reads, items):
     truth_of = {it["sid"]: it["truth"] for it in items}
 
     #   ① 同 prompt 多张之间的读出稳定性（多重集一致性 + 数量一致性）
+    #   ⚠ #735：本块是「相邻两张是否一致」，故**必须先规范化行序**——否则同语料换行序会读出
+    #   不同稳定度（实测同一批 {3 circle, 2 square}：seed 序 0.75 vs 交错序 0.0）。稳定度是
+    #   「同一批渲染之间读出是否一致」的**集合性质**，不该依赖输入的排列（守门
+    #   `tests/test_issue735_multi_seed_stability_order.py`：同多重集任意置换 ⇒ 读数逐位相同）。
     stab = {"shape": [], "color": [], "pattern": [], "count": [], "cell": []}
     for sid, rs in by_sid.items():
         if len(rs) < 2:
             continue
+        rs = sorted(rs, key=_stab_order_key)
         for k in ("shapes", "colors", "patterns", "cells"):
             stab["shape" if k == "shapes" else k[:-1]].append(
                 sum(1 for a, b in zip(rs, rs[1:]) if a[k] == b[k]) / (len(rs) - 1))
@@ -237,16 +267,30 @@ def summarize(reads, items):
         between = np.stack(means).std(axis=0, ddof=1)
     else:
         between = np.zeros(len(dims))
-    within_m = np.median(np.stack(within), axis=0) if within else np.zeros(len(dims))
-    #   类间差 ≈ 0 而件内散布 > 0 的维：比值在数学上无定义（= +∞）。它既不能落进 0.0
-    #   （0 = 「件内比类间还稳」= 最优，恰好把最坏情形写成最好），也不该悄悄混进
-    #   median_ratio；故单独点名 indistinguishable_dims、该维比值输出 null、排序时排最前。
-    indistinguishable = (between <= 1e-9) & (within_m > 0)
-    defined = ~indistinguishable
-    ratio = np.zeros(len(dims))
-    ratio[defined] = within_m[defined] / np.maximum(between[defined], 1e-9)
-    order = np.argsort(-np.where(indistinguishable, np.inf, ratio))
-    med = float(np.median(ratio[defined])) if bool(defined.any()) else float("nan")
+    #   #356：`within` 为空 = **没有任何 prompt 有 ≥2 张可读图** ⇒ 「件内散布」无定义。
+    #   原式 `... if within else np.zeros(len(dims))` 把它补成 0.0——而 0.0 在本尺子里
+    #   意为「件内比类间还稳」＝最优，恰把「根本没有件内样本」伪装成最好。判据来源：本模块
+    #   对同类情形（类间 ≈ 0 而件内 > 0）的既有口径就是「不写成 0.0」（docstring :18-20）。
+    #   故该情形逐维输出 null 并点名 `within_prompt_defined=False`；比值与中位比一并 null。
+    within_defined = bool(within)
+    within_m = np.median(np.stack(within), axis=0) if within_defined else None
+    if within_defined:
+        #   类间差 ≈ 0 而件内散布 > 0 的维：比值在数学上无定义（= +∞）。它既不能落进 0.0
+        #   （0 = 「件内比类间还稳」= 最优，恰好把最坏情形写成最好），也不该悄悄混进
+        #   median_ratio；故单独点名 indistinguishable_dims、该维比值输出 null、排序时排最前。
+        indistinguishable = (between <= 1e-9) & (within_m > 0)
+        defined = ~indistinguishable
+        ratio = np.zeros(len(dims))
+        ratio[defined] = within_m[defined] / np.maximum(between[defined], 1e-9)
+        order = np.argsort(-np.where(indistinguishable, np.inf, ratio))
+        med = float(np.median(ratio[defined])) if bool(defined.any()) else float("nan")
+    else:
+        #   件内无定义 ⇒ 既没有「不可分」可判、也没有「最差」可排；worst_dims 退回维度原序
+        #   （长度不变，下游 `hexgen_self_source.py:1257` 的打印不崩）。
+        indistinguishable = np.zeros(len(dims), dtype=bool)
+        ratio = np.zeros(len(dims))
+        order = np.arange(len(dims))
+        med = float("nan")
     return {
         "n_prompt": len(by_sid), "n_img": len(reads),
         "n_img_empty": n_empty,
@@ -257,10 +301,15 @@ def summarize(reads, items):
                     for k, v in hon.items()},
         "within_vs_between": {
             "dims": dims,
-            "within_prompt_sd": [round(float(x), 5) for x in within_m],
+            #   #356：件内散布是否有定义（无 ≥2 张可读图的 prompt ⇒ False，逐维 null）
+            "within_prompt_defined": within_defined,
+            "within_prompt_sd": ([None] * len(dims) if not within_defined
+                                 else [round(float(x), 5) for x in within_m]),
             "between_class_sd": [round(float(x), 5) for x in between],
-            "ratio_within_over_between": [None if indistinguishable[i] else round(float(ratio[i]), 3)
-                                          for i in range(len(dims))],
+            "ratio_within_over_between": ([None] * len(dims) if not within_defined else
+                                          [None if indistinguishable[i]
+                                           else round(float(ratio[i]), 3)
+                                           for i in range(len(dims))]),
             "indistinguishable_dims": [dims[i] for i in np.where(indistinguishable)[0]],
             "median_ratio": round(med, 3) if med == med else None,
             "worst_dims": [dims[i] for i in order[:5]],
@@ -268,10 +317,39 @@ def summarize(reads, items):
     }
 
 
+def _positive_int(text):
+    """argparse `type=`：`--prompts` / `--seeds` 的**值域下界**（issue #355）。
+
+    判据来源：本模块 CLI 语义——`--seeds N` 取 `SEEDS[:N]`（main 内 `seeds = SEEDS[:a.seeds]`）、
+    `--prompts N` 取 `pick_prompts(N)` 的前 N 条。`N <= 0` 时原式**静默**产出空语料或反向切片
+    （`SEEDS[:0] == ()`；`SEEDS[:-1]` 丢掉末位 seed），报告却照写——`argparse` 只 `type=int`，
+    无值域约束，故按缺陷判据加下界。"""
+    try:
+        v = int(text)
+    except (TypeError, ValueError):
+        raise argparse.ArgumentTypeError("必须是整数：%r" % (text,))
+    if v < 1:
+        raise argparse.ArgumentTypeError("必须是 ≥1 的整数（收到 %d）" % v)
+    return v
+
+
+def _seed_count(text):
+    """`--seeds` 的**值域上界**（issue #355）：`SEEDS[:N]` 在 `N > len(SEEDS)` 时静默截断，
+    用户要的 seed 数与实际渲染数不符。判据来源：`SEEDS`（模块常量）即全部可用 seed，
+    超过它没有语义。"""
+    v = _positive_int(text)
+    if v > len(SEEDS):
+        raise argparse.ArgumentTypeError(
+            "最多 %d（SEEDS=%s），收到 %d" % (len(SEEDS), list(SEEDS), v))
+    return v
+
+
 def main():
     ap = argparse.ArgumentParser()
-    ap.add_argument("--prompts", type=int, default=8)
-    ap.add_argument("--seeds", type=int, default=len(SEEDS))
+    ap.add_argument("--prompts", type=_positive_int, default=8,
+                    help="prompt 子集条数（≥1）")
+    ap.add_argument("--seeds", type=_seed_count, default=len(SEEDS),
+                    help="每 prompt 渲染张数（1..%d）" % len(SEEDS))
     ap.add_argument("--gen", action="store_true")
     ap.add_argument("--measure", action="store_true")
     ap.add_argument("--out", default=OUT)

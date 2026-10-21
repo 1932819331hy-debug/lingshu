@@ -1,0 +1,23 @@
+# coverage_map_lint baseline —— 已登记的零引用（零覆盖）模块白名单（issue #23）
+# 格式：<仓内相对路径><TAB><行数>   （`#` 起为注释）
+# 语义：**允许存在**的零引用模块白名单（路径＋行数双 keyed，#614）：
+#   基线之外出现零引用模块 ⇒ 退出 1；条目已不再是零引用（stale）⇒ 退出 1；
+#   条目登记行数与实测不符（漂移）⇒ 退出 1。路径与行数一致 ⇒ 豁免。
+# 基线来源：HEAD 64139ed 实测（python -X utf8 tools/coverage_map_lint.py --update-baseline）。
+#   本快照实测：零引用 1 模块 / 146 行（口径 = 文本词边界匹配 basename，宽松下界，见工具头部 L1）。
+#   本头部由工具按当次实测自动生成（#614：不再是模板常量）；重生成即自动更新上行读数。
+# ★白名单规模单调不增（#23 §3.1「冻结的债务清单，不是通行证」的落地产物，#614）：
+#   --update-baseline 在条目数增长时拒绝（退出 3），需显式 --force；缩水（含清 stale）不受限。
+# ★基线可移植性：合入其它在飞批次后若出现新零引用模块，先判因——
+#   真·新增未测模块 ⇒ 补测试（推荐）或登记白名单；并在下方登记段追加一行带日期记录。
+# 口径 / 已知局限 / 退出码见 tools/coverage_map_lint.py 头部。
+
+# ── 登记面（documented-exemption surface；★工具**不解析、不豁免**，仅作文档）──────
+# 格式：<日期> <commit> <路径>  <理由>；本段不被工具解析，仅作文档。
+# ── 登记面 · 用户登记（--update-baseline 保留本段逐字）──
+# 2026-10-15 6020eab lingshu/core/tms.py  登记：#447 引入的新模块（161 行），已有 tests/test_tms.py，但**生产侧尚无调用者** ⇒ 按白名单登记待接入
+# 2026-10-15 df53a6b lingshu/nn/hex_unit.py  移除：已不再是零引用模块（stale 条目）
+# 2026-10-15 #614 tools/coverage_map_lint_baseline.txt  出厂基线清理：旧头部读数是硬编码模板（b846086/零引用 2 模块 289 行/hex_recon+hex_unit），与实测（tms+hex_recon/307 行）矛盾——改由工具按当次实测自动生成；stale/行数漂移入判定、--update-baseline 规模单调不增（#23 §3.1 落地）。白名单条目不变（hex_recon 146 / tms 161，与实测一致）；上方两条历史登记自文件尾移入本段，避免被 --update-baseline 丢弃
+# ── 登记面 · 结束 ──
+
+lingshu/nn/hex_recon.py	146

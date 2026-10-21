@@ -30,6 +30,9 @@ import math
 from collections import deque
 from typing import Dict, List, Optional, Tuple
 
+from .coord_contract import (apply_move,                     # noqa: E402
+                             NF_REJECT_ROUND_ALL)             # 第 4 轮 #4
+
 #: 每 tick 验证记录（预测历史 `_results`）的环形缓冲长度（#427：此前 `_results`
 #: 每 tick 追加、永不裁剪，`overall_hit_rate`/`per_behavior_rates` 又每次全量
 #: 遍历它 ⇒ 长期运行内存与单次报告耗时都随 tick 线性增长）。
@@ -62,6 +65,7 @@ class SpacetimeConsistency:
     """
 
     def __init__(self, size: int = 24, ground_level: int = 1,
+                 seed: int = 42,
                  window: int = 20, hit_threshold: float = 0.5,
                  drift_rate: float = 0.7, drift_ticks: int = 5,
                  consistent_rate: float = 0.85,
@@ -69,7 +73,13 @@ class SpacetimeConsistency:
                  wander_bound_factor: float = 1.5,
                  wander_bound_pad: float = 0.2,
                  max_results: int = HISTORY_MAXLEN):
-        self.scene = SceneSimulator(size=size, ground_level=ground_level)
+        # #25：seed 轴透传（此前 __init__ 无 seed 参数，构造 SceneSimulator 时
+        # 丢弃种子 ⇒ 场景演化在结构上不可做 seed 维度消融）。缺省 42 = 与
+        # `scene_simulator.py` 的历史硬编码逐位一致，默认行为不变。本类自身
+        # 不产生随机数（随机性全部来自 `self.scene._rng`），故一个 seed 参数
+        # 透传即覆盖整条随机轴；影子预测（`_predict_next`）不消耗 RNG。
+        self.scene = SceneSimulator(size=size, ground_level=ground_level,
+                                    seed=seed)
         self.window = max(1, int(window))
         self.hit_threshold = float(hit_threshold)
         self.drift_rate = float(drift_rate)
@@ -94,6 +104,11 @@ class SpacetimeConsistency:
         self._drift_events: List[Dict] = []
         self._active_drift: Optional[Dict] = None
         self._low_streak = 0                  # 连续低于漂移阈值的 tick 数
+        #: #716：不变量违例的**当前状态**窗口（每 tick 追加 0/1）。
+        #: 与 `_rolling` / `_entity_hits` 共用 `self.window` 口径 ⇒ 三者都读
+        #: 「最近 window 个 tick」。判定读它；累计值 `_invariant_violations`
+        #: 只作审计（见 `consistency_report` docstring）。
+        self._inv_window: deque = deque(maxlen=self.window)
         self._invariant_violations = 0
         self._pending_events: List[Tuple[str, Tuple[float, float, float]]] = []
         self.tick_count = 0
@@ -149,16 +164,12 @@ class SpacetimeConsistency:
         越过目标（影子与物理世界分叉）。
         #347：非有限坐标拒绝写入（clamp 表达式遇 NaN 会静默抬成边界值）。
         """
-        if d == (0.0, 0.0, 0.0):
-            return tuple(round(v, 2) for v in pos)
-        step_len = speed if dist is None else min(speed, dist)
-        nx = pos[0] + d[0] * step_len
-        nz = pos[2] + d[2] * step_len
-        if not (math.isfinite(nx) and math.isfinite(nz)):
-            return tuple(round(v, 2) for v in pos)
-        nx = max(0.5, min(self.scene.world.size - 0.5, nx))
-        nz = max(0.5, min(self.scene.world.size - 0.5, nz))
-        return (round(nx, 2), pos[1], round(nz, 2))
+        # ⚠ 第 4 轮 #4：语义收归 `coord_contract.apply_move`，本站点的**两处差异**
+        #   一律显式命名，不再藏在函数体里：
+        #     · `step_cap=dist`      —— #249 步长按到目标的剩余距离封顶
+        #     · `on_nonfinite=...`   —— #347 非有限坐标必须**拒绝**，不许被 clamp 静默抬成边界值
+        return apply_move(pos, speed, d, self.scene.world.size,
+                          step_cap=dist, on_nonfinite=NF_REJECT_ROUND_ALL)
 
     def _shadow_decide(self, e, shadow: Dict[str, Tuple[float, float, float]],
                        follow_target: Optional[Dict[str, int]] = None
@@ -361,7 +372,13 @@ class SpacetimeConsistency:
             if eid not in pred:
                 del self._entity_hits[eid]
         # 不变量校验（世界保持自身一致）
+        # #716：窗口记录「本 tick 是否违规」（0/1）——判定读窗口，累计值只作审计。
+        #   旧实现只有终身累计计数，判定直接读它 ⇒ 一次瞬时违规（teleport /
+        #   瞬时抖动 / 外部写入）之后世界即便完全自愈，`verdict` 也**永久**停在
+        #   `invariant_violated`、`self_consistent()` 永久 False —— 「持续运行」
+        #   框架下最严重的语义倒退（本条即报此）。
         inv_ok, inv_issues = self._check_invariants()
+        self._inv_window.append(0 if inv_ok else 1)
         if not inv_ok:
             self._invariant_violations += 1
         # 一致性漂移检测（#9：以最差实体的窗口命中率为判据）
@@ -501,6 +518,22 @@ class SpacetimeConsistency:
 
         判据来源：`docs/plans/待裁清单_v0.1.md` D-65（无样本在数值比较**之前**
         独立判定）／C-11；triage #303（不变量只作数字输出、不进 verdict）。
+
+        #716（本件）：不变量违例判据从**终身累计**改为**窗口内当前状态**
+        —— 字段名 `_invariant_violations` 与本节 docstring 的 `invariant_violated`
+        都在描述「世界状态**被破坏**」，而 `_check_invariants()` 是**每 tick 的
+        当前态校验**（不变量本身是状态谓词，不是事件计数）⇒ 本条判为「当前状态」
+        语义。旧实现读终身累计 ⇒ 一次瞬时违规后世界即便完全自愈，`verdict` 也
+        永久停在 `invariant_violated`、`self_consistent()` 永久 False。
+        修法：新增 `self._inv_window = deque(maxlen=self.window)`，每 tick 追加
+        0/1，判定改读 `any(self._inv_window)`；累计值 `_invariant_violations`
+        **保留**（审计口径不变，`report["invariant_violations"]` 仍是终身计数）。
+        判据来源：triage #716（判定成立）；#303 的修复建议已明写该取舍
+        （「如果 owner 倾向『一次违规永久不自洽』，只需把窗口改成全程」——
+        本条报的正是代码落到了它标注为**待决**的那一侧）。
+        告警行为变化（如实标注）：世界在窗口（`self.window` 个 tick，缺省 20）内
+        自愈后，`verdict` 由 `invariant_violated` 回落为按命中率判定；
+        `invariant_violations` 累计值**不变**，故「曾经违规」仍可审计。
         """
         overall = self.overall_hit_rate()
         rolling = self._rolling_rate()
@@ -510,7 +543,7 @@ class SpacetimeConsistency:
             verdict = "no_observation"
         elif active:
             verdict = "drift_detected"
-        elif self._invariant_violations > 0:
+        elif any(self._inv_window):
             verdict = "invariant_violated"
         elif overall < self.consistent_rate:
             verdict = "inconsistent"

@@ -22,6 +22,7 @@ from __future__ import annotations
 
 import json
 import math
+import sqlite3
 import warnings
 from dataclasses import dataclass, field
 from typing import Dict, List, Optional, Tuple
@@ -52,6 +53,8 @@ class SceneEntity:
     present: str = "auto"              # 呈现：silhouette/skeleton/box（auto=按类别）
     rot: Tuple[float, float, float] = (0.0, 0.0, 0.0)
     relations: List[Tuple[str, str]] = field(default_factory=list)  # (target, kind)
+    eid: str = ""
+    conditions: Dict = field(default_factory=dict)
 
 
 # 类别 → 呈现类型
@@ -76,18 +79,23 @@ class WorldModel:
         self.entities: Dict[str, SceneEntity] = {}
         self.scene = World3D()
         self._silhouettes: Dict[str, Silhouette3D] = {}
+        # 骨架呈现的实体（present=skeleton）：摆好姿态的 Skeleton3D 本体
+        # （#308——旧码只把占位盒塞进 World3D，骨架被丢弃、姿态成死代码）
+        self._skeletons: Dict[str, Skeleton3D] = {}
 
     # ---- 语义层操作 ----
 
     def add_entity(self, name: str, category: str,
                    pos: Tuple[float, float, float],
                    state: str = "neutral",
-                   present: str = "auto") -> "WorldModel":
+                   present: str = "auto", eid: str = "",
+                   conditions: Optional[Dict] = None) -> "WorldModel":
         """添加语义实体（3D 锚点 + 类别 + 状态）。"""
         if present == "auto":
             present = PRESENT_BY_CATEGORY.get(category, "box")
         self.entities[name] = SceneEntity(
-            name=name, category=category, pos=pos, state=state, present=present)
+            name=name, category=category, pos=pos, state=state, present=present,
+            eid=eid or name, conditions=dict(conditions or {}))
         return self
 
     def relation(self, a: str, kind: str, b: str) -> "WorldModel":
@@ -164,6 +172,7 @@ class WorldModel:
         self.apply_relations()
         self.scene = World3D()
         self._silhouettes = {}
+        self._skeletons = {}
         for name, e in self.entities.items():
             if e.present == "silhouette" and e.category == "fatfish":
                 # 蒙皮版：身体轮廓从骨架关节推导（骨架=基准，轮廓=肉，永不脱节）
@@ -178,7 +187,9 @@ class WorldModel:
                     sk.joints["elbow_r"].rot = (0, 0, -1.0)
                 elif e.state == "tired":
                     sk.joints["neck"].rot = (0.5, 0, 0)
-                self.scene.objects.append(self._skeleton_to_object(sk, name, e))
+                # #308：骨架本体存进呈现通道，由 render 画骨骼线；
+                # 不再把占位盒塞进 World3D（旧码画出的是一根米色盒柱）
+                self._skeletons[name] = sk
             else:
                 # 盒体呈现
                 size = {"table": (1.2, 0.9, 0.8), "tree": (1.0, 2.0, 1.0),
@@ -191,26 +202,70 @@ class WorldModel:
                          "dragon": (90, 160, 60)}.get(e.category, (160, 160, 160))
                 self.scene.objects.append(Object3D(
                     category=e.category, center=e.pos, size=size,
-                    color=color, shape="box"))
+                    color=color, shape="box", eid=e.eid))
         return self
 
     def _skeleton_to_object(self, sk: Skeleton3D, name: str, e: SceneEntity) -> Object3D:
-        """骨架 → Object3D（供 World3D 画家算法参与排序；实际渲染走骨架通道）。"""
+        """骨架 → Object3D 占位盒（**build() 已不再调用**，见 #308）。
+
+        #308：旧码用它把骨架压成一根米色盒柱塞进 World3D，骨架与姿态被丢弃。
+        现骨架本体走 `self._skeletons` 呈现通道（`render` 画骨骼线），本方法
+        仅为兼容既有调用面保留，返回值不再进入场景。
+        """
         return Object3D(category=f"skeleton_{e.category}", center=e.pos,
                         size=(0.6, 1.7, 0.4), color=(200, 160, 140), shape="pillar")
 
     # ---- 渲染 ----
 
+    #: 盒体 6 面（顶点索引表同 world3d._draw_box 的面表——同一口径复用）
+    _BOX_FACES = ((0, 1, 2, 3), (4, 5, 6, 7), (0, 1, 5, 4),
+                  (3, 2, 6, 7), (1, 2, 6, 5), (0, 3, 7, 4))
+
+    def _occluder_mask(self, cam: Camera3D, screen_w: int, screen_h: int,
+                       nearer_than: float) -> "PIL.Image":
+        """比 `nearer_than` 更近的盒体实体 → 屏幕足迹掩码（L，255=被遮挡）。
+
+        #419：跨表示（轮廓角色 vs World3D 盒体）遮挡。判据来源：本件 #419——
+        不同表示须共享深度/遮挡信息（统一深度缓冲的等价像素处理：把「更近的
+        实体」按画家算法同一深度键 `Object3D.depth(cam)` 铺成屏幕足迹掩码）。
+        深度键口径同 world3d.Object3D.depth（相机坐标 z，判据注释引
+        docs/theory/世界模型与语义时空图_完整理论整理与实现路线.md §3.2
+        投影-关联——遮挡须按相机坐标，非世界坐标）。
+
+        局限（削掉的判别力）：按物体**中心**深度整体判「前后」（与画家算法同
+        口径），物体自身跨深度区间时不逐像素细分；角色与角色的相互遮挡不在
+        本掩码内（沿用 silhouette3d 内部部件序）。
+        """
+        from PIL import Image, ImageDraw
+        mask = Image.new("L", (screen_w, screen_h), 0)
+        draw = ImageDraw.Draw(mask)
+        for obj in self.scene.objects:
+            if obj.depth(cam) >= nearer_than:
+                continue
+            corners = obj.corners()
+            for idx in self._BOX_FACES:
+                poly = self.scene._project_face(
+                    tuple(corners[i] for i in idx), cam, screen_w, screen_h)
+                if len(poly) >= 3:
+                    draw.polygon([(p[0], p[1]) for p in poly], fill=255)
+        return mask
+
     def render(self, screen_w: int = 500, screen_h: int = 500,
                camera: Optional[Camera3D] = None,
                background: Tuple[int, int, int] = (250, 248, 244),
                bones_overlay: bool = False) -> "PIL.Image":
-        """渲染完整场景：盒体(World3D) + 轮廓角色(深度着色) + 可选骨架线条叠加。
+        """渲染完整场景：盒体(World3D) + 骨架角色 + 轮廓角色 + 可选骨架线条叠加。
 
-        bones_overlay=True 时：fatfish 轮廓上叠加 47 关节精细骨架线条
-        （"骨架 + 面"完整体现——面=轮廓色块，骨架=内部线条）。
+        - 骨架角色（present=skeleton 的实体）：画骨骼线条（#308——旧码只画
+          占位盒、姿态成死代码）；
+        - 轮廓角色按盒体深度做跨表示遮挡（#419——更近的盒体实体遮住角色）；
+        - bones_overlay=True 时：fatfish 轮廓上叠加 47 关节精细骨架线条
+          （"骨架 + 面"完整体现——面=轮廓色块，骨架=内部线条）。
+
+        局限：骨架角色与盒体/轮廓之间不做跨通道深度合成（#308 已知局限，
+        与既有「C 级合成」口径一致）。
         """
-        from PIL import Image
+        from PIL import Image, ImageChops, ImageDraw
 
         cam = camera or Camera3D.look_at(
             eye=(0, 1.2, 1.5), target=(0, 0.9, 5.0), fov_deg=50)
@@ -219,11 +274,20 @@ class WorldModel:
                                 background=background,
                                 ground_color=(235, 230, 220))
 
+        # 1b. 骨架角色（#308：present=skeleton 的实体画骨骼线，不再画占位盒）
+        for name, sk in self._skeletons.items():
+            self._draw_bones(ImageDraw.Draw(img), sk, cam, screen_w, screen_h)
+
         # 2. 轮廓角色（C 级合成：RGBA 层 paste，替代逐像素循环）
+        #    #419：先按盒体深度剔掉被更近实体遮住的像素，再 paste
         for name, sil in self._silhouettes.items():
             layer = sil.render(screen_w, screen_h, camera=cam,
                                background=background, alpha=True)
-            img.paste(layer, (0, 0), layer)   # 以自身 alpha 为 mask
+            occluded = self._occluder_mask(cam, screen_w, screen_h,
+                                           nearer_than=cam.depth_of(sil.center))
+            visible = ImageChops.multiply(layer.getchannel("A"),
+                                          ImageChops.invert(occluded))
+            img.paste(layer, (0, 0), visible)   # 以「自身 alpha − 遮挡」为 mask
 
         # 3. 骨架线条叠加（fatfish → 精细 47 关节骨架）
         if bones_overlay:
@@ -266,7 +330,8 @@ class WorldModel:
 # ---------------------------------------------------------------------------
 
 
-def ingest_scene(agent, scene_desc: str, store=None, tag: str = "spatial"):
+def ingest_scene(agent, scene_desc, store=None, tag: str = "spatial",
+                 relations: Optional[List[Tuple[str, str, str]]] = None):
     """把语义场景描述摄入记忆库（带空间锚点 → 可被世界模型重建）。
 
     约定（记忆即缓存）：
@@ -274,6 +339,18 @@ def ingest_scene(agent, scene_desc: str, store=None, tag: str = "spatial"):
     - spatial_coordinates = {"x":.., "y":.., "z":..}（3D 锚点，米）
     - state_attributes = {"state": "happy"}（状态 → 呈现变化）
     返回写入的节点 id 列表。
+
+    坐标解析口径（issue #727）：个数错（`ValueError`）与**非有限值**（NaN/±inf）
+    一律**写库前拒绝该行**（`continue`，该实体不入库），与既有「个数错」口径
+    逐字一致——**不是**写库后再清洗。为什么选写库前拒绝：
+      · 正文 `场景实体 …位于 (x,y,z)` 与 `spatial_coordinates` 是**同一份**观测的
+        两个投影，写库后清洗只能改坐标列 ⇒ 正文与坐标列当场自相矛盾；
+      · 非有限坐标不是"可用但需修正"的读数，而是**不可用证据**（#402/#418-F3
+        口径：NaN/±Inf 一律不算可用证据），故不落库、不留半成品节点；
+      · 与个数错同口径 ⇒ 同一段输入不会因两种坏法得到两种语义（一种静默跳过、
+        一种静默改值）。
+    拒绝是**可判读**的：返回的 `written` 长度即实际写入节点数，调用方与输入行数
+    一比即可发现被拒行（本模块既有口径，不新增返回体字段）。
     """
     if store is None:
         store = getattr(agent, "store", None)
@@ -285,20 +362,49 @@ def ingest_scene(agent, scene_desc: str, store=None, tag: str = "spatial"):
         raise ValueError("need store to ingest scene")
     engine = getattr(agent, "engine", None)
 
-    lines = [ln.strip() for ln in scene_desc.splitlines() if ln.strip()]
+    structured = isinstance(scene_desc, WorldModel)
+    if structured:
+        entities = list(scene_desc.entities.values())
+    else:
+        entities = []
+        for ln in scene_desc.splitlines():
+            parts = [p.strip() for p in ln.split("|")]
+            if len(parts) < 3:
+                continue
+            try:
+                pos = tuple(float(v) for v in parts[2].split(","))
+                x, y, z = pos
+            except ValueError:
+                continue
+            # issue #727：非有限坐标（NaN/±inf）写库前拒绝——旧码只防「个数错」，
+            # NaN 被原样写进 spatial_coordinates，下游 `apply_relations` 的
+            # `math.hypot(nan, ·)` 使 `dx >= 0` 恒 False ⇒ 约束静默失判（实体位置
+            # 永不修正、无告警）。口径与上方 `except ValueError: continue` 逐字一致
+            # （该行不入库；`written` 长度即实际写入数，调用方可判读）。
+            if not all(math.isfinite(v) for v in pos):
+                continue
+            entities.append(SceneEntity(parts[0], parts[1], pos,
+                            state=parts[3] if len(parts) > 3 else "neutral",
+                            eid=parts[0]))
+        names = {e.name for e in entities}
+        for a, kind, b in relations or []:
+            if a not in names or b not in names:
+                raise ValueError(f"relation requires both entities: {a}, {b}")
+            for entity in entities:
+                if entity.name == a:
+                    entity.relations.append((b, kind))
     written = []
-    for ln in lines:
-        # 格式: 名称|类别|x,y,z|状态
-        parts = [p.strip() for p in ln.split("|")]
-        if len(parts) < 3:
-            continue
-        name, cat = parts[0], parts[1]
-        try:
-            x, y, z = (float(v) for v in parts[2].split(","))
-        except ValueError:
-            continue
-        state = parts[3] if len(parts) > 3 else "neutral"
+    _pending_states = []          # [(name, state, node_id)] —— 延迟到循环后一次提交
+    for entity in entities:
+        name, cat, state = entity.name, entity.category, entity.state
+        x, y, z = entity.pos
         content = f"场景实体 {name}（{cat}）位于 ({x},{y},{z})，状态 {state}"
+        tags = [tag, f"cat:{cat}", f"ent:{name}", "world_model"]
+        if structured or relations:
+            metadata = {"eid": entity.eid, "present": entity.present,
+                        "conditions": entity.conditions, "relations": entity.relations}
+            content += "\n```lingshu-scene\n" + json.dumps(metadata, ensure_ascii=False) + "\n```"
+            tags.append(f"eid:{entity.eid}")
         # 优先走 engine.add_perception（支持 spatial_coordinates）；退化用 agent.remember
         # skip_dedup=True：场景导入是「主动沉淀类写入」，每行是带独立空间锚点/实体
         # 身份的观测，必须保留自己的节点身份。否则同一实体的连续观测（如移动跟踪
@@ -312,39 +418,93 @@ def ingest_scene(agent, scene_desc: str, store=None, tag: str = "spatial"):
                 content,
                 importance=0.6,
                 spatial_coordinates={"x": x, "y": y, "z": z},
-                tags=[tag, f"cat:{cat}", f"ent:{name}", "world_model"],
+                tags=tags,
                 entities=[name],
                 skip_dedup=True,
             )
         else:
             node = agent.remember(
                 content=content, importance=0.6,
-                tags=[tag, f"cat:{cat}", f"ent:{name}", "world_model"],
+                tags=tags,
                 entities=[name],
             )
         # 状态写入 state_attributes（store 直接更新）。
         # 状态未入账不阻断导入（节点已建，世界仍可加载），但必须可观测：
         # 否则节点正文写着状态、重建世界却回落 neutral，两边静默矛盾。
-        try:
-            store.conn.execute(
-                "UPDATE nodes SET state_attributes=? WHERE id=?",
-                (json.dumps({"state": state}), node.id))
-            store.conn.commit()
-        except Exception as exc:                                  # noqa: BLE001
-            warnings.warn(
-                "场景实体 %s 的状态 %r 未写入脑侧台账（%s: %s）；"
-                "记忆节点已创建，重建世界时该实体状态会回落为 neutral"
-                % (name, state, type(exc).__name__, exc),
-                RuntimeWarning, stacklevel=2)
+        # ★优化（#515 引入，本件 #596 补齐消费侧）：旧实现**每个实体**一次
+        # `execute` + `commit()`（N 次 fsync）。现改为**先登记、循环后一次写**；
+        # 但"一次写"到底是**批量还是逐条**，由**连接能力**决定（见下方选路）——
+        # 脑侧垫片声明 `atomic_batch=False`（跨进程 RPC、无真事务）⇒ 直接逐条，
+        # 不再"批量→吃 AttributeError→回滚→逐条重试"（那条路会把已落账的重复落账）。
+        _pending_states.append((name, state, node.id))
         written.append(node.id)
+    if _pending_states:
+        # ---- 按连接能力选路（issue #596：不再用 AttributeError 做能力探测）----
+        # · `atomic_batch` 为真（真 sqlite 连接没有该属性 ⇒ `getattr(..., True)`
+        #   取缺省真）：`executemany` + 一次 `commit()`（省 N−1 次 fsync）；失败先
+        #   `rollback()` **撤销整批**再逐条重试 ⇒ **不重复落账**。
+        # · 为假（脑侧 `_ConnShim`：`record_state` 是对另一进程的 RPC，没有真事务）：
+        #   **直接逐条**，不滑进"批量→失败→回滚→重试"。
+        #
+        # ★ 为什么"补协议"必须与"按能力选路"一起做（本件的真实价值，不只是 issue
+        #   说的"#515 的优化在脑侧是死路径"）：一旦只给垫片补上 `executemany` 而
+        #   消费方不改，脑侧就会真的走批量路径；批量**部分失败**时 `rollback()` 在
+        #   物理上撤不回已落账的事件（`record_state` 是 append-only 台账），回落
+        #   逐条会把**已成功的那几条重复落账**。实测（3 实体、第 2 条 `state_event`
+        #   失败）：只补协议 ⇒ 5 次 `state_event`、台账 4 行、首实体 **2 行**、
+        #   告警 **0 条**（重试成功 ⇒ 连告警都没有，完全不可观测）；按能力选路 ⇒
+        #   3 次调用、台账 2 行、各实体**至多 1 行**、失败那条照旧告警 1 条。
+        _batched = False
+        if getattr(store.conn, "atomic_batch", True):
+            try:
+                store.conn.executemany(
+                    "UPDATE nodes SET state_attributes=? WHERE id=?",
+                    [(json.dumps({"state": _st}), _nid)
+                     for _nm, _st, _nid in _pending_states])
+                store.conn.commit()
+                _batched = True
+            except (sqlite3.Error, NotImplementedError):
+                # 批量失败 ⇒ 回退到逐条（旧路径）：先把可能已开的隐式事务丢掉，
+                # 再逐条重试并逐条告警——粒度和文案与改动前逐位一致。
+                #
+                # ★ 异常类型**收窄**（issue #596 顺手项，见 tools/silent_except_lint.py
+                #   的既有审计口径 (b)「改窄到具体异常类型」）：
+                #   · `sqlite3.Error`：真连接批量写失败（`rollback` 能撤销整批，重试安全）；
+                #   · `NotImplementedError`：连接不支持该批量语句形态（转逐条即正解）。
+                # **故意不收** `RuntimeError`：脑侧 `BrainError` 派生自 RuntimeError，
+                # 代表"跨进程 RPC 记账失败、物理上不可撤销"。若 `atomic_batch` 被误声明
+                # 为真而走了这条批量路，必须**响亮抛出**（不吞、不假装回滚成功），否则
+                # 就会滑进"回滚（no-op）→ 逐条重试 → 已落账的重复落账、且重试成功时连
+                # 告警都没有"的静默错账——正是本件要消除的那条路径。故"不阻断导入"的
+                # 契约只覆盖**已识别的**批量失败；非预期异常交给上层暴露。
+                try:
+                    store.conn.rollback()
+                except (AttributeError, sqlite3.Error):
+                    # best-effort 清事务：真 sqlite 连接无活动事务时 rollback 为 no-op；
+                    # 无 rollback 的连接只可能抛 AttributeError。故此处收窄到这两种预期
+                    # 失败，不放宽成 `except Exception`（那会把「库读坏」这类真错静默吞掉）。
+                    pass
+        if not _batched:
+            for _nm, _st, _nid in _pending_states:
+                try:
+                    store.conn.execute(
+                        "UPDATE nodes SET state_attributes=? WHERE id=?",
+                        (json.dumps({"state": _st}), _nid))
+                    store.conn.commit()
+                except Exception as exc:                          # noqa: BLE001
+                    warnings.warn(
+                        "场景实体 %s 的状态 %r 未写入脑侧台账（%s: %s）；"
+                        "记忆节点已创建，重建世界时该实体状态会回落为 neutral"
+                        % (_nm, _st, type(exc).__name__, exc),
+                        RuntimeWarning, stacklevel=2)
     return written
 
 
 def _node_recency(n) -> Optional[float]:
     """节点观测时新度：temporal_coordinate → last_access → created_at，无则 None。
 
-    身体侧 STNode 三者皆有（core.py:159 STNode）；脑侧 BrainNode 无任何时间字段
-    （brain_store.py:359）→ None，调用方据此回落 store 返回序（不臆造新序）。
+    BrainNode 的 temporal_coordinate 取自脑侧 created_at；旧返回单元缺时间字段
+    时仍回落 store 返回序，不臆造新序。
     """
     for attr in ("temporal_coordinate", "last_access", "created_at"):
         v = getattr(n, attr, None)
@@ -353,8 +513,9 @@ def _node_recency(n) -> Optional[float]:
     return None
 
 
-def load_world_from_memory(agent_or_store, tag: str = "spatial") -> WorldModel:
-    """从记忆库遍历 `spatial` 标签节点 → 重建世界模型场景。
+def load_world_from_memory(agent_or_store, tag: str = "spatial",
+                           limit: int = 200) -> WorldModel:
+    """从带 `spatial` 标签的候选节点重建世界模型场景。
 
     记忆就是缓存：场景 = 记忆节点的实时投影；新增/更新记忆节点即改场景。
 
@@ -365,13 +526,16 @@ def load_world_from_memory(agent_or_store, tag: str = "spatial") -> WorldModel:
     的是**最旧**观测，新观测反被丢弃、重建世界回落到陈旧坐标，「新增记忆节点即
     改场景」不成立。故按实体名归并：有时间字段者取时新度最大者；全无时间字段者
     （脑侧 BrainNode）保持旧行为（store 返回序末条胜出），不臆造新序。
+
+    limit 为 store 读取预算（默认 200），可由场景调用者显式调大。
+    脑侧是语义召回后过滤标签，预算不是实体总数或全库枚举保证。
     """
     store = getattr(agent_or_store, "store", agent_or_store)
     if not hasattr(store, "get_nodes_by_tag"):
         engine = getattr(agent_or_store, "engine", None)
         if engine is not None:
             store = getattr(engine, "store", store)
-    nodes = store.get_nodes_by_tag(tag, limit=200)
+    nodes = store.get_nodes_by_tag(tag, limit=limit)
     wm = WorldModel()
     grouped: Dict[str, List[Tuple[Optional[float], tuple]]] = {}
     for n in nodes:
@@ -391,13 +555,23 @@ def load_world_from_memory(agent_or_store, tag: str = "spatial") -> WorldModel:
         sa = n.state_attributes or {}
         if isinstance(sa, dict) and sa.get("state"):
             state = sa["state"]
+        metadata_text = n.content.partition("\n```lingshu-scene\n")[2]
+        metadata = json.loads(metadata_text.partition("\n```")[0]) if metadata_text else {}
         grouped.setdefault(name, []).append(
-            (_node_recency(n), (cat, pos, state)))
+            (_node_recency(n), (cat, pos, state, metadata)))
+    restored_relations = {}
     for name, cands in grouped.items():
         timed = [c for c in cands if c[0] is not None]
-        _, (cat, pos, state) = (max(timed, key=lambda c: c[0])
+        _, (cat, pos, state, metadata) = (max(timed, key=lambda c: c[0])
                                 if timed else cands[-1])
-        wm.add_entity(name, category=cat, pos=pos, state=state)
+        wm.add_entity(name, category=cat, pos=pos, state=state,
+                      eid=metadata.get("eid", name), present=metadata.get("present", "auto"),
+                      conditions=metadata.get("conditions"))
+        restored_relations[name] = metadata.get("relations", [])
+    for name, edges in restored_relations.items():
+        for target, kind in edges:
+            if target in wm.entities:
+                wm.relation(name, kind, target)
     wm.build()
     return wm
 

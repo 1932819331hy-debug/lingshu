@@ -22,10 +22,13 @@
     anomaly 留痕不删）
 
 WAL（append-only 单调）：{seq, ts, tick, kind ∈ episode|growth|confirm|revert|verify}。
-回放一致性：顺序重放 episode 事件重建的世界图与当前 graph() 逐节点逐边一致
-（WAL = 世界图演化的可逆投影；被 REVERT 的假设在快照消失但 revert 事件留痕）。
+`seq` 在**单个 WAL 文件内**严格单调——`__init__` 打开已存在文件时读**最后一条
+可用记录**（可解析、是 dict、`seq` 是整数）的 seq 接着编号（见 #248 / #464；
+崩溃残行与超长/非对象末行不再使续号回落 0）。回放一致性：顺序重放 episode
+事件重建的世界图与当前 graph() 逐节点逐边一致（WAL = 世界图演化的可逆投影；
+被 REVERT 的假设在快照消失但 revert 事件留痕）。
 
-设计稿：docs/世界模型推演循环显式化_设计稿_v0.1.md
+设计稿：docs/世界模型推演循环显式化_设计稿_v0.1.md（该文档不在本仓，属上游/私域件）
 （含 Nature co-design 八特性 checklist 审计与 v0.1 诚实边界）
 
 纯标准库 · 零外部依赖 · 零 LLM（D-005）· SimLoop 自身零 rng（确定性外推）
@@ -47,6 +50,11 @@ try:
     from .scene_simulator import SceneSimulator
 except ImportError:
     from .scene_simulator import SceneSimulator
+
+
+# WAL 续号反向扫描的块大小（#464）：只读尾部一块即可覆盖绝大多数文件；
+# 找不到可用记录时**继续向前分块回溯**（不整文件读入 ⇒ 超大 WAL 不引入 O(size) 读）。
+_WAL_SCAN_CHUNK = 65536
 
 
 # ==================== 确定性几何（拓扑生长外推 · 零 rng）====================
@@ -164,7 +172,14 @@ class SimulationLoop:
         self._clock = clock or time.time
         # WAL（内存 + 可选落盘，append-only）
         self.wal: List[Dict] = []
-        self._seq = 0
+        # #248：`seq` 必须在**单个 WAL 文件内**严格单调。旧实现 `_seq` 每实例从 0
+        # 开始、却对同一文件 `open(..., "a")` 追加写 ⇒ 每次 setup 新建实例后
+        # 同文件 seq 重复（实测 [0,1,0,1]），文件头声明的「append-only 单调」不成立。
+        # 修法：打开已存在文件时**只读一次末条** seq 接着编号（不每条读全文件）。
+        # ★不引入 session 字段：本类刻意保住「同配置两次运行 WAL 逐字节一致」
+        # （见下 `_alias` 注释）；用 `uuid4` 做 session 会当场作废该性质，而 issue
+        # #248 的期望是「seq 严格单调 **或** 带 session」——只做前半即已满足判据。
+        self._seq = self._resume_seq_from_wal(wal_path)
         self.ticks_stepped = 0             # 推演环推进的 tick 数（不含外部 perceive）
         self._alias: Dict[str, str] = {}   # WAL 稳定别名（SceneEntity 用 uuid4 随机
         #                                    id，别名保证同配置两次运行 WAL 逐字节
@@ -174,6 +189,69 @@ class SimulationLoop:
         self._rolling_rates: List[float] = []
         self._flush_count = 0
 
+    def _resume_seq_from_wal(self, wal_path: Optional[str]) -> int:
+        """打开已存在 WAL 文件时读**最后一条可用记录**的 seq 并接着编号。
+
+        #248：构造期只读一次（不每条读全文件，避免 O(n²)）。
+        #464：取值来源从「尾部 64KB 块的**最后一行**」改为「**最后一条可用记录**」
+        ——「可用」＝该行可 `json.loads`、解析结果是 `dict`、`seq` 是整数。
+        三种现实形态据此各自处置：
+          · **崩溃残行**（上次进程追加末条时中断 ⇒ 末行是半截 JSON）⇒ 该行不可
+            解析，跳过它、回退到上一条可用记录接着编号（旧实现直接回 0，同一
+            文件内 seq 重复）；
+          · **超长末条**（单条 > 64KB ⇒ 反向首块只覆盖到该行的一半）⇒ 首块内找
+            不到可用记录时**继续向前分块回溯**（块大小 `_WAL_SCAN_CHUNK`；不整
+            文件读入 ⇒ 超大 WAL 不引入 O(size) 读）；
+          · **非对象末行**（末行是合法 JSON 但不是对象，如 `[]`）⇒ `isinstance`
+            类型校验直接跳过该行（旧实现在此处 `last.get(...)` 抛 `AttributeError`，
+            而它不在捕获列表里 ⇒ 构造期崩溃）。
+        `seq` 的类型校验同时消掉了该 `AttributeError`/`TypeError` 分支，故**不**
+        加宽捕获（仍收窄为 `(OSError, ValueError, TypeError)`，不用宽
+        `except Exception`，#170 口径）。
+
+        返回 `0` 的语义是「**整个文件里没有任何一条可用记录**」（文件不存在 /
+        空文件 / 所有行都不可用）——fail-safe：不因外部坏档拒绝构造。
+        **确定性**：只依赖文件内容，故「同配置两次运行、各自独立新文件」时都从
+        0 开始（WAL 逐字节一致性质不受影响）。
+        """
+        if not wal_path or not os.path.exists(wal_path):
+            return 0
+        try:
+            with open(wal_path, "rb") as f:
+                f.seek(0, os.SEEK_END)
+                pos = f.tell()
+                buf = b""            # 跨块不完整行的尾部片段（与更早的块拼接）
+                while pos > 0:
+                    chunk = min(_WAL_SCAN_CHUNK, pos)
+                    pos -= chunk
+                    f.seek(pos)
+                    buf = f.read(chunk) + buf
+                    lines = buf.split(b"\n")
+                    # pos > 0 时 lines[0] 是被块边界截断的不完整行（其前半段在
+                    # 更早的块里）⇒ 本轮不参与判定，只留作下轮拼接。
+                    scan = lines[1:] if pos > 0 else lines
+                    for raw in reversed(scan):     # 从最新一行反向找可用记录
+                        s = raw.strip()
+                        if not s:
+                            continue
+                        try:
+                            parsed = json.loads(s.decode("utf-8",
+                                                         errors="ignore"))
+                        except ValueError:
+                            continue               # 残行/半截 JSON ⇒ 跳过
+                        if not isinstance(parsed, dict):
+                            continue               # 非对象末行 ⇒ 跳过（#464 C）
+                        seq = parsed.get("seq")
+                        if isinstance(seq, int) and not isinstance(seq, bool):
+                            return seq + 1
+                    buf = lines[0] if pos > 0 else b""
+            return 0
+        except (OSError, ValueError, TypeError):
+            # 刻意静默（fail-safe）：读坏档不得拒绝构造，回 0（整个文件无可用记录）。
+            # 收窄为 (OSError 文件 IO / ValueError=json 解析 / TypeError=类型异常)
+            # —— 不用宽 `except Exception`（#170 口径）。
+            return 0
+
     def _alias_of(self, eid: str) -> str:
         """eid → 稳定别名（首次出现顺序分配 e1,e2,…——确定性）。"""
         if eid not in self._alias:
@@ -181,6 +259,22 @@ class SimulationLoop:
         return self._alias[eid]
 
     # ---------- WAL ----------
+
+    def _wal_ends_with_newline(self) -> bool:
+        """文件末尾是否以换行结尾（空文件/读不到视为 True，即不必补）。
+
+        #464：`_wal` 用 `open(..., "a")` 追加，不检查末字节 ⇒ 上次进程留下的
+        崩溃残行（不以 `\n` 结尾）会把新记录**粘在残行上**，该记录整行不可解析
+        （审计轨迹丢一条）。追加前先探末字节即可。
+        """
+        try:
+            if os.path.getsize(self.wal_path) == 0:
+                return True
+            with open(self.wal_path, "rb") as f:
+                f.seek(-1, os.SEEK_END)
+                return f.read(1) == b"\n"
+        except OSError:
+            return True
 
     def _wal(self, kind: str, payload: Dict) -> None:
         rec = {"seq": self._seq, "ts": round(self._clock(), 3),
@@ -191,6 +285,12 @@ class SimulationLoop:
             os.makedirs(os.path.dirname(os.path.abspath(self.wal_path)),
                         exist_ok=True)
             with open(self.wal_path, "a", encoding="utf-8") as f:
+                # #464：残行粘连面——末尾不以换行结尾（上次进程写了一半）时先补
+                # 一个换行，使新记录独立成行。正常路径（末尾本就有换行）不写任何
+                # 额外字节 ⇒ 逐字节不变；文本模式保持默认换行转换（与既有 WAL
+                # 的 `\r\n` 一致），不改编码/换行口径。
+                if not self._wal_ends_with_newline():
+                    f.write("\n")
                 f.write(json.dumps(rec, ensure_ascii=False) + "\n")
 
     # ---------- 感知（可注入遮蔽：模型看不到的实体=盲区）----------
@@ -216,12 +316,14 @@ class SimulationLoop:
             self.scene.step(n=1)                      # ② 物理结算（模型不可见内部）
             self.wm.perceive(observations=self._observe())  # ③ 观察（遮蔽注入点）
             v = self.wm.verify()                      # ④ 验证（外部观察者）
-            self._rolling_rates.append(v["hit_rate"])
+            if v["hit_rate"] is not None:
+                self._rolling_rates.append(v["hit_rate"])
             self._growth_tick(v)                      # ⑤ 拓扑生长/回退
             self._wal("episode", {                    # ⑥ 留痕（全量快照）
                 "nodes": self._snapshot_nodes(),
                 "edges": self._snapshot_edges(),
-                "hit_rate": v["hit_rate"]})
+                "hit_rate": v["hit_rate"], "hits": v["hits"],
+                "total": v["total"], "pending": v["pending"]})
         return self.state()
 
     def run(self, n: int = 10) -> Dict:
@@ -231,7 +333,9 @@ class SimulationLoop:
             "ticks": int(n), "tick": self.wm.tick,
             "rolling_hit_rate": round(sum(self._rolling_rates)
                                       / len(self._rolling_rates), 4)
-            if self._rolling_rates else 1.0,
+            if self._rolling_rates else None,
+            "verified_ticks": len(self._rolling_rates),
+            "unverified_ticks": self.ticks_stepped - len(self._rolling_rates),
             "growth_summary": {
                 "born": sum(1 for g in self._growth_log
                             if g["event"] in ("growth", "re-grow")),
@@ -276,7 +380,7 @@ class SimulationLoop:
     def _hit_for(self, verify_result: Dict, eid: str) -> Optional[bool]:
         for d in verify_result.get("details", []):
             if d["entity"] == eid:
-                return bool(d["hit"])
+                return d["hit"] if d["hit"] is not None else None
         return None
 
     def _traj(self, eid: str) -> List[Tuple[float, float, float]]:
@@ -523,12 +627,80 @@ class SimulationLoop:
         except (IndexError, ValueError):
             return None
 
-    def load_priors(self, mdcg_root: str, limit: int = 20) -> Dict:
+    def load_priors(self, mdcg_root: str = "", limit: int = 20, brain=None,
+                    memory_id: Optional[str] = None) -> Dict:
         """认知图 contextual 层（tags 含 wm_simloop 的节点）→ 世界图实体先验。
 
         诚实边界：v1 只重建位置+类别先验（行为不重建，落 wander 缺省）。
+
+        #247（成立）：两处口径错误——
+          · 根来源：`os.environ.get("MDCG_ROOT", mdcg_root or "")` 让**环境变量
+            压过调用方显式传入的 `mdcg_root`**（显式参数被静默丢弃）；
+            改为「显式参数优先，缺省回落 MDCG_ROOT」，与 CLI `--root` 缺省读
+            `MDCG_ROOT`（tools/coggraph/export_coggraph.py:124）同口径。
+          · 上限：`limit` 只在外层文件循环检查，内层逐行 `seeded.append` 无
+            上限 ⇒ 单个文件可种入任意多条实体，`limit` 名存实亡。
+            改为内层循环同样以 `limit` 封顶。
+        判据来源：经验标定（本件 #247，仓内无「simloop 先验装载上限」的理论
+        章节；docs/theory/世界模型与语义时空图_完整理论整理与实现路线.md
+        未涉及）。削掉的判别力：无（两处均为「参数本应生效而未生效」）。
         """
-        root = os.environ.get("MDCG_ROOT", mdcg_root or "")
+        if brain is not None:
+            store = getattr(brain, "store", brain)
+            snapshots = []
+            if memory_id is not None:
+                block = store.read_content(memory_id).partition("\n```lingshu-world\n")[2]
+                snapshots.append((memory_id, json.loads(block.partition("\n```")[0])))
+            else:
+                memories = store.get_nodes_by_tag("wm_simloop", limit=200,
+                                                  seed_query="世界模型推演循环记忆", view="receipt")
+                for memory in memories:
+                    block = memory.content.partition("\n```lingshu-world\n")[2]
+                    if block:
+                        snapshots.append((memory.id, json.loads(block.partition("\n```")[0])))
+            if not snapshots:
+                return {"status": "ok", "seeded": 0, "entities": [], "memory_id": None}
+            memory_id, state = max(snapshots, key=lambda item: item[1]["saved_at"])
+            if state["schema"] != "lingshu.world-prior.v1":
+                raise ValueError("不支持的世界模型经验格式")
+            selected = list(state["nodes"].items())[:max(0, limit)]
+            self.wm.nodes = {eid: WMNode(**{**node, "pos": tuple(node["pos"])})
+                             for eid, node in selected}
+            self.wm.edges = [WMEdge(**edge) for edge in state["edges"]
+                             if edge["source"] in self.wm.nodes and edge["target"] in self.wm.nodes]
+            self.wm._conditions = {eid: state["conditions"][eid] for eid in self.wm.nodes
+                                    if eid in state["conditions"]}
+            self.wm.history = [{**frame, "entities": {eid: pos for eid, pos in frame["entities"].items()
+                                                       if eid in self.wm.nodes}}
+                               for frame in state.get("history") or []]
+            # 轨迹缓冲不随载荷持久化（它只是观测历史按 eid 的投影）。不重建时
+            # 生成端的 static/smooth 判据读到空缓冲，"两侧预测一致"这条经验恢复
+            # 契约就会被判据自身的记账差异打破（实测：smooth_blocked 由
+            # speed_near_zero 变成 not_enough_samples）。载荷缺 "history" 时保持空。
+            self.wm.restore_trajectory_from_history()
+            self.wm.tick = state["tick"]
+            self.wm.size = state["size"]
+            self.wm._motion_estimates = {eid: tuple(value) for eid, value in state["motion_estimates"].items()
+                                         if eid in self.wm.nodes}
+            self.wm._motion_directions = {eid: tuple(value) for eid, value in state["motion_directions"].items()
+                                          if eid in self.wm.nodes}
+            self.wm.relation_history = state["relation_history"]
+            self.wm._patterns = {}
+            # 记忆是先验，不是新观测或本轮生成；验证必须等外部下一帧。
+            self.wm._obs_snapshot = self.wm._obs_tick = self.wm._pred_tick = None
+            self.wm._last_prediction = {}
+            self.wm._compare = {}
+            self.wm._anomalies = []
+            self._hypotheses = {eid: h for eid, h in state["hypotheses"].items()
+                                 if eid in self.wm.nodes and h["node"] in self.wm.nodes}
+            self._rolling_rates = state["rolling_rates"]
+            return {"status": "ok", "seeded": len(selected), "memory_id": memory_id,
+                    "truncated": len(selected) < len(state["nodes"]),
+                    "entities": [{"source": memory_id, "eid": eid, "seeded_id": eid,
+                                   "category": node["category"], "pos": node["pos"]}
+                                  for eid, node in selected],
+                    "note": "脑侧经验已恢复为内部先验；等待外部观测验证"}
+        root = mdcg_root or os.environ.get("MDCG_ROOT", "")
         seeded = []
         ctx = os.path.join(root, "contextual")
         if root and os.path.isdir(ctx):
@@ -539,13 +711,21 @@ class SimulationLoop:
                 if not fn.endswith(".md") or not os.path.isfile(path):
                     continue
                 try:
-                    text = open(path, encoding="utf-8").read()
+                    # #600（#412/#437 BOM 族的漏网读取点）：contextual/*.md 与
+                    # coggraph 读的是同一语料——带 BOM 的笔记在 encoding="utf-8"
+                    # 下首字符是 ﻿，startswith("---") 判否 ⇒ 整篇静默跳过
+                    # （先验不载入、无任何信号）。utf-8-sig 对无 BOM 文件逐字节
+                    # 等价、仅在 BOM 在场时剥掉它；#437 已按此口径修过 coggraph
+                    # 四处读取点，本处为库内漏网的第五处。
+                    text = open(path, encoding="utf-8-sig").read()
                 except OSError:
                     continue
                 fm = text.split("---")[1] if text.startswith("---") else ""
                 if "wm_simloop" not in fm.split("tags:")[-1][:200]:
                     continue
                 for line in text.splitlines():
+                    if len(seeded) >= limit:      # #247：内层同样封顶
+                        break
                     e = self.parse_seed_entity(line)
                     if e:
                         new_id = self.scene.add_entity(
@@ -557,7 +737,8 @@ class SimulationLoop:
 
     # ---------- 回写环（WAL → 认知图 contextual 载荷）----------
 
-    def flush_payloads(self, out_path: Optional[str] = None) -> Dict:
+    def flush_payloads(self, out_path: Optional[str] = None, brain=None,
+                       overwrite: bool = True) -> Dict:
         """推演结果 → 认知图 contextual 节点载荷（frontmatter + 正文）。
 
         对齐 data/mdcg/contextual/arc_agi_ls20_*.md 先例格式；
@@ -570,6 +751,13 @@ class SimulationLoop:
         （`_confine_simloop_out_path`）。边界（如实标注）：`os.replace` 保证
         「目标文件要么是旧内容、要么是完整新内容」，**不**保证掉电后元数据已落盘
         （未做目录 fsync；Windows 上亦无法对目录取句柄）。
+
+        issue #480（安全 P0）：`overwrite=False`（门面写文件时的默认语义）改用
+        **`os.open(O_CREAT | O_EXCL | O_WRONLY)` 排他创建**（目标已存在即抛
+        `FileExistsError`）——**不覆盖**既有 `.md`（尤其认知图真源的受保护节点）。
+        `O_EXCL` 使「判定存在性」与「创建」是**同一次**内核调用 ⇒ 无先查后建的
+        TOCTOU 窗口；写中途失败则清理半截新档。直调库 API 默认仍为
+        `overwrite=True`（覆盖式语义保留，见 #324 守卫）。
         """
         self._flush_count += 1
         g = self.wm.graph()
@@ -586,7 +774,7 @@ class SimulationLoop:
             "created_at": round(self._clock(), 3),
             "edges": [], "evidence_count": 0, "positive_evidence": 0,
             "negative_evidence": 0, "protected": False,
-            "sensitivity": "internal", "verification_basis": "wal_replay",
+            "sensitivity": "internal", "verification_basis": "wal_replay" if self.wal else "observation_history",
             "non_applicable_conditions": []}
         lines = [f"# 世界模型推演循环记忆 - {wid} (tick {self.wm.tick})", "",
                  f"## 世界快照 (tick={self.wm.tick})"]
@@ -595,8 +783,14 @@ class SimulationLoop:
             lines.append(f"- {tag}: {n['category']} id={eid} "
                          f"pos=({n['pos'][0]}, {n['pos'][1]}, {n['pos'][2]}) "
                          f"confidence={round(n['confidence'], 3)}")
-        rate = round(self._rolling_rates[-1], 4) if self._rolling_rates else 1.0
-        lines += ["", f"命中率: {rate} | 节点 {g['node_count']} | "
+        rate = round(self._rolling_rates[-1], 4) if self._rolling_rates else None
+        # 双契约并存：无读数时数值槽位保持 main 的 `None` 写法（tests/
+        # test_world_observation_contracts.py 断言 "命中率: None"），「暂无验证读数」
+        # 只作括号说明（tests/test_world_feedback.py 断言该标记存在）。
+        reading = f"{rate}（暂无验证读数）" if rate is None else rate
+        lines += ["", f"最近已验证轮次命中率: {reading} | "
+                  f"已验证轮次 {len(self._rolling_rates)}/{self.ticks_stepped} | "
+                  f"节点 {g['node_count']} | "
                   f"边 {g['edge_count']} | WAL {self._seq} 条",
                   f"growth: born={sum(1 for x in self._growth_log if x['event'] in ('growth', 're-grow'))} "
                   f"confirmed={sum(1 for x in self._growth_log if x['event'] == 'confirm')} "
@@ -607,6 +801,26 @@ class SimulationLoop:
                 lines.append(f"- {ev['event']}@{ev['tick']}: "
                              f"{ev.get('subject')}→{ev.get('hypothesis')} "
                              f"{ev.get('reason', ev.get('criterion', ''))}")
+        confirmed = {subject: h for subject, h in self._hypotheses.items()
+                     if h["phase"] == "confirmed"}
+        confirmed_ids = {h["node"] for h in confirmed.values()}
+        nodes = {eid: {k: v for k, v in node.items() if k != "conditions"}
+                 for eid, node in g["nodes"].items()
+                 if not node["attrs"].get("hypothesis") or eid in confirmed_ids}
+        for eid in confirmed_ids:
+            nodes[eid]["attrs"]["phase"] = "confirmed"
+        state = {"schema": "lingshu.world-prior.v1", "saved_at": fm["created_at"],
+                 "tick": self.wm.tick, "size": self.wm.size, "nodes": nodes,
+                 "edges": [e for e in g["edges"] if e["source"] in nodes and e["target"] in nodes],
+                 "conditions": {eid: g["nodes"][eid]["conditions"] for eid in nodes},
+                 "history": self.wm.history,
+                 "motion_estimates": self.wm._motion_estimates,
+                 "motion_directions": self.wm._motion_directions,
+                 "relation_history": self.wm.relation_history,
+                 "hypotheses": confirmed, "rolling_rates": self._rolling_rates,
+                 "last_verification": self.wm._compare}
+        lines += ["", "## 可恢复的观测经验（内部先验）", "```lingshu-world",
+                  json.dumps(state, ensure_ascii=False), "```"]
         body = "\n".join(lines)
         md = ("---\n" + "\n".join(
             f"{k}: {json.dumps(v, ensure_ascii=False) if isinstance(v, (list, dict)) else json.dumps(v, ensure_ascii=False)}"
@@ -622,21 +836,67 @@ class SimulationLoop:
             # 判据来源：经验标定（本件 #324）——口径取「临时文件 + os.replace」；
             # 追不到更早出处。
             os.makedirs(os.path.dirname(os.path.abspath(out_path)), exist_ok=True)
-            tmp_path = "%s.tmp-%s" % (out_path, uuid.uuid4().hex[:8])
-            try:
-                with open(tmp_path, "w", encoding="utf-8") as f:
-                    f.write(md)
-                os.replace(tmp_path, out_path)
-            except BaseException:
+            if overwrite:
+                # #324 口径：临时文件 + os.replace（原子、覆盖式语义保留）
+                # #498（#324 修复的副作用）：`os.replace` 把目标换成**新 inode**
+                # ⇒ ①不继承旧档刻意收紧的权限位（如运维设的 `0600` 被静默放宽成
+                #   `0644`）；②目标是符号链接时替换的是**链接本身**（链接被换成
+                #   普通档，链接指向的真实产物不再更新）。旧实现
+                #   `open(out_path, "w")` 截断写同一 inode，两者都保留。
+                # 修法：目标先 `realpath` 穿透链接（临时档建在真实目标同目录 ⇒
+                # 同卷原子性不丢），`os.replace` 前把旧档权限位拷到临时档
+                # （目标不存在则跳过，用 umask 默认）。返回值仍回报调用方给的
+                # `out_path`（对外契约不变）。边界：只搬权限位，不搬属主/属组。
+                target_path = os.path.realpath(out_path)
+                tmp_path = "%s.tmp-%s" % (target_path, uuid.uuid4().hex[:8])
                 try:
-                    if os.path.exists(tmp_path):
-                        os.remove(tmp_path)
-                except OSError:
-                    pass
-                raise
+                    with open(tmp_path, "w", encoding="utf-8") as f:
+                        f.write(md)
+                    try:
+                        os.chmod(tmp_path, os.stat(target_path).st_mode & 0o7777)
+                    except FileNotFoundError:
+                        pass
+                    os.replace(tmp_path, target_path)
+                except BaseException:
+                    try:
+                        if os.path.exists(tmp_path):
+                            # #498 反向腿：临时件可能刚被 chmod 成旧档的**只读位**——
+                            # Windows 上只读档删不掉（`os.remove` ⇒ PermissionError）
+                            # ⇒ 失败路径留下 `.tmp-` 残件。清理前先尽力恢复可写
+                            # （POSIX 上 unlink 只看目录权限，此步无害）。
+                            try:
+                                os.chmod(tmp_path, 0o600)
+                            except OSError:
+                                pass
+                            os.remove(tmp_path)
+                    except OSError:
+                        pass
+                    raise
+            else:
+                # #480（安全 P0）：**O_EXCL 排他创建**——目标已存在即
+                # `FileExistsError`，**不覆盖**既有 `.md`（尤其认知图真源里
+                # 受保护的节点文件）。`O_EXCL` 使「判定存在性」与「创建」原子，
+                # 不存在先查后建的 TOCTOU 窗口。写中途失败则清理半截新档。
+                fd = os.open(out_path, os.O_CREAT | os.O_EXCL | os.O_WRONLY, 0o644)
+                try:
+                    with os.fdopen(fd, "w", encoding="utf-8") as f:
+                        f.write(md)
+                except BaseException:
+                    try:
+                        os.remove(out_path)
+                    except OSError:
+                        pass
+                    raise
             written = out_path
+        memory_id = None
+        if brain is not None:
+            memory_id = brain.engine.add_perception(
+                md, importance=fm["importance"], tags=fm["tags"],
+                condition_space=json.loads(fm["condition_space"]),
+                role="tool-output", skip_dedup=True).id
         return {"status": "ok", "payload": payload, "written": written,
-                "note": "载荷已生成；真实摄取走 mdcg 正规通道（不旁路写真源）"}
+                "memory_id": memory_id,
+                "note": "经验已经 MCP 摄取" if memory_id else "载荷已生成；可通过 brain 参数经 MCP 摄取"}
 
     # ---------- 报告 ----------
 
@@ -650,7 +910,9 @@ class SimulationLoop:
                 "anomaly_count": g["anomaly_count"],
                 "rolling_hit_rate": round(sum(self._rolling_rates)
                                           / len(self._rolling_rates), 4)
-                if self._rolling_rates else 1.0,
+                if self._rolling_rates else None,
+                "verified_ticks": len(self._rolling_rates),
+                "unverified_ticks": self.ticks_stepped - len(self._rolling_rates),
                 "hypotheses_active": len(self._hypotheses),
                 "growth_events": len(self._growth_log),
                 "wal_records": len(self.wal),

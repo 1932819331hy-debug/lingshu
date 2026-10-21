@@ -34,23 +34,45 @@ class ViewObs:
 
 
 def _ray_from_view(obs: ViewObs) -> Tuple[Tuple[float, float, float], Tuple[float, float, float]]:
-    """相机位姿 + 2D 点 → 世界射线（原点 + 方向）。"""
+    """相机位姿 + 2D 点 → 世界射线（原点 + 方向）。
+
+    位姿分支必须覆盖 `Camera3D` 的**全部**字段（yaw/pitch、roll、显式 basis），
+    与 `world3d.Camera3D.to_camera`（世界→相机）互为逆变换——射线必过「投影出
+    该像素的世界点」（`project ∘ unproject == id` 可回代，见 `Camera3D.unproject`
+    的 docstring）。只抄 yaw/pitch 的旧实现把 basis 相机当成「相机在原点、无旋转
+    朝 +z 看」：多视角融合对这些相机不收敛或收敛到错位（#710）。
+    """
     cam = obs.camera
     f = cam.focal(obs.screen_w)
     # 屏幕坐标 → 相机坐标（针孔逆投影，深度=1）
     cx_cam = (obs.bbox_center[0] - obs.screen_w / 2) / f
     cy_cam = (obs.screen_h / 2 - obs.bbox_center[1]) / f
-    # 相机坐标 → 世界坐标（逆旋转 + 逆平移）
-    cos_p, sin_p = math.cos(cam.pitch), math.sin(cam.pitch)
-    cos_y, sin_y = math.cos(cam.yaw), math.sin(cam.yaw)
-    # 逆 pitch（绕 X）
-    y1 = cy_cam * cos_p + sin_p
-    z1 = -cy_cam * sin_p + cos_p
-    # 逆 yaw（绕 Y）
-    x2 = cx_cam * cos_y - z1 * sin_y
-    z2 = cx_cam * sin_y + z1 * cos_y
     origin = (cam.cx, cam.cy, cam.cz)
-    direction = (x2, y1, z2)
+    if cam.basis is not None:
+        # 显式正交基（行主序：右 / 上 / 前向）→ 世界方向。与 `Camera3D.unproject`
+        # 同式（深度=1 时相机系点即 (cx_cam, cy_cam, 1)），只是省去 +origin（方向
+        # 与平移无关）。basis 与 yaw/pitch/roll 不并存（字段注释：「给了它就不用
+        # yaw/pitch/roll」），故此处与 `to_camera` 一致地忽略 roll。
+        (r0, r1, r2), (u0, u1, u2), (f0, f1, f2) = cam.basis
+        direction = (cx_cam * r0 + cy_cam * u0 + f0,
+                     cx_cam * r1 + cy_cam * u1 + f1,
+                     cx_cam * r2 + cy_cam * u2 + f2)
+    else:
+        if cam.roll:
+            # 逆 roll（绕相机前向轴；与 `to_camera` 的 roll 分支同轴反向）
+            cos_r, sin_r = math.cos(cam.roll), math.sin(cam.roll)
+            cx_cam, cy_cam = (cx_cam * cos_r + cy_cam * sin_r,
+                              -cx_cam * sin_r + cy_cam * cos_r)
+        # 相机坐标 → 世界坐标（逆旋转 + 逆平移）
+        cos_p, sin_p = math.cos(cam.pitch), math.sin(cam.pitch)
+        cos_y, sin_y = math.cos(cam.yaw), math.sin(cam.yaw)
+        # 逆 pitch（绕 X）
+        y1 = cy_cam * cos_p + sin_p
+        z1 = -cy_cam * sin_p + cos_p
+        # 逆 yaw（绕 Y）
+        x2 = cx_cam * cos_y - z1 * sin_y
+        z2 = cx_cam * sin_y + z1 * cos_y
+        direction = (x2, y1, z2)
     norm = math.sqrt(sum(d * d for d in direction))
     if norm < 1e-9:
         direction = (0, 0, 1)
@@ -176,13 +198,30 @@ class MultiViewFusion:
                         size: Tuple[float, float, float] = (1.0, 1.0, 1.0),
                         color: Tuple[int, int, int] = (200, 200, 200),
                         shape: str = "box",
-                        confidence: float = 0.5) -> Dict:
+                        confidence: float = 0.5, eid: str = "",
+                        tick: Optional[int] = None) -> Dict:
         """添加一个视角的观测（类别 + 视角）→ 三角化融合 → 返回 3D 位置。
 
         观测先按 merge_dist 关联到该类别下的某个物体桶，再在桶内三角化——
         同类不同物体各自成桶，互不污染。
         """
-        rec = self._associate(category, obs)
+        if eid:
+            tracks = self._objects.setdefault(category, [])
+            rec = next((tr for tr in tracks if tr.get("eid") == eid), None)
+            if rec is None:
+                rec = {"views": [], "center": None, "eid": eid}
+                tracks.append(rec)
+        else:
+            rec = self._associate(category, obs)
+        # 一个运动实例的不同帧不能充当同一时刻的多相机射线。
+        # `tick=None` 语义 = 本帧**不参与帧号判定、不改变已记录的帧号**（docs/
+        # world_memory_first_batch.md：融合只组合一个 tick 内的多相机射线）。旧实现
+        # 无条件 `rec["tick"] = tick`，把「没给帧号」写成「帧号被重置为 None」——
+        # 紧接着下一帧带 tick 时便触发清空，已融合物体凭空消失（#711）。
+        if tick is not None:
+            if tick != rec.get("tick"):
+                rec["views"], rec["center"] = [], None
+            rec["tick"] = tick
         rec["size"], rec["color"], rec["shape"] = size, color, shape
         rec["views"].append(obs)
         # 保留最近 N 视角（内存控制）
@@ -200,6 +239,7 @@ class MultiViewFusion:
             "views_used": len(rec["views"]),
             "triangulated": center is not None,
             "confidence": confidence,
+            "eid": rec.get("eid", ""), "tick": tick,
         }
 
     def fused_objects(self) -> List[Dict]:
@@ -214,5 +254,6 @@ class MultiViewFusion:
                     "center": tuple(round(c, 2) for c in rec["center"]),
                     "size": rec["size"], "color": rec["color"], "shape": rec["shape"],
                     "views": len(rec["views"]),
+                    "eid": rec.get("eid", ""), "tick": rec.get("tick"),
                 })
         return out

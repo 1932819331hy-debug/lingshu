@@ -255,8 +255,9 @@ class HexNet:
             correct += int((logits.argmax(axis=1) == y[i:i + batch]).sum())
         return correct / len(x)
 
-    def grow_kernel(self, seed: int = 7):
-        """误差驱动生长：+1 核（手写核族初始化，mix 对应列零——初始不影响输出）。"""
+    def grow_kernel(self):
+        """误差驱动生长：+1 核（手写核族按 K 轮转——覆盖多样性且确定性可复现，
+        mix 对应列零——初始不影响输出）。"""
         names = list(DEFAULT_KERNELS)
         new_k = DEFAULT_KERNELS[names[self.K % len(names)]]
         self.conv = np.vstack([self.conv, new_k[None, :]])
@@ -335,7 +336,7 @@ def train_infogap(net: HexNet, x: np.ndarray, y: np.ndarray,
         if stall >= stall_patience and growths + reverts < max_growth:
             d_before = net.loss(xb, yb)
             conv_snap, mix_snap, K_before = net.conv.copy(), net.mix.copy(), net.K
-            net.grow_kernel(seed=seed + step)
+            net.grow_kernel()
             growths += 1
             stall = 0
             for _ in range(verify_steps):           # 验证基底：新分支能否稳定解释误差
@@ -378,7 +379,8 @@ def train_infogap(net: HexNet, x: np.ndarray, y: np.ndarray,
         if log_every and step % log_every == 0 and verbose:
             print(f"  [step {step}] D={d:.4f} 死区={dead_zone:.4f} 冻结{sample.size - updates}/{sample.size}")
 
-    return {"algo": ALGO, "dead_zone": round(dead_zone, 5), "final_D": history[-1]["D"],
+    final_D = history[-1]["D"] if history else round(d0, 5)
+    return {"algo": ALGO, "dead_zone": round(dead_zone, 5), "final_D": final_D,
             "steps": len(history), "growths": growths, "reverts": reverts,
             "final_K": net.K, "n_params": net.n_params(),
             "frozen_total": frozen_total,
@@ -409,6 +411,19 @@ def pretrain_selfsup(net: HexNet, x: np.ndarray, mask_ratio: float = 0.25,
     `vec[pi] -= lr * g` 的原地更新路径（`#340` 靶区）与 `curve` 的评估口径。
     """
     rng = np.random.default_rng(seed)
+    # 固定评估样本与掩码：init/final 必须测量同一个重建任务（PR #429）。
+    evaluation = x[:batch, ..., :1]
+    eval_hole = np.random.default_rng(seed).random(evaluation.shape[:3]) < mask_ratio
+    eval_masked = evaluation.copy()
+    eval_masked[eval_hole] = 0.0
+
+    def recon_loss(masked, target, hole) -> float:
+        # 通道语义：pred 为单通道，须与同一通道比较，不广播到另外两个颜色通道。
+        h = hex_conv_batch_multi(masked[..., :1], net.conv[:, None, :])
+        pred = h.mean(axis=-1, keepdims=True)
+        return float(((pred[hole] - target[..., :1][hole]) ** 2).mean())
+
+    initial = recon_loss(eval_masked, evaluation, eval_hole)
     conv_vec_len = net.K * 7
     n_cells = int(x.shape[1] * x.shape[2])
     REF_CELLS = 160                     # 原 steps 标定的旧晶格规模（10×16）
@@ -420,28 +435,24 @@ def pretrain_selfsup(net: HexNet, x: np.ndarray, mask_ratio: float = 0.25,
         masked = xb.copy()
         hole = rng.random(xb.shape[:3]) < mask_ratio
         masked[hole] = 0.0
-
-        def recon_loss() -> float:
-            # 原实作取 [..., 0]（只第 0 通道），此处保持同一语义
-            h = hex_conv_batch_multi(masked[..., :1], net.conv[:, None, :])
-            pred = h.mean(axis=-1, keepdims=True)
-            return float(((pred[hole] - xb[hole]) ** 2).mean())
-
-        vec = net.conv.ravel()
+        vec = net.conv.ravel().copy()
         sample = rng.choice(conv_vec_len, size=min(samples_per_step, conv_vec_len),
                             replace=False)
         for pi in sample:
             vp, vm = vec.copy(), vec.copy()
             vp[pi] += eps; vm[pi] -= eps
-            net.conv = vp.reshape(net.K, 7); dp = recon_loss()
-            net.conv = vm.reshape(net.K, 7); dm = recon_loss()
+            net.conv = vp.reshape(net.K, 7)
+            dp = recon_loss(masked, xb, hole)
+            net.conv = vm.reshape(net.K, 7)
+            dm = recon_loss(masked, xb, hole)
             net.conv = vec.reshape(net.K, 7)
             g = (dp - dm) / (2 * eps)
             vec[pi] -= lr * g
         net.conv = vec.reshape(net.K, 7)
-        curve.append(round(recon_loss(), 5))
-    return {"algo": ALGO + "+selfsup", "init": curve[0], "final": curve[-1],
-            "curve": curve, "steps": eff_steps, "n_cells": n_cells}
+        curve.append(round(recon_loss(eval_masked, evaluation, eval_hole), 5))
+    return {"algo": ALGO + "+selfsup", "init": round(initial, 5),
+            "final": curve[-1] if curve else round(initial, 5), "curve": curve,
+            "steps": eff_steps, "n_cells": n_cells}
 
 
 # ==================== 类别条件卡 · 四态判定（三层分工） ====================
@@ -459,8 +470,7 @@ def _softmax(z: np.ndarray) -> np.ndarray:
     return e / e.sum(axis=-1, keepdims=True)
 
 
-def four_state_classify(net: HexNet, logits: np.ndarray,
-                        cards: List[Dict]) -> List[Dict]:
+def four_state_classify(logits: np.ndarray, cards: List[Dict]) -> List[Dict]:
     """类别条件卡并行评估 → 四态判定（教程§5+§11 三层分工）。
 
     概率层（softmax）只产生候选与不确定度，判定权在条件层：
@@ -499,7 +509,7 @@ def four_state_accuracy(net: HexNet, x: np.ndarray, y: np.ndarray,
     stats = {"ACCEPT": 0, "DEFER": 0, "BLINDSPOT": 0, "ACCEPT_correct": 0}
     for i in range(0, len(x), batch):
         logits, _ = net.forward(x[i:i + batch])
-        for j, r in enumerate(four_state_classify(net, logits, cards)):
+        for j, r in enumerate(four_state_classify(logits, cards)):
             stats[r["verdict"]] += 1
             if r["verdict"] == "ACCEPT":
                 stats["ACCEPT_correct"] += int(r["class"] == y[i + j])
