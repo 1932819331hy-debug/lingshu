@@ -148,10 +148,15 @@ class UnifiedWorldModel:
         for _ in range(8):
             cand = "wm_" + "".join(self._rng.choice("0123456789abcdef")
                                    for _ in range(6))
-            if cand not in self.nodes:
+            if cand not in self.nodes and (taken is None or cand not in taken):
                 return cand
-        # 兜底：连续碰撞则加长 eid 避免极小概率的 6 位空间连撞
-        return "wm_" + "".join(self._rng.choice("0123456789abcdef") for _ in range(12))
+        # 长 ID 也可能撞上现有或本帧尚未落库的显式 ID；确定性后缀保证最终找到空位。
+        base = "wm_" + "".join(self._rng.choice("0123456789abcdef") for _ in range(12))
+        cand, suffix = base, 0
+        while cand in self.nodes or (taken is not None and cand in taken):
+            suffix += 1
+            cand = f"{base}_{suffix}"
+        return cand
 
     def _expected(self, eid: str) -> Optional[Dict]:
         """生成先验：上一 tick 对 eid 的预期（供 perceive 一致性检查）。"""
