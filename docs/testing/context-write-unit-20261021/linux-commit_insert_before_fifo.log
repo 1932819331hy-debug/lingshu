@@ -7,4 +7,4 @@ E   AssertionError: failed context write was committed before FIFO failed
 E   assert 3 == 2
 =========================== short test summary info ============================
 FAILED tests/test_context_write_unit.py::test_fifo_failure_undoes_the_new_context_on_disk
-1 failed in 0.86s
+1 failed in 0.85s
