@@ -1686,6 +1686,12 @@ class LayeredStore:
             self._tx_owns_txn = not nested
         try:
             yield conn
+            # COMMIT / RELEASE 自身也可能失败；须与方法体异常共用回滚边界，
+            # 否则连接会遗留失败写入和写锁，后续写入虽返回成功却仍未提交。
+            if nested:
+                conn.execute("RELEASE SAVEPOINT %s" % savepoint)
+            else:
+                conn.commit()
         except BaseException:
             try:
                 if nested:
@@ -1696,11 +1702,6 @@ class LayeredStore:
             except Exception:
                 pass
             raise
-        else:
-            if nested:
-                conn.execute("RELEASE SAVEPOINT %s" % savepoint)
-            else:
-                conn.commit()
         finally:
             self._tx_depth -= 1
             if self._tx_depth == 0:
