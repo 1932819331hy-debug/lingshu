@@ -1,0 +1,127 @@
+{
+  "python": "3.13.12",
+  "platform": "Linux",
+  "sqlite": "3.46.1",
+  "baseline": "ac31fedff60f23f3dfd8b613ea89e13dde997b05",
+  "guard_sha256": "97803642de1fb1ac7ef5f3463c85244fc2508b512b7ec42341259f006eadb153",
+  "records": [
+    {
+      "case": "fixed",
+      "ok": true,
+      "returncode": 0,
+      "passed": 7,
+      "failed_tests": [],
+      "errors": 0,
+      "skipped": 0,
+      "expected_failures": [],
+      "expected_assertion": "",
+      "pytest_summary": "7 passed in 3.41s",
+      "source_sha256": {
+        "lingshu/core/core.py": "2f5960e68b7c8ad9e466b858cd01192d0c76e63630d34e85b2f9c6e7c7c0579a"
+      }
+    },
+    {
+      "case": "baseline",
+      "ok": true,
+      "returncode": 1,
+      "passed": 2,
+      "failed_tests": [
+        "test_existing_instance_uses_current_database_capacity[decreased]",
+        "test_existing_instance_uses_current_database_capacity[increased]",
+        "test_existing_process_keeps_context_after_capacity_increase",
+        "test_fifo_failure_undoes_only_this_call_in_a_caller_transaction",
+        "test_fifo_failure_undoes_the_new_context_on_disk"
+      ],
+      "errors": 0,
+      "skipped": 0,
+      "expected_failures": [
+        "test_existing_instance_uses_current_database_capacity[increased]",
+        "test_existing_instance_uses_current_database_capacity[decreased]",
+        "test_existing_process_keeps_context_after_capacity_increase",
+        "test_fifo_failure_undoes_the_new_context_on_disk",
+        "test_fifo_failure_undoes_only_this_call_in_a_caller_transaction"
+      ],
+      "expected_assertion": "",
+      "pytest_summary": "5 failed, 2 passed in 3.50s",
+      "source_sha256": {
+        "lingshu/core/core.py": "6285d22fdb24a1c534b981a6b996fd987a95f4671dee49fd359b52413935b493"
+      }
+    },
+    {
+      "case": "reuse_stale_instance_capacity",
+      "ok": true,
+      "returncode": 1,
+      "passed": 0,
+      "failed_tests": [
+        "test_existing_instance_uses_current_database_capacity[increased]"
+      ],
+      "errors": 0,
+      "skipped": 0,
+      "expected_failures": [
+        "test_existing_instance_uses_current_database_capacity[increased]"
+      ],
+      "expected_assertion": "context write used a stale or default capacity",
+      "pytest_summary": "1 failed in 1.02s",
+      "source_sha256": {
+        "lingshu/core/core.py": "1304d92a1d3de3ee8527b09caba84f2ba759f3fac3b54f0e332cbaee46af0af8"
+      }
+    },
+    {
+      "case": "ignore_smaller_persisted_capacity",
+      "ok": true,
+      "returncode": 1,
+      "passed": 0,
+      "failed_tests": [
+        "test_existing_instance_uses_current_database_capacity[decreased]"
+      ],
+      "errors": 0,
+      "skipped": 0,
+      "expected_failures": [
+        "test_existing_instance_uses_current_database_capacity[decreased]"
+      ],
+      "expected_assertion": "context write used a stale or default capacity",
+      "pytest_summary": "1 failed in 0.98s",
+      "source_sha256": {
+        "lingshu/core/core.py": "418af5790a1241f3c5b1b3374cbbdae25cb1cfa7e780c10e91445ca9e9d26596"
+      }
+    },
+    {
+      "case": "commit_insert_before_fifo",
+      "ok": true,
+      "returncode": 1,
+      "passed": 0,
+      "failed_tests": [
+        "test_fifo_failure_undoes_the_new_context_on_disk"
+      ],
+      "errors": 0,
+      "skipped": 0,
+      "expected_failures": [
+        "test_fifo_failure_undoes_the_new_context_on_disk"
+      ],
+      "expected_assertion": "failed context write was committed before FIFO failed",
+      "pytest_summary": "1 failed in 0.86s",
+      "source_sha256": {
+        "lingshu/core/core.py": "08daeb1bb26cb6c19f078b4342f559262f29889bb48e8a8b2a78d304009b5f09"
+      }
+    },
+    {
+      "case": "omit_fifo_trimming",
+      "ok": true,
+      "returncode": 1,
+      "passed": 0,
+      "failed_tests": [
+        "test_successful_context_call_can_be_rolled_back_by_caller"
+      ],
+      "errors": 0,
+      "skipped": 0,
+      "expected_failures": [
+        "test_successful_context_call_can_be_rolled_back_by_caller"
+      ],
+      "expected_assertion": "successful context write did not trim FIFO inside caller transaction",
+      "pytest_summary": "1 failed in 0.84s",
+      "source_sha256": {
+        "lingshu/core/core.py": "d7e7bbda6ca81757a25872e958491c48758bf2c1a172f8a8b74eade950f08d8b"
+      }
+    }
+  ]
+}
