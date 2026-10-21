@@ -7984,7 +7984,11 @@ class SpacetimeMemoryEngine:
 
     def add_context(self, content: str, importance: float = 0.4,
                     condition_space: ConditionSpace = None, tags: List[str] = None) -> STNode:
-        """写入情境层节点（短期记忆，importance 默认 0.4，随 decay 淡出）。"""
+        """写入情境层节点，按同一写事务内的持久化容量执行 FIFO。
+
+        容量是全库设置；已有实例的缓存不能覆盖另一实例已提交的新值。
+        插入和淘汰共同成功或撤回，调用方已有事务时只撤回本次工作。
+        """
         cs = condition_space or ConditionSpace(
             "情境感知", "会话摄入", (time.time(), time.time()+3600), "协议实例运行中")
         node = STNode(
@@ -7993,8 +7997,9 @@ class SpacetimeMemoryEngine:
             temporal_coordinate=time.time(), condition_space=cs,
             importance=importance, confidence=0.5,
             layer=MemoryLayer.CONTEXT, tags=(tags or []) + ["context"])
-        self.store.add_node(node)
-        self.store.enforce_context_cap(self._context_max)
+        with self.store._tx():
+            self.store.add_node(node)
+            self.store.enforce_context_cap(self._load_context_max())
         return node
 
     def get_recent_context(self, limit: int = 20) -> List[STNode]:
@@ -12999,6 +13004,7 @@ class SpacetimeMemoryEngine:
         return self.store.subgraph(root_id, max_depth=max_depth,
                                    relation_types=relation_types)
 
+    @_transactional
     def subgraph_replace(self, parent_id: str, old_sub_root_id: str,
                          new_subtree: Dict) -> Dict:
         """子图替换（可嵌套认知图 · 子部件生成基底）。
@@ -13060,6 +13066,9 @@ class SpacetimeMemoryEngine:
         （既有语义，非本件引入；本件只消「半截落库」）。② 旧子树 `traverse` 的
         `max_nodes=500` 截断（#139-G）仍不收口。
         """
+        # 范围、后代集合与保护判定也须处于同一写快照。只包住挂入/删除时，
+        # 另一实例可在预检后保护或移走旧子树，导致部分替换或删除范围外节点。
+        # 入口事务先取写锁，再预检；已有调用方事务仍保留其提交/回滚权。
         import json as _json
         # ---- A 前置校验（先判后动）：任一条不满足即整体拒绝，零改动 ----
         if self.store.get_node(parent_id) is None:
