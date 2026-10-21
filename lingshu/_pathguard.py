@@ -203,6 +203,46 @@ def _capture_startup_launch_dir():
 _STARTUP_LAUNCH_DIR = _capture_startup_launch_dir()
 
 
+# issue #487②：宿主可能在 `import lingshu` **之前** `sys.path.insert(0, vendor)`，
+# 使 `sys.path[0]` 不再等于真实启动面（脚本目录被挤到后面）——只按 `sys.path[0]`
+# 冻结启动面会把 vendor 当启动面、把真实脚本目录留进受控面（其下同名毒组件被
+# 引擎构造期执行）。`sys.argv[0]` 仍是解释器收到的脚本路径，优先用它定位脚本
+# 目录；`-m` 形态 argv[0] 是模块文件（`__main__.py`），其目录不是启动面，跳过；
+# `-c` / REPL 的 `-c` / 空值同样跳过（回退 `sys.path[0]` 快照）。
+def _capture_argv_script_dir():
+    try:
+        argv0 = _sys.argv[0] if _sys.argv else None
+    except Exception:  # pragma: no cover - argv 异常
+        return None
+    if not isinstance(argv0, str) or not argv0 or argv0.startswith("-"):
+        return None
+    if _os is None:
+        return None
+    try:
+        ap = _os.path.abspath(argv0)
+        if not (_os.path.isfile(ap) and _os.path.basename(ap) != "__main__.py"):
+            return None
+        d = _os.path.dirname(ap)
+        # `-m app.mod` 形态：argv[0] 是模块文件（不是 `__main__.py`），其目录
+        # 通常**不在** sys.path（`-m` 注入的是启动 cwd）；脚本形态 argv[0] 目录
+        # 必在 sys.path（解释器注入，可能被宿主前插挤到后面）⇒ 以此区分两者。
+        keys = set()
+        for e in _sys.path:
+            if isinstance(e, str) and e:
+                try:
+                    keys.add(_os.path.normcase(_os.path.realpath(e)))
+                except Exception:
+                    pass
+        if _os.path.normcase(_os.path.realpath(d)) not in keys:
+            return None
+        return d
+    except Exception:  # pragma: no cover - 非法路径
+        return None
+
+
+_STARTUP_ARGV_SCRIPT_DIR = _capture_argv_script_dir()
+
+
 class CwdImportsAllowed(UserWarning):
     """逃生口 `LINGSHU_ALLOW_CWD_IMPORTS` 被打开（cwd/空串解析面未被拒绝）。"""
 
@@ -581,6 +621,14 @@ def main_script_dir():
     与「真实路径」两侧可比；`argv0` 不可解析时不再退回**判定时**的 `sys.path[0]`
     （#421 的漂移面），而用启动期快照。
     """
+    # issue #487②：脚本形态优先用 argv[0] 的目录——它不受宿主 import 前
+    # `sys.path.insert(0, vendor)` 影响；`-m` / `-c` / REPL 形态由上面的
+    # `_capture_argv_script_dir()` 返回 None，自动回退 sys.path[0] 快照。
+    if _STARTUP_ARGV_SCRIPT_DIR is not None:
+        try:
+            return _os.path.realpath(_STARTUP_ARGV_SCRIPT_DIR)
+        except Exception:  # pragma: no cover - 非法路径
+            return _STARTUP_ARGV_SCRIPT_DIR
     if _STARTUP_LAUNCH_DIR is not None:
         try:
             return _os.path.realpath(_STARTUP_LAUNCH_DIR)
