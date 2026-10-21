@@ -176,10 +176,22 @@ MAGIC_PLAN = 0x4845584E4E525531
 # ==================== plan 生成(权威随机性在 Python) ====================
 
 def make_plan(n: int, steps: int, batch: int, samples: int,
-              seed: int) -> Dict:
+              seed: int, k1: int = 6, k2: int = 6) -> Dict:
+    """生成 plan。**#294**：支路采样上限随 `k1/k2` 走，不再写死 `375`。
+
+    原实现把 `n_params` 硬编码成 `6*7 + 6*6*7 + 9*(6+3)`，只在 `K1=K2=6`
+    时与真实参数量巧合相等；`K1/K2` 取其它值时 `plan_sample` 会给出越界下标，
+    下游 `py_executor_par` 的 `v[pi]` 直接 `IndexError`（硬崩，不是静默）。
+
+    口径与 `hex_hier.HexHierNet.n_params()` 对齐：
+        n_params = K1*7 + K2*K1*7 + 9*(K2+3)
+    其中 `9 = len(OBJ)`、`K2+3 = head_in`（`hex_hier.py` head_in = n_kernels2+3）。
+    **注意**（已知边界，未在本件扩范围）：`stacked=False` 时 head_in 为 `K1+3`、
+    `deep_norm and amp_sep` 时 head_in 额外 +1，本式不覆盖这两种配置。
+    """
     rng = np.random.default_rng(seed)
     plan_batch = [rng.permutation(n)[:batch].tolist() for _ in range(steps)]
-    n_params = 6 * 7 + 6 * 6 * 7 + 9 * (6 + 3)          # K1=6, K2=6, head
+    n_params = k1 * 7 + k1 * k2 * 7 + 9 * (k2 + 3)      # 与 HexHierNet.n_params() 同口径
     plan_sample = [rng.choice(n_params, size=min(samples, n_params),
                               replace=False).tolist() for _ in range(steps)]
     return {"plan_batch": plan_batch, "plan_sample": plan_sample}
@@ -394,7 +406,8 @@ def equivalence_par(net, lat: np.ndarray, obj_idx: np.ndarray,
                     tol: float = 1e-9) -> Dict:
     """Python 批量参考 ↔ Rust train_par(单线程)逐位等价。"""
     vec0 = net.get_vec().copy()
-    plan = make_plan(len(lat), steps, batch, samples, seed)
+    plan = make_plan(len(lat), steps, batch, samples, seed,
+                     k1=net.K, k2=net.K2)
     curve_py = py_executor_par(lat, obj_idx, shape_idx, vec0.copy(), plan, net)
     curve_rs, _, _ = run_rust_train(lat, obj_idx, shape_idx, vec0.copy(),
                                     plan, mode="train_par", threads=1)
@@ -406,9 +419,10 @@ def equivalence_par(net, lat: np.ndarray, obj_idx: np.ndarray,
 def determinism_check(lat: np.ndarray, obj_idx: np.ndarray,
                       shape_idx: np.ndarray, vec0: np.ndarray,
                       steps: int = 10, batch: int = 32, samples: int = 24,
-                      seed: int = 7, threads_list=(1, 2, 4)) -> Dict:
+                      seed: int = 7, threads_list=(1, 2, 4),
+                      k1: int = 6, k2: int = 6) -> Dict:
     """多线程确定性:同一 plan 不同线程数输出必须逐位一致。"""
-    plan = make_plan(len(lat), steps, batch, samples, seed)
+    plan = make_plan(len(lat), steps, batch, samples, seed, k1=k1, k2=k2)
     ref = None
     out = {}
     for th in threads_list:
@@ -425,9 +439,9 @@ def determinism_check(lat: np.ndarray, obj_idx: np.ndarray,
 def bench_threads(lat: np.ndarray, obj_idx: np.ndarray, shape_idx: np.ndarray,
                   vec0: np.ndarray, steps: int = 60, batch: int = 96,
                   samples: int = 64, seed: int = 11,
-                  threads_list=(1, 2, 4, 8)) -> Dict:
+                  threads_list=(1, 2, 4, 8), k1: int = 6, k2: int = 6) -> Dict:
     """加速曲线:同 plan 不同线程数的每步耗时。"""
-    plan = make_plan(len(lat), steps, batch, samples, seed)
+    plan = make_plan(len(lat), steps, batch, samples, seed, k1=k1, k2=k2)
     res = {}
     base = None
     for th in threads_list:
@@ -453,7 +467,8 @@ def equivalence_check(net, lat: np.ndarray, obj_idx: np.ndarray,
                       tol: float = 1e-9) -> Dict:
     """同 plan 下 Python vs Rust D 曲线逐点对照。"""
     vec0 = net.get_vec().copy()
-    plan = make_plan(len(lat), steps, batch, samples, seed)
+    plan = make_plan(len(lat), steps, batch, samples, seed,
+                     k1=net.K, k2=net.K2)
     curve_py = py_executor(lat, obj_idx, shape_idx, vec0, plan, net)
     curve_rs, vec_rs, secs = run_rust_train(lat, obj_idx, shape_idx,
                                             vec0, plan)
@@ -467,8 +482,8 @@ def equivalence_check(net, lat: np.ndarray, obj_idx: np.ndarray,
 
 def bench_rust(lat: np.ndarray, obj_idx: np.ndarray, shape_idx: np.ndarray,
                vec0: np.ndarray, steps: int, batch: int, samples: int,
-               seed: int = 11) -> Dict:
-    plan = make_plan(len(lat), steps, batch, samples, seed)
+               seed: int = 11, k1: int = 6, k2: int = 6) -> Dict:
+    plan = make_plan(len(lat), steps, batch, samples, seed, k1=k1, k2=k2)
     t0 = time.time()
     curve, vec, secs = run_rust_train(lat, obj_idx, shape_idx, vec0, plan)
     return {"steps": steps, "wall_seconds": round(time.time() - t0, 2),
