@@ -1106,9 +1106,11 @@ def _perceive_with_traj(self, observations=None, tool="observer",
     下层的关键字参数吃掉——调用方不报错，但 `tick` 静默失效。
     """
     buf = _wm_traj_buf(self)
+    out = _ORIG_WM_PERCEIVE(self, observations, tool, tick, timestamp)
+    # 本体已把匿名/默认传感器观测解析为真实 eid；所有派生视图消费同一份结果。
+    observations = out.get("observations", observations or [])
     prev_pos = {e: (buf.get(e) or [(0, None)])[-1][1]
                 for e in (str(o.get("eid", "")) for o in (observations or []))}
-    out = _ORIG_WM_PERCEIVE(self, observations, tool, tick, timestamp)
     last = getattr(self, "_last_prediction", None) or {}
     for o in (observations or []):
         eid = str(o.get("eid", ""))
@@ -1487,6 +1489,7 @@ def _perceive_with_guard_pairs(self, observations=None, tool="observer",
     纯追加、零副作用（只写 `_err_ovr`），未观测到的实体不产生样本。
     """
     out = _ORIG3_WM_PERCEIVE(self, observations, tool, tick, timestamp)
+    observations = out.get("observations", observations or [])
     buf = getattr(self, "_traj_buf", None)
     last = getattr(self, "_last_prediction", None) or {}
     for o in (observations or []):
@@ -1936,6 +1939,7 @@ def _perceive_with_rot(self, observations=None, tool="observer",
     签名与转发同内层（见 `wm.perceive-signature/1`）。
     """
     out = _ORIG4_WM_PERCEIVE(self, observations, tool, tick, timestamp)
+    observations = out.get("observations", observations or [])
     if not _ROT["enabled"] or not observations:
         return out
     buf = getattr(self, "_rot_buf", None)
