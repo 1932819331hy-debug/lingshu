@@ -35,6 +35,30 @@ def test_default_sensor_observations_reach_the_trajectory_buffer():
     assert [t for t, _ in model._traj_buf[eid]] == [20, 21, 22]
 
 
+def test_default_sensor_can_support_smooth_motion_after_a_random_prefix():
+    model = UnifiedWorldModel()
+    eid = model.world.add_entity("person", pos=(2, 1.5, 2), speed=0)
+    for offset in (0, 4, 0, 4, 0, 0.1, 0.4, 0.9, 1.6):
+        model.world.entities[eid].pos = (2 + offset, 1.5, 2)
+        model.perceive()
+    prediction = model.generate()["predictions"][eid]
+    assert prediction["mode_source"] == "bounded_stochastic"
+    assert prediction["mode"] == "smooth", "validated smooth suffix missing from sensor prediction"
+    assert abs(prediction["predicted"][0] - 4.5) < 1e-9
+
+
+def test_default_sensor_random_motion_keeps_its_stochastic_bound():
+    model = UnifiedWorldModel()
+    eid = model.world.add_entity("person", pos=(2, 1.5, 2), speed=0)
+    for offset in (0, 4, 0, 4, 0, 0.1, 0.4, 0.9, 1.1):
+        model.world.entities[eid].pos = (2 + offset, 1.5, 2)
+        model.perceive()
+    prediction = model.generate()["predictions"][eid]
+    assert prediction["mode"] == "bounded_stochastic", "random sensor motion was promoted to smooth"
+    assert tuple(prediction["predicted"]) == model.nodes[eid].pos
+    assert prediction["bound"] > model.hit_threshold
+
+
 def test_anonymous_prediction_errors_reach_the_paired_guard():
     model = UnifiedWorldModel()
     for _ in range(10):
