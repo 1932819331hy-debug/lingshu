@@ -1,0 +1,248 @@
+{
+  "windows": {
+    "python": "3.12.10",
+    "platform": "Windows",
+    "sqlite": "3.49.1",
+    "baseline": "049dd79d902fcbb5d0b097fc5e1f7cf3197dae44",
+    "guard_sha256": "e7a126d41f58a15b14e0f818876910a0e1581c8e3b9098089150597df12d04ef",
+    "records": [
+      {
+        "case": "fixed",
+        "ok": true,
+        "returncode": 0,
+        "passed": 5,
+        "failed_tests": [],
+        "errors": 0,
+        "skipped": 0,
+        "expected_failures": [],
+        "expected_assertion": "",
+        "pytest_summary": "5 passed in 1.01s",
+        "source_sha256": {
+          "lingshu/core/core.py": "595300859a1b32bb4e354ba0dc23b30a7c3189210ce750d456d6a47f0fbeca46"
+        }
+      },
+      {
+        "case": "baseline",
+        "ok": true,
+        "returncode": 1,
+        "passed": 2,
+        "failed_tests": [
+          "test_descendants_are_collected_after_write_ownership",
+          "test_moved_subtree_is_rechecked_before_deletion",
+          "test_new_protection_rejects_the_whole_replacement"
+        ],
+        "errors": 0,
+        "skipped": 0,
+        "expected_failures": [
+          "test_new_protection_rejects_the_whole_replacement",
+          "test_moved_subtree_is_rechecked_before_deletion",
+          "test_descendants_are_collected_after_write_ownership"
+        ],
+        "expected_assertion": "",
+        "pytest_summary": "3 failed, 2 passed in 1.06s",
+        "source_sha256": {
+          "lingshu/core/core.py": "5b6ee96ff2b25eb7f9e92654673de07380356e94c153f3079d2a84661a84a2d4"
+        }
+      },
+      {
+        "case": "skip_entry_transaction",
+        "ok": true,
+        "returncode": 1,
+        "passed": 0,
+        "failed_tests": [
+          "test_new_protection_rejects_the_whole_replacement"
+        ],
+        "errors": 0,
+        "skipped": 0,
+        "expected_failures": [
+          "test_new_protection_rejects_the_whole_replacement"
+        ],
+        "expected_assertion": "subtree protection was checked before write ownership",
+        "pytest_summary": "1 failed in 0.62s",
+        "source_sha256": {
+          "lingshu/core/core.py": "1c0444867db0543c1313696b8668c20a256f8cb6aa81b9ef794e8ddc82943508"
+        }
+      },
+      {
+        "case": "ignore_protected_subtree",
+        "ok": true,
+        "returncode": 1,
+        "passed": 0,
+        "failed_tests": [
+          "test_new_protection_rejects_the_whole_replacement"
+        ],
+        "errors": 0,
+        "skipped": 0,
+        "expected_failures": [
+          "test_new_protection_rejects_the_whole_replacement"
+        ],
+        "expected_assertion": "subtree protection was checked before write ownership",
+        "pytest_summary": "1 failed in 0.61s",
+        "source_sha256": {
+          "lingshu/core/core.py": "71b31b1cb78a70358b19f5c9c5b3312e75d182eab447bb3f16d329baf9072e20"
+        }
+      },
+      {
+        "case": "ignore_current_parent_scope",
+        "ok": true,
+        "returncode": 1,
+        "passed": 0,
+        "failed_tests": [
+          "test_moved_subtree_is_rechecked_before_deletion"
+        ],
+        "errors": 0,
+        "skipped": 0,
+        "expected_failures": [
+          "test_moved_subtree_is_rechecked_before_deletion"
+        ],
+        "expected_assertion": "subtree replacement deleted outside its current parent scope",
+        "pytest_summary": "1 failed in 0.59s",
+        "source_sha256": {
+          "lingshu/core/core.py": "f628dd062e7e02fb02409bdfb5f569677722f9261f920fef9cd9ecbca1f78980"
+        }
+      },
+      {
+        "case": "omit_current_descendants",
+        "ok": true,
+        "returncode": 1,
+        "passed": 0,
+        "failed_tests": [
+          "test_descendants_are_collected_after_write_ownership"
+        ],
+        "errors": 0,
+        "skipped": 0,
+        "expected_failures": [
+          "test_descendants_are_collected_after_write_ownership"
+        ],
+        "expected_assertion": "subtree replacement used stale descendants",
+        "pytest_summary": "1 failed in 0.57s",
+        "source_sha256": {
+          "lingshu/core/core.py": "9736d340135aacfa7a49b1ee1b8f21753e578cb281190260179398d068b9817b"
+        }
+      }
+    ]
+  },
+  "linux": {
+    "python": "3.13.12",
+    "platform": "Linux",
+    "sqlite": "3.46.1",
+    "baseline": "049dd79d902fcbb5d0b097fc5e1f7cf3197dae44",
+    "guard_sha256": "e7a126d41f58a15b14e0f818876910a0e1581c8e3b9098089150597df12d04ef",
+    "records": [
+      {
+        "case": "fixed",
+        "ok": true,
+        "returncode": 0,
+        "passed": 5,
+        "failed_tests": [],
+        "errors": 0,
+        "skipped": 0,
+        "expected_failures": [],
+        "expected_assertion": "",
+        "pytest_summary": "5 passed in 2.90s",
+        "source_sha256": {
+          "lingshu/core/core.py": "595300859a1b32bb4e354ba0dc23b30a7c3189210ce750d456d6a47f0fbeca46"
+        }
+      },
+      {
+        "case": "baseline",
+        "ok": true,
+        "returncode": 1,
+        "passed": 2,
+        "failed_tests": [
+          "test_descendants_are_collected_after_write_ownership",
+          "test_moved_subtree_is_rechecked_before_deletion",
+          "test_new_protection_rejects_the_whole_replacement"
+        ],
+        "errors": 0,
+        "skipped": 0,
+        "expected_failures": [
+          "test_new_protection_rejects_the_whole_replacement",
+          "test_moved_subtree_is_rechecked_before_deletion",
+          "test_descendants_are_collected_after_write_ownership"
+        ],
+        "expected_assertion": "",
+        "pytest_summary": "3 failed, 2 passed in 2.89s",
+        "source_sha256": {
+          "lingshu/core/core.py": "5b6ee96ff2b25eb7f9e92654673de07380356e94c153f3079d2a84661a84a2d4"
+        }
+      },
+      {
+        "case": "skip_entry_transaction",
+        "ok": true,
+        "returncode": 1,
+        "passed": 0,
+        "failed_tests": [
+          "test_new_protection_rejects_the_whole_replacement"
+        ],
+        "errors": 0,
+        "skipped": 0,
+        "expected_failures": [
+          "test_new_protection_rejects_the_whole_replacement"
+        ],
+        "expected_assertion": "subtree protection was checked before write ownership",
+        "pytest_summary": "1 failed in 1.01s",
+        "source_sha256": {
+          "lingshu/core/core.py": "1c0444867db0543c1313696b8668c20a256f8cb6aa81b9ef794e8ddc82943508"
+        }
+      },
+      {
+        "case": "ignore_protected_subtree",
+        "ok": true,
+        "returncode": 1,
+        "passed": 0,
+        "failed_tests": [
+          "test_new_protection_rejects_the_whole_replacement"
+        ],
+        "errors": 0,
+        "skipped": 0,
+        "expected_failures": [
+          "test_new_protection_rejects_the_whole_replacement"
+        ],
+        "expected_assertion": "subtree protection was checked before write ownership",
+        "pytest_summary": "1 failed in 1.02s",
+        "source_sha256": {
+          "lingshu/core/core.py": "71b31b1cb78a70358b19f5c9c5b3312e75d182eab447bb3f16d329baf9072e20"
+        }
+      },
+      {
+        "case": "ignore_current_parent_scope",
+        "ok": true,
+        "returncode": 1,
+        "passed": 0,
+        "failed_tests": [
+          "test_moved_subtree_is_rechecked_before_deletion"
+        ],
+        "errors": 0,
+        "skipped": 0,
+        "expected_failures": [
+          "test_moved_subtree_is_rechecked_before_deletion"
+        ],
+        "expected_assertion": "subtree replacement deleted outside its current parent scope",
+        "pytest_summary": "1 failed in 1.02s",
+        "source_sha256": {
+          "lingshu/core/core.py": "f628dd062e7e02fb02409bdfb5f569677722f9261f920fef9cd9ecbca1f78980"
+        }
+      },
+      {
+        "case": "omit_current_descendants",
+        "ok": true,
+        "returncode": 1,
+        "passed": 0,
+        "failed_tests": [
+          "test_descendants_are_collected_after_write_ownership"
+        ],
+        "errors": 0,
+        "skipped": 0,
+        "expected_failures": [
+          "test_descendants_are_collected_after_write_ownership"
+        ],
+        "expected_assertion": "subtree replacement used stale descendants",
+        "pytest_summary": "1 failed in 1.04s",
+        "source_sha256": {
+          "lingshu/core/core.py": "9736d340135aacfa7a49b1ee1b8f21753e578cb281190260179398d068b9817b"
+        }
+      }
+    ]
+  }
+}
