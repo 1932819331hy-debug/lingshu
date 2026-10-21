@@ -243,6 +243,18 @@ DEFAULT_KERNELS: Dict[str, np.ndarray] = {
 
 # ==================== 自监督微调 + 白箱固化 ====================
 
+def _draw_hole(rng, shape, ratio):
+    """#452：抽掩码；ratio>0 且 shape 非空时保证至少一个 cell 被遮。
+
+    空掩码会让重建损失对空数组求均值（NaN），再以 NaN 梯度写进核参数。
+    只在命中空掩码时多消耗一个整数随机数；非空路径的抽样序列与改前逐位一致。
+    """
+    hole = rng.random(shape) < ratio
+    if ratio > 0 and hole.size and not hole.any():
+        hole.flat[rng.integers(hole.size)] = True
+    return hole
+
+
 def selfsup_finetune(img_arr: np.ndarray, kernel_name: str = "center_surround",
                      cells_across: int = 48, epochs: int = 30, lr: float = 0.05,
                      mask_ratio: float = 0.25, seed: int = 7) -> Dict:
@@ -271,7 +283,7 @@ def selfsup_finetune(img_arr: np.ndarray, kernel_name: str = "center_surround",
     # 取值 ⇒ 同口径可比。此处正是 #593 之前 `init_loss` 抽的那一次 ⇒ `rng` 的抽样
     # 序列（进而各 epoch 训练掩码、核、`loss_curve`）与改前**逐位不变**；此后各
     # epoch 的掩码仍由 `rng` 逐轮重抽（本行不再额外消耗 `rng`）。
-    eval_hole = rng.random(lum.shape[:2]) < mask_ratio
+    eval_hole = _draw_hole(rng, lum.shape[:2], mask_ratio)
     rows, cols = lum.shape[:2]
     w = DEFAULT_KERNELS[kernel_name].copy()
     loss_curve = []
@@ -285,6 +297,9 @@ def selfsup_finetune(img_arr: np.ndarray, kernel_name: str = "center_surround",
         """
         masked = lum.copy()
         masked[hole] = 0.0
+        # #452：空掩码时 `.mean()` 对空数组产生 NaN，再以 NaN 梯度写核；无任务按 0 计。
+        if not hole.any():
+            return 0.0
         pred = hex_conv(masked, wv)[..., :1]
         return float(((pred[hole] - lum[hole]) ** 2).mean())
 
