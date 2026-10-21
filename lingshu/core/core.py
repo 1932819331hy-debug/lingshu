@@ -1818,6 +1818,18 @@ class LayeredStore:
                 entity_id TEXT
             )
         ''')
+        # #448：归档区登记表——不往 `nodes` 加列（全仓有 16 值位置式
+        # `INSERT INTO nodes VALUES (...)`，加列会一并打断生产写入与既有夹具），
+        # 改为独立表：一行 = 一个当前处于归档态的节点，记录归档前 importance
+        # 与归档时刻。`forget_advisor` 归档时同事务写入，`restore_archived`
+        # 读取并删除；节点被硬删后本表行由 `delete_node` 一并清理。
+        c.execute('''
+            CREATE TABLE IF NOT EXISTS archive_state (
+                node_id TEXT PRIMARY KEY,
+                pre_archive_importance REAL,
+                archived_at REAL
+            )
+        ''')
         # v1.7 迁移：既有库补列（已存在则跳过）
         for col_sql in ("semantic_coordinates TEXT DEFAULT '{}'",
                         "state_attributes TEXT DEFAULT '{}'",
@@ -2171,6 +2183,10 @@ class LayeredStore:
                 INSERT OR REPLACE INTO nodes
                 VALUES (?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?)
             ''', node.to_row())
+            # #448：同 id 覆盖写的是**新内容版本**——入参不带 `archived` 时同步清
+            # 归档区登记，维持「有登记行 ⇔ 当前处于归档态」的不变量。
+            if "archived" not in (node.tags or []):
+                c.execute("DELETE FROM archive_state WHERE node_id=?", (node.id,))
             if overwrite_protected is not None:
                 # 审计与写入同一连接、同一提交（`log_action` 自带 commit ⇒ 一并落库）。
                 self.log_action(
@@ -2679,6 +2695,9 @@ class LayeredStore:
             # 无害，开外键后即整条删除路径报错；顺序反了必红。
             self._strip_incident_edges(c, node_id)
             c.execute("DELETE FROM nodes WHERE id=?", (node_id,))
+            # #448：硬删同步清归档区登记，避免 `archive_state` 留孤儿行混淆
+            # 「仍可还原的归档节点」与「已永久删除的节点」。
+            c.execute("DELETE FROM archive_state WHERE node_id=?", (node_id,))
             _bad_tag_peers: List[str] = []
             _locked_tag_peers: List[str] = []
             for peer in peers:
@@ -3988,6 +4007,8 @@ class LayeredStore:
                     # #168：删边经唯一真源（对不可变层对端的边先落审计）
                     self._strip_incident_edges(c, nid)
                     c.execute("DELETE FROM nodes WHERE id=?", (nid,))
+                    # #448：硬删同步清归档区登记（见 delete_node 同款注释）。
+                    c.execute("DELETE FROM archive_state WHERE node_id=?", (nid,))
                 else:
                     c.execute("UPDATE nodes SET importance=? WHERE id=?", (new_imp, nid))
             # #29③：KNOWLEDGE 层**置信度**衰减（长期知识不淡出内容，但未确证的断言
@@ -4458,9 +4479,10 @@ class LayeredStore:
         即永久豁免 `decay_cycle` 与 `forget_advisor` 两条遗忘路径，而旧实现打标
         **零审计**（`action_logs` 增量 0）⇒ 保护名单可被非属主单向扩张却无留痕。
         审计**只**加在 `no_forget` 这一支，不扩到全部标签面（避免大面积行为变更）。
-        边界（如实标注）：本件只补审计，**不**新增 `untag_node` / `unprotect_node`
-        回收入口，也**不**给 `no_forget` 加配额或审批——那两条属设计取向（谁有权把
-        一条记忆标成不可遗忘），见 issue #781 回帖。
+        边界（如实标注）：本件只补审计；`untag_node` 已由 #448 补上（见该函数，
+        撤销 `no_forget` 同样落审计），但**不**新增 `unprotect_node`，也**不**给
+        `no_forget` 加配额或审批——后两条属设计取向（谁有权把一条记忆标成不可
+        遗忘），见 issue #781 回帖。
         """
         if self.role != Role.PRIMARY:
             n = self.get_node(node_id)
@@ -4496,12 +4518,115 @@ class LayeredStore:
                 "no_forget_tagged",
                 f"节点 {node_id} 被打上 no_forget 标签（#781）：该标签是遗忘保护的"
                 f"第二个真源（protections 行之外），豁免 decay_cycle 与 "
-                f"forget_advisor 两条遗忘路径；仓内无 untag 入口",
+                f"forget_advisor 两条遗忘路径；撤销入口见 untag_node（#448）",
                 node_ids=[node_id],
                 outcome={"layer": node.layer.value, "role": self.role.value,
                          "tag": tag})
         if own_tx:
             self._commit_locked()
+
+    @_transactional
+    def untag_node(self, node_id: str, tag: str) -> bool:
+        """移除节点上的一个标签（`tag_node` 的对称操作）；返回是否实际移除。
+
+        #448：`tag_node` 只做追加，全仓无撤销入口 ⇒ 误打的 `archived` /
+        `no_forget` / `conflict` 等标签无法用公开 API 清除，归档节点被
+        `forget_advisor` 永久跳过。本方法补上反向操作：同一把角色闸（共享层仅
+        PRIMARY，#234）、同样以 `BEGIN IMMEDIATE` 把读改写收进原子边界（#344）、
+        幂等（标签不存在 ⇒ 返回 False，零写入）。
+
+        审计：撤销 `no_forget` 落一条 `no_forget_untagged`（#781 的保护名单
+        扩张与收缩都应可追）；撤销 `archived` 本方法不单独记——经
+        `restore_archived` 走时会落 `archived_restored`，直接调本方法属普通编辑。
+        """
+        self.assert_node_writable_by_role(node_id, action="移除共享层节点的标签")
+        own_tx = not self.conn.in_transaction
+        if own_tx:
+            self.conn.execute("BEGIN IMMEDIATE")
+        node = self.get_node(node_id)
+        removed = False
+        if node and tag in node.tags:
+            node.tags = [t for t in node.tags if t != tag]
+            c = self.conn.cursor()
+            c.execute("UPDATE nodes SET tags=? WHERE id=?",
+                      (_dumps_tags(node.tags), node_id))
+            removed = True
+        if removed and tag == "no_forget":
+            self.log_action(
+                "no_forget_untagged",
+                f"节点 {node_id} 的 no_forget 标签被撤销（#448/#781）：该节点重新"
+                f"进入 decay_cycle 与 forget_advisor 的遗忘面",
+                node_ids=[node_id],
+                outcome={"layer": node.layer.value, "role": self.role.value,
+                         "tag": tag})
+        if own_tx:
+            self._commit_locked()
+        return removed
+
+    @_transactional
+    def restore_archived(self, node_id: str, importance: Optional[float] = None) -> bool:
+        """把归档节点还原为活跃：清 `archived` 标签并恢复归档前 importance。
+
+        #448：`forget_advisor` 的 note 一直承诺「可逆」，但修前没有反向入口——
+        `archived` 标签只加不清，且 `forget_advisor` 对带该标签的节点直接
+        `continue` ⇒ 节点被永久锁在归档态。本方法在**单事务内**同时：
+          ① 移除 `archived` 标签（无该标签 ⇒ 返回 False，零写入）；
+          ② 恢复 `archive_state.pre_archive_importance`（归档时同事务落库）；
+             调用方传 `importance` 时以显式值优先（非有限值拒，越界钳制，同
+             #185 口径）；
+          ③ 删除该节点的 `archive_state` 行（还原后不再有「待还原原值」）；
+          ④ 落一条 `archived_restored` 审计（治理动作可追溯）。
+        还原只回退「归档」这一动作本身，不回退归档后产生的其它变化；节点若仍
+        满足 `forget_advisor` 的信号（低价值/久未访问），下次调用会再次归档——
+        状态机闭合后的正常行为，不是回归。
+
+        边界（如实标注）：本方法**不**复活任何被 `delete_node` 硬删的节点
+        （仓内仍无回收站；软删/回收站属独立设计面，见 #448 回帖）；对未归档
+        节点返回 False；带 `archived` 标签但 `archive_state` 无登记行（旧库
+        遗留）且调用方未显式给 importance 时，保持当前 importance，仅清标签。
+        """
+        if importance is not None:
+            importance = _require_finite("importance", importance)
+            importance = _finite_clamp(importance, 0.0, 1.0)
+        self.assert_node_writable_by_role(node_id, action="还原共享层节点的归档状态")
+        own_tx = not self.conn.in_transaction
+        if own_tx:
+            self.conn.execute("BEGIN IMMEDIATE")
+        node = self.get_node(node_id)
+        if node is None or "archived" not in node.tags:
+            if own_tx:
+                self._commit_locked()
+            return False
+        prev_imp = node.importance
+        c = self.conn.cursor()
+        c.execute("SELECT pre_archive_importance, archived_at FROM archive_state "
+                  "WHERE node_id=?", (node_id,))
+        row = c.fetchone()
+        pre_imp, archived_at = (row[0], row[1]) if row else (None, None)
+        restore_imp = importance
+        if restore_imp is None and pre_imp is not None and math.isfinite(float(pre_imp)):
+            restore_imp = _finite_clamp(float(pre_imp), 0.0, 1.0)
+        new_tags = [t for t in node.tags if t != "archived"]
+        if restore_imp is None:
+            c.execute("UPDATE nodes SET tags=? WHERE id=?",
+                      (_dumps_tags(new_tags), node_id))
+        else:
+            c.execute("UPDATE nodes SET tags=?, importance=? WHERE id=?",
+                      (_dumps_tags(new_tags), restore_imp, node_id))
+        c.execute("DELETE FROM archive_state WHERE node_id=?", (node_id,))
+        self.log_action(
+            "archived_restored",
+            f"节点 {node_id} 从归档态还原（#448）：archived 标签已清、"
+            f"importance {prev_imp} -> {restore_imp}",
+            node_ids=[node_id],
+            outcome={"role": self.role.value, "layer": node.layer.value,
+                     "previous_importance": prev_imp,
+                     "restored_importance": restore_imp,
+                     "pre_archive_importance": pre_imp,
+                     "archived_at": archived_at})
+        if own_tx:
+            self._commit_locked()
+        return True
 
     # ==================== 情境层（M4） ====================
 
@@ -5227,6 +5352,8 @@ class LayeredStore:
                 # #168：删边经唯一真源（对不可变层对端的边先落审计）
                 self._strip_incident_edges(c, nid)
                 c.execute("DELETE FROM nodes WHERE id=?", (nid,))
+                # #448：硬删同步清归档区登记（见 delete_node 同款注释）。
+                c.execute("DELETE FROM archive_state WHERE node_id=?", (nid,))
             self._commit_locked()
         return len(doomed)
 
@@ -14077,8 +14204,17 @@ class SpacetimeMemoryEngine:
           ① 访问信号：CONTEXT 层 access_count==0 且 last_access 距今 > stale_days
           ② 低价值信号：CONTEXT 层 importance < low_value
         决策：归档（tags 加 archived + importance 降至 archived_imp）——
-        recall 的 importance 加权自然降权（可逆：恢复 importance 即解除）。
-        锚点/结构层 no_forget 保护；KNOWLEDGE 层不动（长期知识）。
+        recall 的 importance 加权自然降权。锚点/结构层 no_forget 保护；
+        KNOWLEDGE 层不动（长期知识）。
+
+        #448（可逆性收口）：归档前原值落 `nodes.pre_archive_importance`，反向量由
+        `LayeredStore.restore_archived` 承担——清 `archived` 标签并恢复原 importance
+        （调用方也可显式指定还原值）。此前「可逆」只写在 note 里：仓内既无清除
+        `archived` 的公开入口，`forget_advisor` 又对带该标签的节点 `continue`，
+        节点被永久锁在归档态。本函数仍**不**把归档当独立存储区：归档节点照样留在
+        `nodes` 表、照样参与检索与衰减（只是 importance 加权降低）——这是原设计
+        「降权而非隔离」的口径，issue #448 第 1 点的「存储层无法区分」由 `archived`
+        标签回答（可查询、可过滤），不另建归档表。
 
         #781（口径声明 · **只声明现状、不改语义**）：本函数的跳过条件是
         `"no_forget" in tags or "archived" in tags` ⇒ **认 `archived`**；而
@@ -14149,14 +14285,20 @@ class SpacetimeMemoryEngine:
                     # 低于它的节点被提权）。
                     new_imp = min(imp_v, archived_imp)
                     new_tags = list(dict.fromkeys(tags + ["archived"]))
+                    # #448：归档前原值 + 归档时刻同事务落 `archive_state`，
+                    # `restore_archived` 据此原位恢复。
                     c.execute("UPDATE nodes SET importance=?, tags=? WHERE id=?",
                               (new_imp, _dumps_tags(new_tags, ensure_ascii=False), nid))
+                    c.execute("INSERT OR REPLACE INTO archive_state"
+                              " (node_id, pre_archive_importance, archived_at)"
+                              " VALUES (?,?,?)", (nid, imp_v, now))
                     archived += 1
                 else:
                     kept += 1
             self._commit_locked()
         return {"archived": archived, "kept": kept,
-                "note": "主动遗忘：未被使用的 CONTEXT 记忆归档（importance 降权，可逆）"}
+                "note": "主动遗忘：未被使用的 CONTEXT 记忆归档（importance 降权；"
+                        "可逆：restore_archived 清 archived 并恢复原 importance）"}
 
     #: 后台衰减线程的 join 上界（秒）——`close()` 有界等待，不被卡死的衰减周期
     #: 无限拖住。判据来源：经验标定（本件 #37；仓内无规定该上界的理论章节，
