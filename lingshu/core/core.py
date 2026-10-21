@@ -7252,6 +7252,17 @@ class SpacetimeMemoryEngine:
             time_window=(time.time(), time.time()+3600),
             existence_constraint="协议实例运行中"
         )
+        # #796（fail-closed，任何写语句之前抛出）：`confidence` 的非有限值
+        # （NaN/±inf）经 `_require_finite` 拒收（`ValueError`），不再被
+        # `STEdge.to_row` 的 `_finite_clamp` 静默归一为 0.0——修前实测（main @
+        # 40fceb6）：NaN/+inf/-inf 一律 ACCEPTED、库内落 0.0，且返回的内存对象
+        # 仍带原始坏值（对象与库行不一致），调用方编程错误被无信号掩盖。与 #790
+        # `verify_edge` 的 `new_confidence` 同款闸（#206 `_require_finite`
+        # 单一真源——创建路径与更新路径同一缺口收口）。有限值口径不动：[0,1] 外
+        # 的有限值（如 1.5）仍走 #185 的 `_finite_clamp` 钳制（值域归一不属
+        # 本件收口面）；本入口无 `weight` 形参（STEdge 缺省 1.0，直写面
+        # `LayeredStore.add_edge(STEdge)` 的归一口径不变）。
+        confidence = _require_finite("confidence", confidence)
         edge = STEdge(
             id=f"edge_{uuid.uuid4().hex[:8]}_{int(time.time()*1000)}",
             source_id=source_id,
