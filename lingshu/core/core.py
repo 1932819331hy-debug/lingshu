@@ -7876,7 +7876,11 @@ class SpacetimeMemoryEngine:
 
     def add_context(self, content: str, importance: float = 0.4,
                     condition_space: ConditionSpace = None, tags: List[str] = None) -> STNode:
-        """写入情境层节点（短期记忆，importance 默认 0.4，随 decay 淡出）。"""
+        """写入情境层节点，按同一写事务内的持久化容量执行 FIFO。
+
+        容量是全库设置；已有实例的缓存不能覆盖另一实例已提交的新值。
+        插入和淘汰共同成功或撤回，调用方已有事务时只撤回本次工作。
+        """
         cs = condition_space or ConditionSpace(
             "情境感知", "会话摄入", (time.time(), time.time()+3600), "协议实例运行中")
         node = STNode(
@@ -7885,8 +7889,9 @@ class SpacetimeMemoryEngine:
             temporal_coordinate=time.time(), condition_space=cs,
             importance=importance, confidence=0.5,
             layer=MemoryLayer.CONTEXT, tags=(tags or []) + ["context"])
-        self.store.add_node(node)
-        self.store.enforce_context_cap(self._context_max)
+        with self.store._tx():
+            self.store.add_node(node)
+            self.store.enforce_context_cap(self._load_context_max())
         return node
 
     def get_recent_context(self, limit: int = 20) -> List[STNode]:
