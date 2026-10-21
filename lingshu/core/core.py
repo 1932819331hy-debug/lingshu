@@ -1686,6 +1686,12 @@ class LayeredStore:
             self._tx_owns_txn = not nested
         try:
             yield conn
+            # COMMIT / RELEASE 自身也可能失败；须与方法体异常共用回滚边界，
+            # 否则连接会遗留失败写入和写锁，后续写入虽返回成功却仍未提交。
+            if nested:
+                conn.execute("RELEASE SAVEPOINT %s" % savepoint)
+            else:
+                conn.commit()
         except BaseException:
             try:
                 if nested:
@@ -1696,11 +1702,6 @@ class LayeredStore:
             except Exception:
                 pass
             raise
-        else:
-            if nested:
-                conn.execute("RELEASE SAVEPOINT %s" % savepoint)
-            else:
-                conn.commit()
         finally:
             self._tx_depth -= 1
             if self._tx_depth == 0:
@@ -4072,8 +4073,15 @@ class LayeredStore:
         return list(dict.fromkeys(frags))
 
     def search_content(self, query: str, layers: List[MemoryLayer] = None,
-                       limit: int = 20) -> List[Tuple[STNode, float]]:
-        """内容检索：多词 OR 预筛（含同义词扩展）+ 原查询二元组 Jaccard 相似度排序"""
+                       limit: int = 20, touch: bool = None) -> List[Tuple[STNode, float]]:
+        """内容检索：多词 OR 预筛（含同义词扩展）+ 原查询二元组 Jaccard 相似度排序
+
+        #787：`touch` 形参（缺省 None → `_retrieval_touches_recency()` 开关，既有
+        调用行为逐位不变）。显式传 False 的唯一调用方是 `recall`——它的打分公式
+        （0.5·sim + 0.3·importance + 0.2·recency）读的正是 `last_access`，而本方法
+        返回前会把命中节点的 `last_access` 刷成「现在」⇒ 同一节点的分数在两次调用
+        间漂移（issue 实测 ~1.9e-08），主排序键不稳定 ⇒ 排序翻转。打分路径不写回
+        打分输入（检索只计数、不刷新近因），分数即成为固定输入的纯函数。"""
         q = query.strip()
         if not q:
             return []
@@ -4081,7 +4089,7 @@ class LayeredStore:
         if getattr(self, "_fts", None) is not None:
             # #201：与 LIKE 路径同口径——未指定层时默认排除自我层
             fts_layers = layers or [l for l in MemoryLayer if l != MemoryLayer.SELF]
-            fts_hits = self._search_content_fts(q, terms, fts_layers, limit)
+            fts_hits = self._search_content_fts(q, terms, fts_layers, limit, touch=touch)
             if fts_hits is not None:
                 return fts_hits
         conds, params = [], []
@@ -4180,10 +4188,12 @@ class LayeredStore:
         # `executemany` 逐条语句各计一次（与旧逐调用一致）。
         # ★本笔合成：`touch` 由开关决定——批量口径与「不刷新近因」并存（见
         # `increment_access_many` 的 `touch` 形参）。
+        # ★本笔合成（#787）：调用方显式传 `touch`（唯一现例：`recall` 传 False）时
+        # 从其值，否则回落开关缺省——直接检索（本方法）行为逐位不变。
         # ★本笔合成（#473）：`_anchor_rerank` 只重排/截断最终 `results` 的顺序与组成，
         # 批量计数口径不变（仍对最终返回的 `results` 计数）。
         results = self._anchor_rerank(q, scored[:limit], layers, limit)
-        touch = self._retrieval_touches_recency()
+        touch = self._retrieval_touches_recency() if touch is None else touch
         self.increment_access_many([node.id for node, _ in results], touch=touch)
         return results
 
@@ -4243,11 +4253,14 @@ class LayeredStore:
                 seen.add(n.id)
         return out
 
-    def _search_content_fts(self, q: str, terms, layers, limit: int):
+    def _search_content_fts(self, q: str, terms, layers, limit: int, touch: bool = None):
         """FTS5+BM25 候选生成（retrieval.py）。返回 None 表示交回原 LIKE 路径。
 
         候选按 BM25 从全库取（不再受插入顺序与 LIMIT 300/500 截断影响）；
-        分数 = max(原 Jaccard+tag 加成, 0.9·s/(s+K))，≥0.95 判重语义只来自 Jaccard。"""
+        分数 = max(原 Jaccard+tag 加成, 0.9·s/(s+K))，≥0.95 判重语义只来自 Jaccard。
+
+        #787：`touch` 形参与 LIKE 路径同语义（None → 开关缺省；`recall` 显式传
+        False——见 `search_content` docstring），FTS/LIKE 两条检索腿同一口径。"""
         from lingshu.core import retrieval as _rt
         FTSIndex = _rt.FTSIndex
         ctx = _rt.context_enabled()
@@ -4298,9 +4311,11 @@ class LayeredStore:
         # ★本笔合成：FTS 路径同样收进批量单点（#571 禁「循环内 increment_access」），
         # 并以 `touch` 形参落实本件「不刷新近因」——两套语义并存（见
         # `increment_access_many` 的 `touch` 形参）。
+        # ★本笔合成（#787）：调用方显式 `touch` 从其值，否则回落开关缺省（与 LIKE 腿
+        # 同一 `search_content` 入口的口径）。
         # ★本笔合成（#473）：`_anchor_rerank` 只重排最终 results 的顺序/组成，计数口径不变。
         results = self._anchor_rerank(q, [(n, s) for n, s, _ in scored[:limit]], layers, limit)
-        touch = self._retrieval_touches_recency()
+        touch = self._retrieval_touches_recency() if touch is None else touch
         self.increment_access_many([n.id for n, _ in results], touch=touch)
         return results
 
@@ -7240,6 +7255,17 @@ class SpacetimeMemoryEngine:
             time_window=(time.time(), time.time()+3600),
             existence_constraint="协议实例运行中"
         )
+        # #796（fail-closed，任何写语句之前抛出）：`confidence` 的非有限值
+        # （NaN/±inf）经 `_require_finite` 拒收（`ValueError`），不再被
+        # `STEdge.to_row` 的 `_finite_clamp` 静默归一为 0.0——修前实测（main @
+        # 40fceb6）：NaN/+inf/-inf 一律 ACCEPTED、库内落 0.0，且返回的内存对象
+        # 仍带原始坏值（对象与库行不一致），调用方编程错误被无信号掩盖。与 #790
+        # `verify_edge` 的 `new_confidence` 同款闸（#206 `_require_finite`
+        # 单一真源——创建路径与更新路径同一缺口收口）。有限值口径不动：[0,1] 外
+        # 的有限值（如 1.5）仍走 #185 的 `_finite_clamp` 钳制（值域归一不属
+        # 本件收口面）；本入口无 `weight` 形参（STEdge 缺省 1.0，直写面
+        # `LayeredStore.add_edge(STEdge)` 的归一口径不变）。
+        confidence = _require_finite("confidence", confidence)
         edge = STEdge(
             id=f"edge_{uuid.uuid4().hex[:8]}_{int(time.time()*1000)}",
             source_id=source_id,
@@ -7746,8 +7772,22 @@ class SpacetimeMemoryEngine:
 
         #29④：终排与 search_content 同口径，同分再按置信度降序（confidence 与
         importance 一起进排序键；未验证/被矛盾标记的低置信节点不再压过高置信节点）。
-        """
-        results = self.store.search_content(context_content, limit=50)
+
+        #787（主键漂移）：近因分量读 `last_access`，而检索路径（search_content）
+        返回前会把命中节点的 `last_access` 刷成「现在」⇒ 同一节点的分数在两次
+        recall 之间漂移（issue 实测 ~1.9e-08，随两次调用间隔增长），主排序键
+        不稳定 ⇒ sim 并列组的次序翻转。#613 的末位确定性键 `id` 在 recall 这里
+        **从未生效**——它只救「精确同分」，救不了「分数自身在漂移」。修法（根修）：
+        recall 的检索腿显式 `touch=False`（见 `search_content` 的 `touch` 形参）
+        ——打分路径不写回打分输入，`last_access` 只由写入、M5 重复观测、置信度
+        复核、巩固复述等真实强化事件刷新（与《检索不刷新近因》设计文档「检索 ≠
+        使用 ≠ 强化」同则；`LINGSHU_RETRIEVAL_NO_TOUCH` 开关仍只管直接检索路径）。
+        access_count 仍在 recall 命中时计数（统计语义不变）。
+        分数随 wall-clock 仍会**整体**微降（recency 对固定 la 单调衰减），但组内
+        两两差值的符号不变 ⇒ 次序跨调用逐位稳定。"""
+        # #787：touch=False——recall 的打分输入（last_access）不得被自己的检索腿
+        # 写回（根修「分数漂移」）；候选池/排序其余口径逐位不变。
+        results = self.store.search_content(context_content, limit=50, touch=False)
         if not results:
             return []
         now = time.time()
@@ -7757,7 +7797,11 @@ class SpacetimeMemoryEngine:
             recency = 1.0 / (1.0 + max(0.0, now - la) / 86400.0)
             score = 0.5 * sim + 0.3 * (node.importance or 0.0) + 0.2 * recency
             scored.append((node, score))
-        scored.sort(key=lambda x: (-x[1], -x[0].confidence))
+        # #613：末位补 `id`——#613 当年只落在 search_content 的三处排序，recall
+        # 自己的终排从未补上；本处补齐同款末位键（库内唯一、跨平台稳定），在
+        # `last_access` 精确并列（如 Windows 时钟粒度下的同桶创建）⇒ 分数精确
+        # 相等时给出唯一确定序。非并列情形逐位不变。
+        scored.sort(key=lambda x: (-x[1], -x[0].confidence, x[0].id))
         if _contradiction.enabled():
             scored = self._with_opposites(scored, limit)
             limit = max(limit, len(scored))  # 矛盾对不拆开（见 _with_opposites）
@@ -7880,11 +7924,21 @@ class SpacetimeMemoryEngine:
         见 `_assert_meta_key_writable`）。为什么闸位必须在赋值之前：旧形态若
         先改 `self._context_max` 再在落库处抛，内存已改而盘面未写 ⇒ 静默分叉
         （与 `#191` 的 `update_self` 同款病：调用方看到异常，运行态却已变）。
+
+        容量保存和 FIFO 裁剪共用一条事务，提交成功后才发布运行值。否则保存失败
+        仍会使下一次正常写入按新容量误删记忆，或裁剪失败留下部分删除。与配置终裁
+        一样要求独立事务：调用方后续的 rollback 无法撤回 Python 属性，故已有事务
+        时在任何改动前显式拒绝。
         """
-        self.store._assert_meta_key_writable("context_max")
-        self._context_max = _to_int_or(max_size, self.DEFAULT_CONTEXT_MAX)
-        self.store.set_meta("context_max", str(self._context_max))
-        self.store.enforce_context_cap(self._context_max)
+        with self.store._lock:
+            self.store._assert_meta_key_writable("context_max")
+            if self.store.conn.in_transaction:
+                raise RuntimeError("容量设置需要独立事务；请先结束调用方事务")
+            capacity = _to_int_or(max_size, self.DEFAULT_CONTEXT_MAX)
+            with self.store._structure_event_transaction():
+                self.store.set_meta("context_max", str(capacity))
+                self.store.enforce_context_cap(capacity)
+            self._context_max = capacity
 
     # ==================== 去重配置（M5 · D-004 动态阈值） ====================
 
