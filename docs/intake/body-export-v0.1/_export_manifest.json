@@ -541,7 +541,7 @@
     {
      "file": "rust_bridge.py",
      "src": "aeis.rust_bridge",
-     "sha256": "20b8a3811f7271c7",
+     "sha256": "6df44dd3788c2890019af6327170d0cfe7bbe01a149924b896f8301060f43dc1",
      "rewrites": 0,
      "sanitized": 4,
      "patches": 0,

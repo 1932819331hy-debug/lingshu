@@ -7,8 +7,10 @@
 Python 参考实现保留(hex_train/hex_hier),Rust 只做热区。
 """
 from __future__ import annotations
+from contextlib import nullcontext
 import os
 import subprocess
+from tempfile import TemporaryDirectory
 import time
 from pathlib import Path
 from typing import Dict, List, Optional, Tuple
@@ -269,23 +271,33 @@ def run_rust_train(lat: np.ndarray, obj_idx: np.ndarray, shape_idx: np.ndarray,
                    ) -> Tuple[np.ndarray, np.ndarray, float]:
     """打包→调 hex_nn→解包。返回 (D 曲线, 最终权重, 秒)。
     mode: train(串行坐标下降) | train_par(并行批量评估-收敛)。
-    threads: train_par 的 rayon 线程数(经环境变量)。"""
+    threads: train_par 的 rayon 线程数(经环境变量)。
+
+    缺省工作目录由每次调用独占，返回或失败后清理，不写入调用方 cwd。
+    显式 workdir 保留四个诊断文件；并发调用方须为各任务指定不同目录。
+    """
     exe = resolve_hex_exe()          # #488：调用时解析 + fail-closed（先于任何落盘）
-    wd = workdir or Path("data/rust_bridge")
-    wd.mkdir(parents=True, exist_ok=True)
-    pack_data(lat, obj_idx, shape_idx, wd / "data.bin")
-    pack_plan(plan, wd / "plan.bin")
-    pack_vec(vec0, k1, k2, wd / "vec.bin", k3=k3)
-    extra: Dict[str, str] = {}
-    if threads:
-        extra["RAYON_NUM_THREADS"] = str(threads)
-    if lr != 0.1:
-        extra["HEX_LR"] = str(lr)
-    env = _minimal_subprocess_env(extra)     # #488：子进程最小环境（不透传凭据）
-    subprocess.run([str(exe), mode, str(wd / "data.bin"),
-                    str(wd / "plan.bin"), str(wd / "vec.bin"),
-                    str(wd / "out.bin")], check=True, env=env)
-    return unpack_out(wd / "out.bin")
+    # #392：四个固定文件名只在本调用独占的默认目录中共享；显式目录仍归调用方。
+    scope = TemporaryDirectory(prefix="lingshu_hex_") if workdir is None else nullcontext(workdir)
+    with scope as directory:
+        wd = Path(directory)
+        wd.mkdir(parents=True, exist_ok=True)
+        pack_data(lat, obj_idx, shape_idx, wd / "data.bin")
+        pack_plan(plan, wd / "plan.bin")
+        pack_vec(vec0, k1, k2, wd / "vec.bin", k3=k3)
+        extra: Dict[str, str] = {}
+        if threads:
+            extra["RAYON_NUM_THREADS"] = str(threads)
+        if lr != 0.1:
+            extra["HEX_LR"] = str(lr)
+        env = _minimal_subprocess_env(extra)     # #488：子进程最小环境（不透传凭据）
+        subprocess.run([str(exe), mode, str(wd / "data.bin"),
+                        str(wd / "plan.bin"), str(wd / "vec.bin"),
+                        str(wd / "out.bin")], check=True, env=env)
+        curve, vector, seconds = unpack_out(wd / "out.bin")
+        if len(curve) != len(plan["plan_batch"]) or vector.size != np.asarray(vec0).size:
+            raise ValueError("hex_nn 输出的曲线/权重长度与本次输入不匹配")
+        return curve, vector, seconds
 
 
 # ==================== Python 参考执行器(同 plan 确定性) ====================
