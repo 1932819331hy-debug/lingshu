@@ -53,8 +53,9 @@ except ImportError:  # 直跑 fallback（裸名互导）
 # 经 sys.path 的裸名导入，含标准库——上一版只封白名单组件名，json.py 等仍被劫持）
 # ——「消除」取**解析期拒绝**义（#273 路 B）：条目不被删除，宿主 `sys.path` 零改写；
 # ② 白名单组件另由本守卫收口（含排除脚本目录）；③ 仍不覆盖：进程已被预置投毒
-# （sys.modules 预置 / 进程内 sys.path.insert）、逃生口 LINGSHU_ALLOW_CWD_IMPORTS 被
-# 显式打开的情形。
+# （sys.modules 预置 / 进程内 sys.path.insert）。逃生口 LINGSHU_ALLOW_CWD_IMPORTS
+# 只放开 ① 层（非白名单名的 cwd 解析面）；② 层自 #750 残余修复起不随逃生口
+# 放开——白名单名受控面未命中即失败，不再交还标准 PathFinder（A/D/E 臂封死）。
 from . import contradiction as _contradiction
 
 from .component_resolver import (
