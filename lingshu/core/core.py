@@ -193,6 +193,70 @@ def _dumps_tags(tags, ensure_ascii: bool = False) -> str:
 
 
 # =============================================================================
+# add_perception 入参验证闸（tags/entities/modality · issue #805）
+# =============================================================================
+
+# #805：modality 白名单——感知通道（add_perception）的合法模态。取值锚点：
+# ① `STNode.modality` 字段注释「模态：text, image, code, etc.」枚举出的三个
+#   非 text 值中的 image/code（"etc." 是开放词，只取已实证项）；
+# ② `add_perception` 去重判据 #223 的 audio（候选集按 modality 过滤的显式
+#   测试值，tests/test_issue223_dedup_merge_fields_guard.py）；
+# ③ `provenance.from_legacy` 的 image（vision_pipeline 感知通道）；
+# ④ `subgraph_replace._attach` 的 visual（core.py 子树挂载的缺省 modality，
+#    tests/test_issue139_subgraph_replace_*.py 的 g5/g6 正对照在用）。
+# structure/protocol/self_state/trust_state 等模态是**写入路径内部值**——它们
+# 全部直构 `STNode(...)` 走 `add_node`（core.py 结构事件/锚点/自我快照等），
+# 不经 `add_perception` 感知入口，故不在本白名单内。扩展白名单是一行改动。
+_PERCEPTION_MODALITIES = frozenset({"text", "audio", "image", "code", "visual"})
+
+
+def _validated_str_items(name: str, value):
+    """#805：`add_perception` 的 tags/entities 入参校验+规范化（唯一真源）。
+
+    返回规范化后的 `list[str]`：
+      · `value is None` → `[]`（None＝「未提供」，与签名默认 `List[str] = None`
+        同义；仓内既有合法用法：longterm_gate.py 两处 `entities or None` 显式
+        传 None 表空）；
+      · 容器须为 list/tuple/set/frozenset——裸 str/bytes 拒（旧形态：裸字符串
+        被当可迭代，`'tag1'` 落库成 `['t','a','g','1']` 四个单字符 tag），
+        其余非容器类型拒（旧形态：int 在去重路径的极性闸 `set()` 处抛无说明
+        TypeError 且 `_interaction_count` 副作用已发生）；
+      · 逐项：**None 项跳过**（issue #805 判据原文「None 项跳过」——None 是
+        「无」不是值，不字符串化）；非 str 项 `TypeError`（旧形态：数字被
+        `f"ent:{eid}"` / JSON 静默字符串化，正是 issue 点名的「数字变字符串」）；
+        空串项 `ValueError`（issue 表格点名「空 tag 无意义但被接受」）。
+
+    与 #331/#588 的 content 闸同口径：fail-closed，**不做 `str()` 静默强转**——
+    那会把编程错误洗成合法数据（「静默篡改语义」，比拒绝更坏）。
+    判据来源：公开 issue #805「tags 每项须为非空 str，None 项跳过；
+    modality 白名单校验」。
+    """
+    if value is None:
+        return []
+    if isinstance(value, (str, bytes)) or not isinstance(
+            value, (list, tuple, set, frozenset)):
+        raise TypeError(
+            "#805 add_perception 拒绝 %s 的容器类型 %s：须为 list/tuple/set"
+            "（裸字符串会被逐字符炸成单字符 tag；非容器不可迭代）"
+            % (name, type(value).__name__))
+    out = []
+    for item in value:
+        if item is None:
+            continue  # issue 判据：「None 项跳过」
+        if not isinstance(item, str):
+            raise TypeError(
+                "#805 add_perception 拒绝 %s 中的非字符串项 %r（%s）："
+                "数字/对象会被静默字符串化混进 tags 列，按 tag 过滤永远漏"
+                % (name, item, type(item).__name__))
+        if item == "":
+            raise ValueError(
+                "#805 add_perception 拒绝 %s 中的空字符串项：空 tag 无意义"
+                "（占据 get_nodes_by_tag 匹配空间与去重极性比对）" % name)
+        out.append(item)
+    return out
+
+
+# =============================================================================
 # JSON 列序列化闸（唯一真源 · issue #494）
 # =============================================================================
 #
@@ -6884,12 +6948,56 @@ class SpacetimeMemoryEngine:
         仓内无规定 `add_perception` 入参类型的理论章节，追不到更早出处。
         边界（如实标注）：本闸只覆盖 `add_perception`；`store.add_node` /
         `import_all` 等其它写入面不在本件范围内。
+
+        issue #805（tags/entities/modality 零验证）：三参数此前**全无校验**，
+        旧形态（实测 main@40fceb6）：裸字符串 `tags="tag1"` 被当可迭代，落库成
+        `['t','a','g','1']` 四个单字符 tag（字符爆炸）；`entities=[1,2]` 经
+        `f"ent:{eid}"` 静默字符串化成 `ent:1`/`ent:2`（issue 点名的「数字变
+        字符串」）；`tags=["ok",123]` / `["ok",None]` 把 JSON 数字/null 混进
+        tags 列（`get_nodes_by_tag` 按字符串匹配永远漏）；`tags=12345` 走去重
+        路径时在极性闸 `set()` 处抛无说明的 TypeError 且 `_interaction_count` /
+        `_note_action` 副作用已发生（半截副作用）；`modality` 任意值放行——
+        `123` 落 TEXT 列被 SQLite 亲和转 `'123'`（内存对象 ≠ 库内值，回报≠事实），
+        `None` 落 NULL 且使去重候选过滤失效，拼错的 `'invalid_modal'` 无声入库
+        造成下游按 modality 过滤出现意外分组。
+        修法（fail-closed，先判后写、零副作用，与 #331 同款口径）：tags/entities
+        经 `_validated_str_items` 校验+规范化——容器须为 list/tuple/set，**每项
+        须为非空 str**，None 项跳过（判据原文）；modality 白名单校验
+        （`_PERCEPTION_MODALITIES`）。调用方编程错误响亮报错（TypeError/
+        ValueError），**不做静默字符串化**。
+        判据来源：公开 issue #805「tags 每项须为非空 str，None 项跳过；
+        modality 白名单校验」（issue 正文表格点名 tags=None→'None'、tags=数字→
+        字符串、tags=''、modality 任意值四形态）。
+        边界（如实标注）：①容器 `None`（含显式传 None）规范化为空而非报错——
+        签名默认即 `List[str] = None`（None＝未提供），且仓内 longterm_gate.py
+        两处 `entities or None` 是显式传 None 的既有合法用法；②modality 白名单
+        只取仓内已实证的感知通道模态（text/audio/image/code），structure/
+        protocol/self_state/trust_state 等写入路径内部模态直构 STNode 走
+        `add_node`，不经本入口；③本闸只覆盖 `add_perception`，`store.add_node` /
+        `import_all` 的 tags 列写入不在本件范围（与 #331 边界同款）。
         """
         if not isinstance(content, str):
             raise TypeError(
                 "#331 add_perception 拒绝非字符串 content（收到 %s）：非 str 会绕过"
                 "去重、并以 BLOB/NULL 静默落库，进而毒化检索面"
                 % type(content).__name__)
+        # ---- #805：tags/entities/modality 入参验证（fail-closed，先判后写）----
+        # 在 `_interaction_count` / `_note_action` / 任何 SQL 之前（与 #331 同款
+        # 「零副作用」理由）：旧形态 tags=12345 的报错发生在副作用之后（半截写入面）。
+        # 校验后 tags/entities 已是纯 list[str]，下游 `tags or []` / 极性闸
+        # `set(tags or [])` / 合并路径 `for t in (tags or [])` 均按原语义工作。
+        tags = _validated_str_items("tags", tags)
+        entities = _validated_str_items("entities", entities)
+        if not isinstance(modality, str):
+            raise TypeError(
+                "#805 add_perception 拒绝非字符串 modality（收到 %s）：int 会被 "
+                "SQLite TEXT 亲和静默转 '123'（内存对象 ≠ 库内值），None 落 NULL "
+                "且使去重候选的模态过滤失效" % type(modality).__name__)
+        if modality not in _PERCEPTION_MODALITIES:
+            raise ValueError(
+                "#805 add_perception 拒绝非白名单 modality %r：合法值 "
+                "text/audio/image/code（感知通道模态，防下游按 modality 过滤出现"
+                "意外分组；白名单定义见 _PERCEPTION_MODALITIES 注释）" % (modality,))
         self._interaction_count += 1
         self._note_action("perception", content, None,
                           {"importance": importance, "modality": modality})
