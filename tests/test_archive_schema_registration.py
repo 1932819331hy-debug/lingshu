@@ -5,7 +5,7 @@ import sqlite3
 
 import pytest
 
-from lingshu.core.core import LayeredStore, MemoryLayer, Role, STNode, SpacetimeMemoryEngine
+from lingshu.core.core import LayeredStore, Role, SpacetimeMemoryEngine
 
 
 pytestmark = pytest.mark.filterwarnings("ignore")
@@ -77,18 +77,18 @@ def test_shared_archive_state_cannot_be_imported_by_sub(tmp_path):
     primary = SpacetimeMemoryEngine(str(path))
     sub = None
     try:
-        primary.store.add_node(STNode(id="shared-anchor", content="shared", layer=MemoryLayer.ANCHOR,
-                                     tags=["archived"], importance=0.1))
+        anchor = primary.set_anchor("shared archive target")
+        primary.store.tag_node(anchor.id, "archived")
         sub = SpacetimeMemoryEngine(str(path), role=Role.SUB)
         payload = tmp_path / "shared-state.json"
-        payload.write_text(json.dumps({"archive_state": [{"node_id": "shared-anchor",
+        payload.write_text(json.dumps({"archive_state": [{"node_id": anchor.id,
             "pre_archive_importance": 0.9, "archived_at": 1.0}]}), encoding="utf-8")
         try:
             sub.import_all(str(payload))
         except PermissionError:
             pass
         row = primary.store.conn.execute(
-            "SELECT * FROM archive_state WHERE node_id='shared-anchor'").fetchone()
+            "SELECT * FROM archive_state WHERE node_id=?", (anchor.id,)).fetchone()
         assert row is None, "SUB import wrote shared archive state"
     finally:
         if sub is not None:
