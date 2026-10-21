@@ -25,8 +25,13 @@ def cred_factor(gamma: float, dt: float, floor: float = 0.0, ceil: float = 1.0) 
     #180：本返回值与 `cred_step` 的第二形参**语义相反、互不通用**——
     前者是保持率（乘），后者是每周期衰减量（减）。`cred_step(x, r) == x·(1-r)`，
     不是 x·r；把本函数结果直送 `cred_step` 会得到「衰减量恰等于保持率」的数。
+    #457：非有限结果（NaN/±Inf）fail-closed 归 `floor`——CPython 的
+    `min(1.0, nan) == 1.0` 会把 NaN 抬成满额保持（完全不衰减），与 #196/#402
+    「非有限不得给出对己有利结论」相反；此处与 #402 同向取最保守端。
     """
     f = math.exp(-gamma * dt)
+    if not math.isfinite(f):
+        return floor
     return max(floor, min(ceil, f))
 
 
