@@ -1,0 +1,78 @@
+{
+  "baseline": "1eafb3f57a3f9a83d067c0a39568aca4588cfdff",
+  "sha256_lf": {
+    "lingshu/core/core.py": "99babc389fd04f9e247f112921e1bf97a01cf5c4ee21979e8f314465ae925c6a",
+    "tests/test_subtree_closure_guard.py": "d61f00495a7f8f58112ba8a4e28d7cc931c0891387e36a5a0fa8ff381fff4f68",
+    "tests/fixtures/subtree_closure_mutations.json": "f358d5a1a6901c2300b663bda52aee757fda2fd3a3404a7f72468f93dd7d6f51"
+  },
+  "runs": {
+    "windows": {
+      "platform": "Windows",
+      "python": "3.12.10",
+      "sqlite": "3.49.1",
+      "baseline": "1eafb3f57a3f9a83d067c0a39568aca4588cfdff",
+      "validated_commit": "2ce9ae35059d5041b20acd20c07911f7f965b41e",
+      "sha256_lf": {
+        "lingshu/core/core.py": "99babc389fd04f9e247f112921e1bf97a01cf5c4ee21979e8f314465ae925c6a",
+        "tests/test_subtree_closure_guard.py": "d61f00495a7f8f58112ba8a4e28d7cc931c0891387e36a5a0fa8ff381fff4f68",
+        "tests/fixtures/subtree_closure_mutations.json": "f358d5a1a6901c2300b663bda52aee757fda2fd3a3404a7f72468f93dd7d6f51"
+      },
+      "commands": [
+        {
+          "name": "replay",
+          "returncode": 0
+        },
+        {
+          "name": "related",
+          "returncode": 0
+        },
+        {
+          "name": "manifest",
+          "returncode": 0
+        },
+        {
+          "name": "time-core",
+          "returncode": 0
+        }
+      ],
+      "related_total": 30,
+      "related_failures": [],
+      "related_errors": [],
+      "related_skips": []
+    },
+    "linux": {
+      "platform": "Linux",
+      "python": "3.13.12",
+      "sqlite": "3.46.1",
+      "baseline": "1eafb3f57a3f9a83d067c0a39568aca4588cfdff",
+      "validated_commit": "2ce9ae35059d5041b20acd20c07911f7f965b41e",
+      "sha256_lf": {
+        "lingshu/core/core.py": "99babc389fd04f9e247f112921e1bf97a01cf5c4ee21979e8f314465ae925c6a",
+        "tests/test_subtree_closure_guard.py": "d61f00495a7f8f58112ba8a4e28d7cc931c0891387e36a5a0fa8ff381fff4f68",
+        "tests/fixtures/subtree_closure_mutations.json": "f358d5a1a6901c2300b663bda52aee757fda2fd3a3404a7f72468f93dd7d6f51"
+      },
+      "commands": [
+        {
+          "name": "replay",
+          "returncode": 0
+        },
+        {
+          "name": "related",
+          "returncode": 0
+        },
+        {
+          "name": "manifest",
+          "returncode": 0
+        },
+        {
+          "name": "time-core",
+          "returncode": 0
+        }
+      ],
+      "related_total": 30,
+      "related_failures": [],
+      "related_errors": [],
+      "related_skips": []
+    }
+  }
+}

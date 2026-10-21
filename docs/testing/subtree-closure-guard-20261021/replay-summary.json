@@ -1,0 +1,172 @@
+{
+  "windows": {
+    "python": "3.12.10",
+    "platform": "Windows",
+    "sqlite": "3.49.1",
+    "baseline": "1eafb3f57a3f9a83d067c0a39568aca4588cfdff",
+    "guard_sha256": "d61f00495a7f8f58112ba8a4e28d7cc931c0891387e36a5a0fa8ff381fff4f68",
+    "records": [
+      {
+        "case": "fixed",
+        "ok": true,
+        "returncode": 0,
+        "passed": 6,
+        "failed_tests": [],
+        "errors": 0,
+        "skipped": 0,
+        "expected_failures": [],
+        "expected_assertion": "",
+        "pytest_summary": "6 passed in 0.95s",
+        "source_sha256": {
+          "lingshu/core/core.py": "99babc389fd04f9e247f112921e1bf97a01cf5c4ee21979e8f314465ae925c6a"
+        }
+      },
+      {
+        "case": "baseline",
+        "ok": true,
+        "returncode": 1,
+        "passed": 3,
+        "failed_tests": [
+          "test_budget_hidden_protected_grandchild_keeps_the_whole_tree",
+          "test_depth_65_is_rejected_and_all_ancestor_edges_survive",
+          "test_fanout_beyond_500_is_rejected_without_any_writes"
+        ],
+        "errors": 0,
+        "skipped": 0,
+        "expected_failures": [
+          "test_fanout_beyond_500_is_rejected_without_any_writes",
+          "test_budget_hidden_protected_grandchild_keeps_the_whole_tree",
+          "test_depth_65_is_rejected_and_all_ancestor_edges_survive"
+        ],
+        "expected_assertion": "",
+        "pytest_summary": "3 failed, 3 passed in 1.32s",
+        "source_sha256": {
+          "lingshu/core/core.py": "e4d4cec6426d867406ac7575c5a9fabfbd003b328a3f069c5bb4a52187dcfcd5"
+        }
+      },
+      {
+        "case": "ignore_incomplete_closure",
+        "ok": true,
+        "returncode": 1,
+        "passed": 0,
+        "failed_tests": [
+          "test_fanout_beyond_500_is_rejected_without_any_writes"
+        ],
+        "errors": 0,
+        "skipped": 0,
+        "expected_failures": [
+          "test_fanout_beyond_500_is_rejected_without_any_writes"
+        ],
+        "expected_assertion": "incomplete subtree was replaced instead of rejected",
+        "pytest_summary": "1 failed in 0.64s",
+        "source_sha256": {
+          "lingshu/core/core.py": "2eea692398db5dec1f5bc282066fb42e1962e39fce27a7f07e3a2e0ed67dde6b"
+        }
+      },
+      {
+        "case": "check_only_old_root_boundary",
+        "ok": true,
+        "returncode": 1,
+        "passed": 0,
+        "failed_tests": [
+          "test_depth_65_is_rejected_and_all_ancestor_edges_survive"
+        ],
+        "errors": 0,
+        "skipped": 0,
+        "expected_failures": [
+          "test_depth_65_is_rejected_and_all_ancestor_edges_survive"
+        ],
+        "expected_assertion": "incomplete subtree was replaced instead of rejected",
+        "pytest_summary": "1 failed in 0.56s",
+        "source_sha256": {
+          "lingshu/core/core.py": "1751b2919bdc8a566f2e814c3e8bb3d6aaec0fa38f4fdc2c4ae0ad58064a6059"
+        }
+      }
+    ]
+  },
+  "linux": {
+    "python": "3.13.12",
+    "platform": "Linux",
+    "sqlite": "3.46.1",
+    "baseline": "1eafb3f57a3f9a83d067c0a39568aca4588cfdff",
+    "guard_sha256": "d61f00495a7f8f58112ba8a4e28d7cc931c0891387e36a5a0fa8ff381fff4f68",
+    "records": [
+      {
+        "case": "fixed",
+        "ok": true,
+        "returncode": 0,
+        "passed": 6,
+        "failed_tests": [],
+        "errors": 0,
+        "skipped": 0,
+        "expected_failures": [],
+        "expected_assertion": "",
+        "pytest_summary": "6 passed in 3.41s",
+        "source_sha256": {
+          "lingshu/core/core.py": "99babc389fd04f9e247f112921e1bf97a01cf5c4ee21979e8f314465ae925c6a"
+        }
+      },
+      {
+        "case": "baseline",
+        "ok": true,
+        "returncode": 1,
+        "passed": 3,
+        "failed_tests": [
+          "test_budget_hidden_protected_grandchild_keeps_the_whole_tree",
+          "test_depth_65_is_rejected_and_all_ancestor_edges_survive",
+          "test_fanout_beyond_500_is_rejected_without_any_writes"
+        ],
+        "errors": 0,
+        "skipped": 0,
+        "expected_failures": [
+          "test_fanout_beyond_500_is_rejected_without_any_writes",
+          "test_budget_hidden_protected_grandchild_keeps_the_whole_tree",
+          "test_depth_65_is_rejected_and_all_ancestor_edges_survive"
+        ],
+        "expected_assertion": "",
+        "pytest_summary": "3 failed, 3 passed in 4.03s",
+        "source_sha256": {
+          "lingshu/core/core.py": "e4d4cec6426d867406ac7575c5a9fabfbd003b328a3f069c5bb4a52187dcfcd5"
+        }
+      },
+      {
+        "case": "ignore_incomplete_closure",
+        "ok": true,
+        "returncode": 1,
+        "passed": 0,
+        "failed_tests": [
+          "test_fanout_beyond_500_is_rejected_without_any_writes"
+        ],
+        "errors": 0,
+        "skipped": 0,
+        "expected_failures": [
+          "test_fanout_beyond_500_is_rejected_without_any_writes"
+        ],
+        "expected_assertion": "incomplete subtree was replaced instead of rejected",
+        "pytest_summary": "1 failed in 1.26s",
+        "source_sha256": {
+          "lingshu/core/core.py": "2eea692398db5dec1f5bc282066fb42e1962e39fce27a7f07e3a2e0ed67dde6b"
+        }
+      },
+      {
+        "case": "check_only_old_root_boundary",
+        "ok": true,
+        "returncode": 1,
+        "passed": 0,
+        "failed_tests": [
+          "test_depth_65_is_rejected_and_all_ancestor_edges_survive"
+        ],
+        "errors": 0,
+        "skipped": 0,
+        "expected_failures": [
+          "test_depth_65_is_rejected_and_all_ancestor_edges_survive"
+        ],
+        "expected_assertion": "incomplete subtree was replaced instead of rejected",
+        "pytest_summary": "1 failed in 0.97s",
+        "source_sha256": {
+          "lingshu/core/core.py": "1751b2919bdc8a566f2e814c3e8bb3d6aaec0fa38f4fdc2c4ae0ad58064a6059"
+        }
+      }
+    ]
+  }
+}
