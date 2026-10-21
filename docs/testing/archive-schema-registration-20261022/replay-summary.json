@@ -1,0 +1,210 @@
+{
+  "windows": {
+    "python": "3.12.10",
+    "platform": "Windows",
+    "sqlite": "3.49.1",
+    "baseline": "1eafb3f57a3f9a83d067c0a39568aca4588cfdff",
+    "guard_sha256": "41357496d31d4441374c4230eb158bc89a87b0dbaa9b78077db56275672257a0",
+    "records": [
+      {
+        "case": "fixed",
+        "ok": true,
+        "returncode": 0,
+        "passed": 6,
+        "failed_tests": [],
+        "errors": 0,
+        "skipped": 0,
+        "expected_failures": [],
+        "expected_assertion": "",
+        "pytest_summary": "6 passed in 1.18s",
+        "source_sha256": {
+          "lingshu/core/core.py": "919b7e1ffd6b865dc218e9b4659478e7c963c07382a19fb83c7b5f17ff5914b9"
+        }
+      },
+      {
+        "case": "baseline",
+        "ok": true,
+        "returncode": 1,
+        "passed": 3,
+        "failed_tests": [
+          "test_backup_roundtrip_preserves_pre_archive_importance",
+          "test_current_version_with_missing_table_is_repaired",
+          "test_v3_database_is_migrated_before_normal_delete"
+        ],
+        "errors": 0,
+        "skipped": 0,
+        "expected_failures": [
+          "test_v3_database_is_migrated_before_normal_delete",
+          "test_current_version_with_missing_table_is_repaired",
+          "test_backup_roundtrip_preserves_pre_archive_importance"
+        ],
+        "expected_assertion": "",
+        "pytest_summary": "3 failed, 3 passed in 1.15s",
+        "source_sha256": {
+          "lingshu/core/core.py": "e4d4cec6426d867406ac7575c5a9fabfbd003b328a3f069c5bb4a52187dcfcd5"
+        }
+      },
+      {
+        "case": "ignore_archive_schema_structure",
+        "ok": true,
+        "returncode": 1,
+        "passed": 0,
+        "failed_tests": [
+          "test_current_version_with_missing_table_is_repaired"
+        ],
+        "errors": 0,
+        "skipped": 0,
+        "expected_failures": [
+          "test_current_version_with_missing_table_is_repaired"
+        ],
+        "expected_assertion": "archive_state missing after structural migration check",
+        "pytest_summary": "1 failed in 0.61s",
+        "source_sha256": {
+          "lingshu/core/core.py": "98990c058ab66e638038d4e50bfa0a19d7831b6d807cca0dc581a0486a78821a"
+        }
+      },
+      {
+        "case": "omit_archive_backup_rows",
+        "ok": true,
+        "returncode": 1,
+        "passed": 0,
+        "failed_tests": [
+          "test_backup_roundtrip_preserves_pre_archive_importance"
+        ],
+        "errors": 0,
+        "skipped": 0,
+        "expected_failures": [
+          "test_backup_roundtrip_preserves_pre_archive_importance"
+        ],
+        "expected_assertion": "backup omitted the pre-archive restoration state",
+        "pytest_summary": "1 failed in 0.61s",
+        "source_sha256": {
+          "lingshu/core/core.py": "3393af1d5be9a2eee806dc888688029d6c0efbb99f0591e3f305b9a75f48fc1d"
+        }
+      },
+      {
+        "case": "ignore_archive_import_role",
+        "ok": true,
+        "returncode": 1,
+        "passed": 0,
+        "failed_tests": [
+          "test_shared_archive_state_cannot_be_imported_by_sub"
+        ],
+        "errors": 0,
+        "skipped": 0,
+        "expected_failures": [
+          "test_shared_archive_state_cannot_be_imported_by_sub"
+        ],
+        "expected_assertion": "SUB import wrote shared archive state",
+        "pytest_summary": "1 failed in 0.61s",
+        "source_sha256": {
+          "lingshu/core/core.py": "e19561ddead0fba26d10dab5ab87bf3fdfff8e910a80bd713076aecf872d2e9c"
+        }
+      }
+    ]
+  },
+  "linux": {
+    "python": "3.13.12",
+    "platform": "Linux",
+    "sqlite": "3.46.1",
+    "baseline": "1eafb3f57a3f9a83d067c0a39568aca4588cfdff",
+    "guard_sha256": "41357496d31d4441374c4230eb158bc89a87b0dbaa9b78077db56275672257a0",
+    "records": [
+      {
+        "case": "fixed",
+        "ok": true,
+        "returncode": 0,
+        "passed": 6,
+        "failed_tests": [],
+        "errors": 0,
+        "skipped": 0,
+        "expected_failures": [],
+        "expected_assertion": "",
+        "pytest_summary": "6 passed in 3.50s",
+        "source_sha256": {
+          "lingshu/core/core.py": "919b7e1ffd6b865dc218e9b4659478e7c963c07382a19fb83c7b5f17ff5914b9"
+        }
+      },
+      {
+        "case": "baseline",
+        "ok": true,
+        "returncode": 1,
+        "passed": 3,
+        "failed_tests": [
+          "test_backup_roundtrip_preserves_pre_archive_importance",
+          "test_current_version_with_missing_table_is_repaired",
+          "test_v3_database_is_migrated_before_normal_delete"
+        ],
+        "errors": 0,
+        "skipped": 0,
+        "expected_failures": [
+          "test_v3_database_is_migrated_before_normal_delete",
+          "test_current_version_with_missing_table_is_repaired",
+          "test_backup_roundtrip_preserves_pre_archive_importance"
+        ],
+        "expected_assertion": "",
+        "pytest_summary": "3 failed, 3 passed in 3.54s",
+        "source_sha256": {
+          "lingshu/core/core.py": "e4d4cec6426d867406ac7575c5a9fabfbd003b328a3f069c5bb4a52187dcfcd5"
+        }
+      },
+      {
+        "case": "ignore_archive_schema_structure",
+        "ok": true,
+        "returncode": 1,
+        "passed": 0,
+        "failed_tests": [
+          "test_current_version_with_missing_table_is_repaired"
+        ],
+        "errors": 0,
+        "skipped": 0,
+        "expected_failures": [
+          "test_current_version_with_missing_table_is_repaired"
+        ],
+        "expected_assertion": "archive_state missing after structural migration check",
+        "pytest_summary": "1 failed in 1.02s",
+        "source_sha256": {
+          "lingshu/core/core.py": "98990c058ab66e638038d4e50bfa0a19d7831b6d807cca0dc581a0486a78821a"
+        }
+      },
+      {
+        "case": "omit_archive_backup_rows",
+        "ok": true,
+        "returncode": 1,
+        "passed": 0,
+        "failed_tests": [
+          "test_backup_roundtrip_preserves_pre_archive_importance"
+        ],
+        "errors": 0,
+        "skipped": 0,
+        "expected_failures": [
+          "test_backup_roundtrip_preserves_pre_archive_importance"
+        ],
+        "expected_assertion": "backup omitted the pre-archive restoration state",
+        "pytest_summary": "1 failed in 1.09s",
+        "source_sha256": {
+          "lingshu/core/core.py": "3393af1d5be9a2eee806dc888688029d6c0efbb99f0591e3f305b9a75f48fc1d"
+        }
+      },
+      {
+        "case": "ignore_archive_import_role",
+        "ok": true,
+        "returncode": 1,
+        "passed": 0,
+        "failed_tests": [
+          "test_shared_archive_state_cannot_be_imported_by_sub"
+        ],
+        "errors": 0,
+        "skipped": 0,
+        "expected_failures": [
+          "test_shared_archive_state_cannot_be_imported_by_sub"
+        ],
+        "expected_assertion": "SUB import wrote shared archive state",
+        "pytest_summary": "1 failed in 0.95s",
+        "source_sha256": {
+          "lingshu/core/core.py": "e19561ddead0fba26d10dab5ab87bf3fdfff8e910a80bd713076aecf872d2e9c"
+        }
+      }
+    ]
+  }
+}
