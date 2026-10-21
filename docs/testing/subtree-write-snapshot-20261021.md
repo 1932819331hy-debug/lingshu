@@ -9,12 +9,12 @@
 ## 复现与判据
 
 建议优先级 P1，判定为部分验证。使用两个正常引擎实例和真实文件库；SQLite trace 仅在第一条 BEGIN IMMEDIATE 执行前协调另一实例提交，不替换查询、结果或写方法。观察已提交保护/边、剩余节点和调用方回滚。
-修前 main 固定为 `049dd79d902fcbb5d0b097fc5e1f7cf3197dae44`；两平台验证提交 `4ee2a630f89aa160163c048a5e5078557e47e93d`。
+修前 main 固定为 `f5dcd58165cbf64393d1f2d4dfc61f781485ec29`；两平台验证提交 `657cbd982a19da5f8b6256b2f18ed365056b6828`。
 
 | 平台 | 同一守卫在修前 | 修复后 | 具名变异 |
 |---|---|---|---|
-| Windows / Python 3.12.10 | 3 failed, 2 passed in 1.06s | 5 passed in 1.01s | 4/4 指定用例及断言命中 |
-| Linux / Python 3.13.12 | 3 failed, 2 passed in 2.89s | 5 passed in 2.90s | 4/4 指定用例及断言命中 |
+| Windows / Python 3.12.10 | 3 failed, 2 passed in 1.02s | 5 passed in 1.03s | 4/4 指定用例及断言命中 |
+| Linux / Python 3.13.12 | 3 failed, 2 passed in 3.04s | 5 passed in 2.84s | 4/4 指定用例及断言命中 |
 
 全部最终守卫、修前对照与变异无 error、SKIP 或超时；变异恰好命中指定单条用例及断言。
 
@@ -25,16 +25,16 @@
 | ignore_current_parent_scope | test_moved_subtree_is_rechecked_before_deletion | subtree replacement deleted outside its current parent scope |
 | omit_current_descendants | test_descendants_are_collected_after_write_ownership | subtree replacement used stale descendants |
 
-- Windows：`25 passed, 153 warnings in 3.47s`，0 skipped。
-- Linux：`25 passed, 153 warnings in 15.96s`，0 skipped。
+- Windows：`25 passed, 153 warnings in 3.27s`，0 skipped。
+- Linux：`25 passed, 153 warnings in 15.18s`，0 skipped。
 
-严格登记 64/64 MATCH，时间核无新增违规；未改门禁、阈值、断言或豁免。本地仅跑上述受影响面，完整门禁交由最终 PR head 的远端 CI。各平台只执行一批验证，不为整理材料重复跑稳定测试。
+严格登记 64/64 MATCH，时间核无新增违规；未改门禁、阈值、断言或豁免。本地仅跑上述受影响面，完整门禁交由最终 PR head 的远端 CI。不为整理材料重复跑稳定测试；子树项曾因上游 #821 改到其感知调用入口而补跑一次定向批，旧读数保留本地，本报告只统计对齐后结果。
 
 安装 `.[full,dev]` 后，在上述固定验证提交的仓根执行：
 
 ```text
 python -X utf8 -m pytest tests/test_subtree_write_snapshot.py -q
-python -X utf8 tools/testing/replay_save_guards.py --spec tests/fixtures/subtree_write_snapshot_mutations.json --baseline 049dd79d902fcbb5d0b097fc5e1f7cf3197dae44 --mutate
+python -X utf8 tools/testing/replay_save_guards.py --spec tests/fixtures/subtree_write_snapshot_mutations.json --baseline f5dcd58165cbf64393d1f2d4dfc61f781485ec29 --mutate
 python -X utf8 -m pytest tests/test_issue139_subgraph_replace_guard.py tests/test_issue139_subgraph_replace_validate_guard.py tests/test_issue665_nested_tx_savepoint.py tests/test_transaction_exit_rollback.py -q
 python -X utf8 tools/verify_manifest.py --strict --quiet
 python -X utf8 tools/time_core_lint.py --json

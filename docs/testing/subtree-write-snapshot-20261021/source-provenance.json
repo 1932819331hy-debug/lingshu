@@ -1,7 +1,7 @@
 {
-  "baseline": "049dd79d902fcbb5d0b097fc5e1f7cf3197dae44",
+  "baseline": "f5dcd58165cbf64393d1f2d4dfc61f781485ec29",
   "sha256_lf": {
-    "lingshu/core/core.py": "595300859a1b32bb4e354ba0dc23b30a7c3189210ce750d456d6a47f0fbeca46",
+    "lingshu/core/core.py": "5905856d349a237e04fdf4e8f142e16e7ed5364c411c5d1a245b71005a5d3ebb",
     "tests/test_subtree_write_snapshot.py": "e7a126d41f58a15b14e0f818876910a0e1581c8e3b9098089150597df12d04ef",
     "tests/fixtures/subtree_write_snapshot_mutations.json": "a437f8d73d4981d01f997d3b7720a0246692d97bffc93851ad85252b3f360e51"
   },
@@ -10,10 +10,10 @@
       "platform": "Windows",
       "python": "3.12.10",
       "sqlite": "3.49.1",
-      "baseline": "049dd79d902fcbb5d0b097fc5e1f7cf3197dae44",
-      "validated_commit": "4ee2a630f89aa160163c048a5e5078557e47e93d",
+      "baseline": "f5dcd58165cbf64393d1f2d4dfc61f781485ec29",
+      "validated_commit": "657cbd982a19da5f8b6256b2f18ed365056b6828",
       "sha256_lf": {
-        "lingshu/core/core.py": "595300859a1b32bb4e354ba0dc23b30a7c3189210ce750d456d6a47f0fbeca46",
+        "lingshu/core/core.py": "5905856d349a237e04fdf4e8f142e16e7ed5364c411c5d1a245b71005a5d3ebb",
         "tests/test_subtree_write_snapshot.py": "e7a126d41f58a15b14e0f818876910a0e1581c8e3b9098089150597df12d04ef",
         "tests/fixtures/subtree_write_snapshot_mutations.json": "a437f8d73d4981d01f997d3b7720a0246692d97bffc93851ad85252b3f360e51"
       },
@@ -44,10 +44,10 @@
       "platform": "Linux",
       "python": "3.13.12",
       "sqlite": "3.46.1",
-      "baseline": "049dd79d902fcbb5d0b097fc5e1f7cf3197dae44",
-      "validated_commit": "4ee2a630f89aa160163c048a5e5078557e47e93d",
+      "baseline": "f5dcd58165cbf64393d1f2d4dfc61f781485ec29",
+      "validated_commit": "657cbd982a19da5f8b6256b2f18ed365056b6828",
       "sha256_lf": {
-        "lingshu/core/core.py": "595300859a1b32bb4e354ba0dc23b30a7c3189210ce750d456d6a47f0fbeca46",
+        "lingshu/core/core.py": "5905856d349a237e04fdf4e8f142e16e7ed5364c411c5d1a245b71005a5d3ebb",
         "tests/test_subtree_write_snapshot.py": "e7a126d41f58a15b14e0f818876910a0e1581c8e3b9098089150597df12d04ef",
         "tests/fixtures/subtree_write_snapshot_mutations.json": "a437f8d73d4981d01f997d3b7720a0246692d97bffc93851ad85252b3f360e51"
       },
