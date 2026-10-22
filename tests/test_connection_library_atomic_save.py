@@ -20,7 +20,7 @@ def library(name='original'):
 def existing(tmp_path):
     target = tmp_path / 'library.json'
     lib = library()
-    lib.save(str(target))
+    target.write_text(json.dumps(lib.records, ensure_ascii=False, indent=1), encoding='utf-8')
     return target, target.read_bytes()
 
 
