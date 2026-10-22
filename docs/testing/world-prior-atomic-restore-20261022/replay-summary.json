@@ -1,0 +1,256 @@
+{
+  "windows": {
+    "python": "3.12.10",
+    "platform": "Windows",
+    "sqlite": "3.49.1",
+    "baseline": "ef6f413dd5ffaa91b419b359dc6edcfc872bffed",
+    "guard_sha256": "87aba07a593f5e2739d9043df1a5a9e85da778f7a8ff95f3ff413796b56973f0",
+    "records": [
+      {
+        "case": "fixed",
+        "ok": true,
+        "returncode": 0,
+        "passed": 8,
+        "failed_tests": [],
+        "errors": 0,
+        "skipped": 0,
+        "expected_failures": [],
+        "expected_assertion": "",
+        "pytest_summary": "8 passed in 0.37s",
+        "source_sha256": {
+          "lingshu/world/wm_simloop.py": "7d33f88cf2ebcb2d24f786d2e4690490d930372b1857b9401d731e1beffd227c"
+        }
+      },
+      {
+        "case": "baseline",
+        "ok": true,
+        "returncode": 1,
+        "passed": 3,
+        "failed_tests": [
+          "test_failed_restore_preserves_the_entire_running_state[bad_edge]",
+          "test_failed_restore_preserves_the_entire_running_state[bad_history]",
+          "test_failed_restore_preserves_the_entire_running_state[bad_hypothesis]",
+          "test_failed_restore_preserves_the_entire_running_state[missing_motion]",
+          "test_failed_restore_preserves_the_entire_running_state[missing_rates]"
+        ],
+        "errors": 0,
+        "skipped": 0,
+        "expected_failures": [
+          "test_failed_restore_preserves_the_entire_running_state[missing_motion]",
+          "test_failed_restore_preserves_the_entire_running_state[bad_edge]",
+          "test_failed_restore_preserves_the_entire_running_state[bad_history]",
+          "test_failed_restore_preserves_the_entire_running_state[bad_hypothesis]",
+          "test_failed_restore_preserves_the_entire_running_state[missing_rates]"
+        ],
+        "expected_assertion": "",
+        "pytest_summary": "5 failed, 3 passed in 0.55s",
+        "source_sha256": {
+          "lingshu/world/wm_simloop.py": "f35a9750d2125e86480ffbdde5883d105b76438ef234383800ff415419d7933c"
+        }
+      },
+      {
+        "case": "stage_directly_on_the_running_model",
+        "ok": true,
+        "returncode": 1,
+        "passed": 0,
+        "failed_tests": [
+          "test_failed_restore_preserves_the_entire_running_state[missing_motion]"
+        ],
+        "errors": 0,
+        "skipped": 0,
+        "expected_failures": [
+          "test_failed_restore_preserves_the_entire_running_state[missing_motion]"
+        ],
+        "expected_assertion": "failed prior restore changed running state",
+        "pytest_summary": "1 failed in 0.40s",
+        "source_sha256": {
+          "lingshu/world/wm_simloop.py": "cafcc129a2aee6c5b5310a751ece81e2c737fe677129ebf780978aa4912ae323"
+        }
+      },
+      {
+        "case": "publish_before_hypothesis_validation",
+        "ok": true,
+        "returncode": 1,
+        "passed": 0,
+        "failed_tests": [
+          "test_failed_restore_preserves_the_entire_running_state[bad_hypothesis]"
+        ],
+        "errors": 0,
+        "skipped": 0,
+        "expected_failures": [
+          "test_failed_restore_preserves_the_entire_running_state[bad_hypothesis]"
+        ],
+        "expected_assertion": "failed prior restore changed running state",
+        "pytest_summary": "1 failed in 0.42s",
+        "source_sha256": {
+          "lingshu/world/wm_simloop.py": "273619a128b16fc71c6e1c795492c1619da097e702b00f188e87b22aeeb76812"
+        }
+      },
+      {
+        "case": "publish_loop_state_before_final_field",
+        "ok": true,
+        "returncode": 1,
+        "passed": 0,
+        "failed_tests": [
+          "test_failed_restore_preserves_the_entire_running_state[missing_rates]"
+        ],
+        "errors": 0,
+        "skipped": 0,
+        "expected_failures": [
+          "test_failed_restore_preserves_the_entire_running_state[missing_rates]"
+        ],
+        "expected_assertion": "failed prior restore changed running state",
+        "pytest_summary": "1 failed in 0.42s",
+        "source_sha256": {
+          "lingshu/world/wm_simloop.py": "c21e7dccad08e8cde561a87408890828ba9d3a509946d99353db3c557b6a87e8"
+        }
+      },
+      {
+        "case": "replace_the_externally_held_model",
+        "ok": true,
+        "returncode": 1,
+        "passed": 0,
+        "failed_tests": [
+          "test_valid_restore_preserves_the_held_model_object_and_observation_boundary"
+        ],
+        "errors": 0,
+        "skipped": 0,
+        "expected_failures": [
+          "test_valid_restore_preserves_the_held_model_object_and_observation_boundary"
+        ],
+        "expected_assertion": "restoration replaced the held model object",
+        "pytest_summary": "1 failed in 0.37s",
+        "source_sha256": {
+          "lingshu/world/wm_simloop.py": "1f30f1269aa5aca60a00b60536896323699ed644af94393cb319cd99472784b3"
+        }
+      }
+    ]
+  },
+  "linux": {
+    "python": "3.13.12",
+    "platform": "Linux",
+    "sqlite": "3.46.1",
+    "baseline": "ef6f413dd5ffaa91b419b359dc6edcfc872bffed",
+    "guard_sha256": "87aba07a593f5e2739d9043df1a5a9e85da778f7a8ff95f3ff413796b56973f0",
+    "records": [
+      {
+        "case": "fixed",
+        "ok": true,
+        "returncode": 0,
+        "passed": 8,
+        "failed_tests": [],
+        "errors": 0,
+        "skipped": 0,
+        "expected_failures": [],
+        "expected_assertion": "",
+        "pytest_summary": "8 passed in 0.64s",
+        "source_sha256": {
+          "lingshu/world/wm_simloop.py": "7d33f88cf2ebcb2d24f786d2e4690490d930372b1857b9401d731e1beffd227c"
+        }
+      },
+      {
+        "case": "baseline",
+        "ok": true,
+        "returncode": 1,
+        "passed": 3,
+        "failed_tests": [
+          "test_failed_restore_preserves_the_entire_running_state[bad_edge]",
+          "test_failed_restore_preserves_the_entire_running_state[bad_history]",
+          "test_failed_restore_preserves_the_entire_running_state[bad_hypothesis]",
+          "test_failed_restore_preserves_the_entire_running_state[missing_motion]",
+          "test_failed_restore_preserves_the_entire_running_state[missing_rates]"
+        ],
+        "errors": 0,
+        "skipped": 0,
+        "expected_failures": [
+          "test_failed_restore_preserves_the_entire_running_state[missing_motion]",
+          "test_failed_restore_preserves_the_entire_running_state[bad_edge]",
+          "test_failed_restore_preserves_the_entire_running_state[bad_history]",
+          "test_failed_restore_preserves_the_entire_running_state[bad_hypothesis]",
+          "test_failed_restore_preserves_the_entire_running_state[missing_rates]"
+        ],
+        "expected_assertion": "",
+        "pytest_summary": "5 failed, 3 passed in 0.84s",
+        "source_sha256": {
+          "lingshu/world/wm_simloop.py": "f35a9750d2125e86480ffbdde5883d105b76438ef234383800ff415419d7933c"
+        }
+      },
+      {
+        "case": "stage_directly_on_the_running_model",
+        "ok": true,
+        "returncode": 1,
+        "passed": 0,
+        "failed_tests": [
+          "test_failed_restore_preserves_the_entire_running_state[missing_motion]"
+        ],
+        "errors": 0,
+        "skipped": 0,
+        "expected_failures": [
+          "test_failed_restore_preserves_the_entire_running_state[missing_motion]"
+        ],
+        "expected_assertion": "failed prior restore changed running state",
+        "pytest_summary": "1 failed in 0.52s",
+        "source_sha256": {
+          "lingshu/world/wm_simloop.py": "cafcc129a2aee6c5b5310a751ece81e2c737fe677129ebf780978aa4912ae323"
+        }
+      },
+      {
+        "case": "publish_before_hypothesis_validation",
+        "ok": true,
+        "returncode": 1,
+        "passed": 0,
+        "failed_tests": [
+          "test_failed_restore_preserves_the_entire_running_state[bad_hypothesis]"
+        ],
+        "errors": 0,
+        "skipped": 0,
+        "expected_failures": [
+          "test_failed_restore_preserves_the_entire_running_state[bad_hypothesis]"
+        ],
+        "expected_assertion": "failed prior restore changed running state",
+        "pytest_summary": "1 failed in 0.57s",
+        "source_sha256": {
+          "lingshu/world/wm_simloop.py": "273619a128b16fc71c6e1c795492c1619da097e702b00f188e87b22aeeb76812"
+        }
+      },
+      {
+        "case": "publish_loop_state_before_final_field",
+        "ok": true,
+        "returncode": 1,
+        "passed": 0,
+        "failed_tests": [
+          "test_failed_restore_preserves_the_entire_running_state[missing_rates]"
+        ],
+        "errors": 0,
+        "skipped": 0,
+        "expected_failures": [
+          "test_failed_restore_preserves_the_entire_running_state[missing_rates]"
+        ],
+        "expected_assertion": "failed prior restore changed running state",
+        "pytest_summary": "1 failed in 0.51s",
+        "source_sha256": {
+          "lingshu/world/wm_simloop.py": "c21e7dccad08e8cde561a87408890828ba9d3a509946d99353db3c557b6a87e8"
+        }
+      },
+      {
+        "case": "replace_the_externally_held_model",
+        "ok": true,
+        "returncode": 1,
+        "passed": 0,
+        "failed_tests": [
+          "test_valid_restore_preserves_the_held_model_object_and_observation_boundary"
+        ],
+        "errors": 0,
+        "skipped": 0,
+        "expected_failures": [
+          "test_valid_restore_preserves_the_held_model_object_and_observation_boundary"
+        ],
+        "expected_assertion": "restoration replaced the held model object",
+        "pytest_summary": "1 failed in 0.55s",
+        "source_sha256": {
+          "lingshu/world/wm_simloop.py": "1f30f1269aa5aca60a00b60536896323699ed644af94393cb319cd99472784b3"
+        }
+      }
+    ]
+  }
+}

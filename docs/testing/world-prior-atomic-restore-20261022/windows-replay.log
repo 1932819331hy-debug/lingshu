@@ -1,0 +1,130 @@
+CASE fixed
+........                                                                 [100%]
+8 passed in 0.37s
+
+CASE baseline
+FFFFF...                                                                 [100%]
+================================== FAILURES ===================================
+___ test_failed_restore_preserves_the_entire_running_state[missing_motion] ____
+tests\test_world_prior_atomic_restore.py:66: in test_failed_restore_preserves_the_entire_running_state
+    assert _snapshot(target) == before, "failed prior restore changed running state"
+E   AssertionError: failed prior restore changed running state
+E   assert {'model_id': ...trs={})}, ...} == {'model_id': ...trs={})}, ...}
+E
+E     Omitting 7 identical items, use -vv to show
+E     Differing items:
+E     {'values': {'size': 24, 'nodes': {'scene_d3808ff0': WMNode(eid='scene_d3808ff0', category='new', pos=(2.0, 1.5, 2.0), ...0, 1.5, 6.0]}}, {'tick': 3, 'entities': {'scene_d3808ff0': [2.0, 1.5, 2.0], 'scene_a0735fe9': [6.0, 1.5, 6.0]}}], ...}} != {'values': {'size': 24, 'nodes': {'scene_9871bd3a': WMNode(eid='scene_9871bd3a', category='existing', pos=(5.0, 1.5, 5... 'entities': {'scene_9871bd3a': [5.0, 1.5, 5.0]}}, {'tick': 2, 'entities': {'scene_9871bd3a': [5.0, 1.5, 5.0]}}], ...}}
+E     Use -v to get more diff
+______ test_failed_restore_preserves_the_entire_running_state[bad_edge] _______
+tests\test_world_prior_atomic_restore.py:66: in test_failed_restore_preserves_the_entire_running_state
+    assert _snapshot(target) == before, "failed prior restore changed running state"
+E   AssertionError: failed prior restore changed running state
+E   assert {'model_id': ...trs={})}, ...} == {'model_id': ...trs={})}, ...}
+E
+E     Omitting 7 identical items, use -vv to show
+E     Differing items:
+E     {'values': {'size': 24, 'nodes': {'scene_45a8eec5': WMNode(eid='scene_45a8eec5', category='new', pos=(2.0, 1.5, 2.0), ... 'entities': {'scene_b7dfd2ed': [5.0, 1.5, 5.0]}}, {'tick': 2, 'entities': {'scene_b7dfd2ed': [5.0, 1.5, 5.0]}}], ...}} != {'values': {'size': 24, 'nodes': {'scene_b7dfd2ed': WMNode(eid='scene_b7dfd2ed', category='existing', pos=(5.0, 1.5, 5... 'entities': {'scene_b7dfd2ed': [5.0, 1.5, 5.0]}}, {'tick': 2, 'entities': {'scene_b7dfd2ed': [5.0, 1.5, 5.0]}}], ...}}
+E     Use -v to get more diff
+_____ test_failed_restore_preserves_the_entire_running_state[bad_history] _____
+tests\test_world_prior_atomic_restore.py:66: in test_failed_restore_preserves_the_entire_running_state
+    assert _snapshot(target) == before, "failed prior restore changed running state"
+E   AssertionError: failed prior restore changed running state
+E   assert {'model_id': ...trs={})}, ...} == {'model_id': ...trs={})}, ...}
+E
+E     Omitting 7 identical items, use -vv to show
+E     Differing items:
+E     {'values': {'size': 24, 'nodes': {'scene_05e16d34': WMNode(eid='scene_05e16d34', category='new', pos=(2.0, 1.5, 2.0), ...0, 1.5, 6.0]}}, {'tick': 3, 'entities': {'scene_05e16d34': [2.0, 1.5, 2.0], 'scene_b5a3754b': [6.0, 1.5, 6.0]}}], ...}} != {'values': {'size': 24, 'nodes': {'scene_c9ac8042': WMNode(eid='scene_c9ac8042', category='existing', pos=(5.0, 1.5, 5... 'entities': {'scene_c9ac8042': [5.0, 1.5, 5.0]}}, {'tick': 2, 'entities': {'scene_c9ac8042': [5.0, 1.5, 5.0]}}], ...}}
+E     Use -v to get more diff
+___ test_failed_restore_preserves_the_entire_running_state[bad_hypothesis] ____
+tests\test_world_prior_atomic_restore.py:66: in test_failed_restore_preserves_the_entire_running_state
+    assert _snapshot(target) == before, "failed prior restore changed running state"
+E   AssertionError: failed prior restore changed running state
+E   assert {'model_id': ...trs={})}, ...} == {'model_id': ...trs={})}, ...}
+E
+E     Omitting 7 identical items, use -vv to show
+E     Differing items:
+E     {'values': {'size': 24, 'nodes': {'scene_a745c07d': WMNode(eid='scene_a745c07d', category='new', pos=(2.0, 1.5, 2.0), ...0, 1.5, 6.0]}}, {'tick': 3, 'entities': {'scene_a745c07d': [2.0, 1.5, 2.0], 'scene_82062ef9': [6.0, 1.5, 6.0]}}], ...}} != {'values': {'size': 24, 'nodes': {'scene_423c8ccc': WMNode(eid='scene_423c8ccc', category='existing', pos=(5.0, 1.5, 5... 'entities': {'scene_423c8ccc': [5.0, 1.5, 5.0]}}, {'tick': 2, 'entities': {'scene_423c8ccc': [5.0, 1.5, 5.0]}}], ...}}
+E     Use -v to get more diff
+____ test_failed_restore_preserves_the_entire_running_state[missing_rates] ____
+tests\test_world_prior_atomic_restore.py:66: in test_failed_restore_preserves_the_entire_running_state
+    assert _snapshot(target) == before, "failed prior restore changed running state"
+E   AssertionError: failed prior restore changed running state
+E   assert {'model_id': ...trs={})}, ...} == {'model_id': ...trs={})}, ...}
+E
+E     Omitting 6 identical items, use -vv to show
+E     Differing items:
+E     {'values': {'size': 24, 'nodes': {'scene_f48ddb06': WMNode(eid='scene_f48ddb06', category='new', pos=(2.0, 1.5, 2.0), ...0, 1.5, 6.0]}}, {'tick': 3, 'entities': {'scene_f48ddb06': [2.0, 1.5, 2.0], 'scene_984d0bae': [6.0, 1.5, 6.0]}}], ...}} != {'values': {'size': 24, 'nodes': {'scene_501244c3': WMNode(eid='scene_501244c3', category='existing', pos=(5.0, 1.5, 5... 'entities': {'scene_501244c3': [5.0, 1.5, 5.0]}}, {'tick': 2, 'entities': {'scene_501244c3': [5.0, 1.5, 5.0]}}], ...}}
+E     {'hypotheses': {}} != {'hypothese...
+E
+E     ...Full output truncated (2 lines hidden), use '-vv' to show
+=========================== short test summary info ===========================
+FAILED tests/test_world_prior_atomic_restore.py::test_failed_restore_preserves_the_entire_running_state[missing_motion]
+FAILED tests/test_world_prior_atomic_restore.py::test_failed_restore_preserves_the_entire_running_state[bad_edge]
+FAILED tests/test_world_prior_atomic_restore.py::test_failed_restore_preserves_the_entire_running_state[bad_history]
+FAILED tests/test_world_prior_atomic_restore.py::test_failed_restore_preserves_the_entire_running_state[bad_hypothesis]
+FAILED tests/test_world_prior_atomic_restore.py::test_failed_restore_preserves_the_entire_running_state[missing_rates]
+5 failed, 3 passed in 0.55s
+
+CASE stage_directly_on_the_running_model
+F                                                                        [100%]
+================================== FAILURES ===================================
+___ test_failed_restore_preserves_the_entire_running_state[missing_motion] ____
+tests\test_world_prior_atomic_restore.py:66: in test_failed_restore_preserves_the_entire_running_state
+    assert _snapshot(target) == before, "failed prior restore changed running state"
+E   AssertionError: failed prior restore changed running state
+E   assert {'model_id': ...trs={})}, ...} == {'model_id': ...trs={})}, ...}
+E
+E     Omitting 7 identical items, use -vv to show
+E     Differing items:
+E     {'values': {'size': 24, 'nodes': {'scene_805eb3b5': WMNode(eid='scene_805eb3b5', category='new', pos=(2.0, 1.5, 2.0), ...0, 1.5, 6.0]}}, {'tick': 3, 'entities': {'scene_805eb3b5': [2.0, 1.5, 2.0], 'scene_b186a110': [6.0, 1.5, 6.0]}}], ...}} != {'values': {'size': 24, 'nodes': {'scene_2b890b7c': WMNode(eid='scene_2b890b7c', category='existing', pos=(5.0, 1.5, 5... 'entities': {'scene_2b890b7c': [5.0, 1.5, 5.0]}}, {'tick': 2, 'entities': {'scene_2b890b7c': [5.0, 1.5, 5.0]}}], ...}}
+E     Use -v to get more diff
+=========================== short test summary info ===========================
+FAILED tests/test_world_prior_atomic_restore.py::test_failed_restore_preserves_the_entire_running_state[missing_motion]
+1 failed in 0.40s
+
+CASE publish_before_hypothesis_validation
+F                                                                        [100%]
+================================== FAILURES ===================================
+___ test_failed_restore_preserves_the_entire_running_state[bad_hypothesis] ____
+tests\test_world_prior_atomic_restore.py:66: in test_failed_restore_preserves_the_entire_running_state
+    assert _snapshot(target) == before, "failed prior restore changed running state"
+E   AssertionError: failed prior restore changed running state
+E   assert {'model_id': ...trs={})}, ...} == {'model_id': ...trs={})}, ...}
+E
+E     Omitting 7 identical items, use -vv to show
+E     Differing items:
+E     {'values': {'size': 24, 'nodes': {'scene_58f7fc11': WMNode(eid='scene_58f7fc11', category='new', pos=(2.0, 1.5, 2.0), ...0, 1.5, 6.0]}}, {'tick': 3, 'entities': {'scene_58f7fc11': [2.0, 1.5, 2.0], 'scene_2d3bf42e': [6.0, 1.5, 6.0]}}], ...}} != {'values': {'size': 24, 'nodes': {'scene_27809186': WMNode(eid='scene_27809186', category='existing', pos=(5.0, 1.5, 5... 'entities': {'scene_27809186': [5.0, 1.5, 5.0]}}, {'tick': 2, 'entities': {'scene_27809186': [5.0, 1.5, 5.0]}}], ...}}
+E     Use -v to get more diff
+=========================== short test summary info ===========================
+FAILED tests/test_world_prior_atomic_restore.py::test_failed_restore_preserves_the_entire_running_state[bad_hypothesis]
+1 failed in 0.42s
+
+CASE publish_loop_state_before_final_field
+F                                                                        [100%]
+================================== FAILURES ===================================
+____ test_failed_restore_preserves_the_entire_running_state[missing_rates] ____
+tests\test_world_prior_atomic_restore.py:66: in test_failed_restore_preserves_the_entire_running_state
+    assert _snapshot(target) == before, "failed prior restore changed running state"
+E   AssertionError: failed prior restore changed running state
+E   assert {'model_id': ...trs={})}, ...} == {'model_id': ...trs={})}, ...}
+E
+E     Omitting 7 identical items, use -vv to show
+E     Differing items:
+E     {'hypotheses': {}} != {'hypotheses': {'scene_a95ba1ab': {'node': 'scene_a95ba1ab', 'phase': 'testing'}}}
+E     Use -v to get more diff
+=========================== short test summary info ===========================
+FAILED tests/test_world_prior_atomic_restore.py::test_failed_restore_preserves_the_entire_running_state[missing_rates]
+1 failed in 0.42s
+
+CASE replace_the_externally_held_model
+F                                                                        [100%]
+================================== FAILURES ===================================
+_ test_valid_restore_preserves_the_held_model_object_and_observation_boundary _
+tests\test_world_prior_atomic_restore.py:84: in test_valid_restore_preserves_the_held_model_object_and_observation_boundary
+    assert target.wm is held, "restoration replaced the held model object"
+E   AssertionError: restoration replaced the held model object
+E   assert <lingshu.world.world_model.UnifiedWorldModel object at 0x000002C1679A0080> is <lingshu.world.world_model.UnifiedWorldModel object at 0x000002C16780ACC0>
+E    +  where <lingshu.world.world_model.UnifiedWorldModel object at 0x000002C1679A0080> = <lingshu.world.wm_simloop.SimulationLoop object at 0x000002C167981DC0>.wm
+=========================== short test summary info ===========================
+FAILED tests/test_world_prior_atomic_restore.py::test_valid_restore_preserves_the_held_model_object_and_observation_boundary
+1 failed in 0.37s

@@ -35,6 +35,7 @@ WAL（append-only 单调）：{seq, ts, tick, kind ∈ episode|growth|confirm|re
 """
 from __future__ import annotations
 
+from copy import copy
 import json
 import math
 import os
@@ -664,36 +665,42 @@ class SimulationLoop:
             if state["schema"] != "lingshu.world-prior.v1":
                 raise ValueError("不支持的世界模型经验格式")
             selected = list(state["nodes"].items())[:max(0, limit)]
-            self.wm.nodes = {eid: WMNode(**{**node, "pos": tuple(node["pos"])})
-                             for eid, node in selected}
-            self.wm.edges = [WMEdge(**edge) for edge in state["edges"]
-                             if edge["source"] in self.wm.nodes and edge["target"] in self.wm.nodes]
-            self.wm._conditions = {eid: state["conditions"][eid] for eid in self.wm.nodes
-                                    if eid in state["conditions"]}
-            self.wm.history = [{**frame, "entities": {eid: pos for eid, pos in frame["entities"].items()
-                                                       if eid in self.wm.nodes}}
-                               for frame in state.get("history") or []]
+            # 先构建独立候选；后段字段或历史投影失败时，活动模型必须仍可继续使用。
+            candidate = copy(self.wm)
+            candidate.nodes = {eid: WMNode(**{**node, "pos": tuple(node["pos"])})
+                               for eid, node in selected}
+            candidate.edges = [WMEdge(**edge) for edge in state["edges"]
+                               if edge["source"] in candidate.nodes and edge["target"] in candidate.nodes]
+            candidate._conditions = {eid: state["conditions"][eid] for eid in candidate.nodes
+                                     if eid in state["conditions"]}
+            candidate.history = [{**frame, "entities": {eid: pos for eid, pos in frame["entities"].items()
+                                                        if eid in candidate.nodes}}
+                                 for frame in state.get("history") or []]
             # 轨迹缓冲不随载荷持久化（它只是观测历史按 eid 的投影）。不重建时
             # 生成端的 static/smooth 判据读到空缓冲，"两侧预测一致"这条经验恢复
             # 契约就会被判据自身的记账差异打破（实测：smooth_blocked 由
             # speed_near_zero 变成 not_enough_samples）。载荷缺 "history" 时保持空。
-            self.wm.restore_trajectory_from_history()
-            self.wm.tick = state["tick"]
-            self.wm.size = state["size"]
-            self.wm._motion_estimates = {eid: tuple(value) for eid, value in state["motion_estimates"].items()
-                                         if eid in self.wm.nodes}
-            self.wm._motion_directions = {eid: tuple(value) for eid, value in state["motion_directions"].items()
-                                          if eid in self.wm.nodes}
-            self.wm.relation_history = state["relation_history"]
-            self.wm._patterns = {}
+            candidate.restore_trajectory_from_history()
+            candidate.tick = state["tick"]
+            candidate.size = state["size"]
+            candidate._motion_estimates = {eid: tuple(value) for eid, value in state["motion_estimates"].items()
+                                          if eid in candidate.nodes}
+            candidate._motion_directions = {eid: tuple(value) for eid, value in state["motion_directions"].items()
+                                           if eid in candidate.nodes}
+            candidate.relation_history = state["relation_history"]
+            candidate._patterns = {}
             # 记忆是先验，不是新观测或本轮生成；验证必须等外部下一帧。
-            self.wm._obs_snapshot = self.wm._obs_tick = self.wm._pred_tick = None
-            self.wm._last_prediction = {}
-            self.wm._compare = {}
-            self.wm._anomalies = []
-            self._hypotheses = {eid: h for eid, h in state["hypotheses"].items()
-                                 if eid in self.wm.nodes and h["node"] in self.wm.nodes}
-            self._rolling_rates = state["rolling_rates"]
+            candidate._obs_snapshot = candidate._obs_tick = candidate._pred_tick = None
+            candidate._last_prediction = {}
+            candidate._compare = {}
+            candidate._anomalies = []
+            restored_hypotheses = {eid: h for eid, h in state["hypotheses"].items()
+                                   if eid in candidate.nodes and h["node"] in candidate.nodes}
+            restored_rates = state["rolling_rates"]
+            # 保留外部持有的同一模型对象；全部可失败的恢复步骤已完成。
+            self.wm.__dict__.update(candidate.__dict__)
+            self._hypotheses = restored_hypotheses
+            self._rolling_rates = restored_rates
             return {"status": "ok", "seeded": len(selected), "memory_id": memory_id,
                     "truncated": len(selected) < len(state["nodes"]),
                     "entities": [{"source": memory_id, "eid": eid, "seeded_id": eid,
