@@ -57,7 +57,27 @@ class StableLease:
 
     def acquire(self, key: str, ttl: Optional[float] = None,
                 confidence: float = 1.0, history: Optional[list] = None) -> Dict:
-        """进入 stable 状态。history：验证历史记录（不可遗忘，仅记录不删除）。"""
+        """进入 stable 状态。history：验证历史记录（不可遗忘，仅记录不删除）。
+
+        #859（兑现契约）：旧实现收下 `history` 却一次不读——docstring 承诺「不可遗忘、
+        仅记录不删除」，但记录既没落进租约、也不出现在任何对外读数面（`state()` /
+        `check()` 都看不到），调用方传了等于蒸发。现改为：
+          · 记录随租约保存，`state()`（以及 `acquire()` 的返回体）在存在记录时透出
+            `history` 键（列表）；没有记录时**不新增该键**（既有调用方键集逐位不变）；
+          · **只增不删**（P1-003）：再次 `acquire` 不带 history 时旧记录仍在；带
+            history 时追加到既有记录之后；
+          · 入参须为 list/tuple，否则 `TypeError`（fail-closed，且在**任何写之前**
+            抛出——失败的 acquire 不会清掉既有租约与历史）；
+          · 存的是**浅拷贝列表**（逐个记录对象不深拷贝）：调用方事后 append/remove
+            原列表不影响已存记录，但修改记录对象本身仍会反映（记录对象归调用方）。
+        """
+        if history is not None and not isinstance(history, (list, tuple)):
+            raise TypeError("history 须为 list/tuple（验证历史记录序列），实为 %s"
+                            % type(history).__name__)
+        prior = self._leases.get(key)
+        history_records = list(prior.get("history") or []) if prior else []
+        if history:
+            history_records.extend(history)
         now = time.time()
         eff_ttl = ttl if ttl is not None else self.ttl
         self._leases[key] = {
@@ -67,7 +87,9 @@ class StableLease:
             # 触发取早），而非 TTL 名义到期；分项另给 ttl_expires_at / weak_at。
             **self._expiry_fields(now, eff_ttl, confidence),
         }
-        # 记录保留（不可遗忘——P1-003 边界）：历史由调用方持有，这里仅标记
+        # #859：记录保留（不可遗忘——P1-003 边界）：与租约同存、只增不删。
+        if history_records:
+            self._leases[key]["history"] = history_records
         return self.state(key)
 
     def check(self, key: str) -> Dict:
@@ -132,7 +154,7 @@ class StableLease:
         lease = self._leases.get(key)
         if lease is None:
             return {"key": key, "state": "unknown"}
-        return {"key": key, "state": lease["state"],
+        out = {"key": key, "state": lease["state"],
                 "t_verified": round(lease["t_verified"], 1),
                 "ttl": lease["ttl"], "confidence": lease["confidence"],
                 # issue #19：expires_at = **实际**失效时刻（min(TTL, 弱阈值触发)），
@@ -141,6 +163,12 @@ class StableLease:
                 "ttl_expires_at": round(lease.get("ttl_expires_at",
                                                   lease["expires_at"]), 1),
                 "weak_at": round(lease.get("weak_at", lease["expires_at"]), 1)}
+        # #859：验证历史（不可遗忘记录）在存在时透出；没有记录时不新增该键，
+        # 既有调用方看到的键集逐位不变。返回浅拷贝，调用方改返回值不影响台账。
+        history_records = lease.get("history")
+        if history_records:
+            out["history"] = list(history_records)
+        return out
 
     # ---- 非有限输入闸（#196）----
     # NaN/±Inf 与任何阈值比较恒为 False，`age >= ttl` / `decayed < weak_threshold`
