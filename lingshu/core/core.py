@@ -6546,6 +6546,21 @@ class LayeredStore:
         self._anchor = None
 
 
+def _filter_min_score(scored, min_score):
+    """#795：按 `min_score` 截断**返回面**（不截断候选池、不改打分/排序）。
+
+    `min_score` 缺省 0.0 / None / 负数 ⇒ 原样返回（既有调用逐位不变）；非有限
+    （NaN/±Inf）⇒ `ValueError`（fail-closed，同 #185/#196 口径：不可判的阈值不得
+    被译成「不过滤」）。阈值由调用方按自己的语料标定，本函数不内置推荐值。
+    """
+    if min_score is None or min_score == 0:
+        return scored
+    ms = _require_finite("min_score", min_score)
+    if ms <= 0.0:
+        return scored
+    return [(n, s) for n, s in scored if s >= ms]
+
+
 # =============================================================================
 # 时空记忆引擎（SpacetimeMemoryEngine）
 # =============================================================================
@@ -8003,9 +8018,16 @@ class SpacetimeMemoryEngine:
     # ==================== 检索层（M1） ====================
 
     def search_content(self, query: str, layers: List[MemoryLayer] = None,
-                       limit: int = 20) -> List[Tuple[STNode, float]]:
+                       limit: int = 20,
+                       min_score: float = 0.0) -> List[Tuple[STNode, float]]:
         """内容检索（引擎面）：委托 `LayeredStore.search_content`（LIKE 预筛 +
         二元组 Jaccard 排序），再走复用/模式加权记账。
+
+        #795：`min_score` 只截断**返回面**（`score < min_score` 不返回），不截断
+        候选池、不改打分与排序；缺省 0.0 ⇒ 既有调用逐位不变。分数语义是内部
+        相似度×加权的混合值，推荐阈值须由调用方用自身语料标定（本仓不内置）。
+        边界：与 `_self_cognition` 的模式加权同时启用时，先加权再过滤（阈值对
+        最终返回分生效）。
 
         #804（契约声明 · 守卫 `tests/test_issue804_search_like_wildcard_guard.py`）：
         查询里的 `%` / `_` / `\\` 一律按**字面**匹配——store 层预筛经
@@ -8024,11 +8046,13 @@ class SpacetimeMemoryEngine:
         通配符查询跳过兜底，其余口径逐字不变），非 `_` 通配语义。
         """
         results = self.store.search_content(query, layers, limit)
-        self._note_reuse([n.id for n, _ in results])
         # v1.12 P0-5a：模式成员检索加权（使用模式，不修改蒸馏产物）
         if self._self_cognition is not None:
             results = self._self_cognition.apply_pattern_boost(results)
             self._self_cognition.note_search(query, results)
+        # #795：返回面截断在加权之后（阈值对最终分数生效）；缺省 0.0 无操作。
+        results = _filter_min_score(results, min_score)
+        self._note_reuse([n.id for n, _ in results])
         self._note_action("search", query, [n.id for n, _ in results],
                           {"hits": len(results)})
         return results
@@ -8088,7 +8112,8 @@ class SpacetimeMemoryEngine:
                 break
         return out
 
-    def recall(self, context_content: str, limit: int = 10) -> List[Tuple[STNode, float]]:
+    def recall(self, context_content: str, limit: int = 10,
+               min_score: float = 0.0) -> List[Tuple[STNode, float]]:
         """组合联想（内容相似 0.5 + 重要性 0.3 + 近因 0.2）——记忆参与推理（1.1.1）
 
         #29④：终排与 search_content 同口径，同分再按置信度降序（confidence 与
@@ -8105,7 +8130,14 @@ class SpacetimeMemoryEngine:
         使用 ≠ 强化」同则；`LINGSHU_RETRIEVAL_NO_TOUCH` 开关仍只管直接检索路径）。
         access_count 仍在 recall 命中时计数（统计语义不变）。
         分数随 wall-clock 仍会**整体**微降（recency 对固定 la 单调衰减），但组内
-        两两差值的符号不变 ⇒ 次序跨调用逐位稳定。"""
+        两两差值的符号不变 ⇒ 次序跨调用逐位稳定。
+
+        #795：`min_score` 只截断**返回面**（`score < min_score` 不返回），不截断
+        候选池、不改打分与排序；缺省 0.0 ⇒ 既有调用逐位不变。分数是
+        「相似度 0.5 + 重要性 0.3 + 近因 0.2」的混合值，推荐阈值须由调用方按
+        自身语料标定（本仓不内置）。边界：矛盾配对（`LINGSHU_CONTRADICTION=1`）
+        与阈值同时启用时，低于阈值的对侧仍会被截掉（配对可能被拆开）——阈值
+        优先生效，调用方需自行评估该组合。"""
         # #787：touch=False——recall 的打分输入（last_access）不得被自己的检索腿
         # 写回（根修「分数漂移」）；候选池/排序其余口径逐位不变。
         results = self.store.search_content(context_content, limit=50, touch=False)
@@ -8126,10 +8158,12 @@ class SpacetimeMemoryEngine:
         if _contradiction.enabled():
             scored = self._with_opposites(scored, limit)
             limit = max(limit, len(scored))  # 矛盾对不拆开（见 _with_opposites）
-        self._note_reuse([n.id for n, _ in scored[:limit]])
         # v1.12 P0-5a：模式成员召回加权
         if self._self_cognition is not None:
             scored = self._self_cognition.apply_pattern_boost(scored[:limit])
+        # #795：返回面截断在加权之后（阈值对最终分数生效）；缺省 0.0 无操作。
+        scored = _filter_min_score(scored, min_score)
+        self._note_reuse([n.id for n, _ in scored[:limit]])
         self._note_action("recall", context_content,
                           [n.id for n, _ in scored[:limit]],
                           {"hits": len(scored[:limit])})
