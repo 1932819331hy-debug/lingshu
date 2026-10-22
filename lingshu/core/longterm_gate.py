@@ -221,18 +221,26 @@ class LongTermMemoryGate:
         敏感（改前实测 `(1,1,13)`→`(1,1,13)` 逐位不变 ⇒ 直接命中「签名相等 ⇒
         复用缓存」这一支），内容指纹对任何正文字节变化都变。返回值形状仍是
         `(int, int, int)` 三元组（调用方与既有测试按三元组解包，形制不变）。
-        ★**改动面刻意收窄到「缓存有效性」这一条判据**：有效性由「三项签名相等」
-        改为「三项签名相等（第三项＝内容指纹）」。**增量分支的三条门槛逐字保持
-        改前形制**（节点数增 ∧ max(rowid) 增 ∧ 正文总长增，总长另存于
-        `_known_total_len`）⇒ B/C（节点数未增 ⇒ 全量重建）与 D（删 1 增 2，三项
-        全增 ⇒ 增量并入）的既有行为**一字未动**（含 #462 的增量残留形态，属另一
-        笔账面）。A 格下节点数与 max(rowid) 均未增 ⇒ 落到**全量重建**。
-        已知残留（如实标注 · 未覆盖面）：A 格与「D 格的删行 rowid 复用」在逐行
-        摘要上不可分辨（`nodes.id` 是 TEXT 主键、非 AUTOINCREMENT，删除后新行会
-        复用 rowid）——本件按派工口径只修 A 格单形态，D 的增量行为按「既有行为
-        不得改动」原样保留；**混合形态**（等长原地改写 ∧ 同期追加节点，三项门槛
-        被追加腿抬高）仍会走增量、复用被改写行的陈旧 gram。
-        代价（如实标注）：判缓存有效性需逐行读 `rowid, content`（游标**惰性
+        #770② 把「签名相等」的有效性判据换成了内容指纹；增量分支的三条「更多」
+        门槛（节点数增 ∧ max(rowid) 增 ∧ 正文总长增，总长另存于
+        `_known_total_len`）逐字保留。
+
+        #462（增量分支补「无删除」证明）：三条门槛只证明总量变大，**不证明没有
+        删除**——删 1 增 2 时三项全增，旧实现直接增量并入，被删节点的 core grams
+        永远留在参考集 ⇒ 被遗忘内容再出现时 `_novelty` 算 1.0→0.0、`evaluate`
+        从 knowledge 掉到 context。现要求两道证明同时成立才增量：
+          ① 计数平衡：`old_cnt + len(rowid > old_max 的行) == 现节点数`。同 id
+             覆盖写（INSERT OR REPLACE 换 rowid）也会使该式不成立 ⇒ 全量重建；
+          ② 旧 id 一个不少：`per_node` 的键集合 ⊆ 本次扫描的存活 id 集合。删除
+             最大 rowid 的行后 SQLite 会复用该 rowid，①可被误判通过，②兜住。
+        任一不成立 ⇒ 落到下方全量重建（缓存被整条替换，不留陈旧 gram）。
+
+        已知残留（如实标注 · 未覆盖面）：**等长/变长的原地新增式改写 ∧ 同期追加
+        节点**（`UPDATE nodes SET content=...` 保持同 rowid，同时插入新行把三项
+        门槛抬高）——①计数平衡与②id 存在性都成立，仍会走增量、复用被改写行的
+        陈旧 gram。检测它需要逐行比对旧行摘要（旧缓存未存每行摘要），属另一次
+        改动面；本件不夹带。
+        代价（如实标注）：判缓存有效性需逐行读 `rowid, id, content`（游标**惰性
         迭代**，不 fetchall）并逐行取摘要 —— 相比旧实现的一条聚合 SQL，每次
         调用多一趟 O(全库正文) 顺序读 + 摘要；省下的是 `_core_grams` 的正则切分
         与 gram 集合构造（#389 的主要成本，实测单条短输入数秒）。这是「签名须对
@@ -243,11 +251,15 @@ class LongTermMemoryGate:
         total_len = 0
         cnt = 0
         max_rid = 0
-        for rid, content in self.engine.store.conn.execute(
-                "SELECT rowid, content FROM nodes ORDER BY rowid"):
+        # #462：同趟顺带收集存活 id 集合——增量分支用它证明「旧节点一个没少」
+        # （见下方 ②）。不额外扫表，不改变签名口径。
+        live_ids = set()
+        for rid, nid, content in self.engine.store.conn.execute(
+                "SELECT rowid, id, content FROM nodes ORDER BY rowid"):
             rid = int(rid)
             cnt += 1
             max_rid = rid
+            live_ids.add(str(nid))
             total_len += len(content) if isinstance(content, str) else 0
             h.update(b"%d:%d;" % (rid, self._row_digest(content)))
         sig = (cnt, max_rid, int.from_bytes(h.digest(), "big"))
@@ -255,25 +267,35 @@ class LongTermMemoryGate:
         if cache is not None and self._known_sig == sig:
             return cache["union"], cache["counts"], cache["per_node"], sig
         if cache is not None:
-            # 增量判定：**逐字保持改前三条门槛**（节点数增 ∧ max(rowid) 增 ∧ 正文
-            # 总长增）——见 docstring「改动面刻意收窄到缓存有效性」。
+            # 增量判定：三条「更多」门槛（节点数增 ∧ max(rowid) 增 ∧ 正文总长增）
+            # ＋ #462 的「无删除」证明才可增量。
             old_cnt, old_max = self._known_sig[0], self._known_sig[1]
             old_len = self._known_total_len
             if sig[0] > old_cnt and sig[1] > old_max and total_len > old_len:
                 rows = self.engine.store.conn.execute(
                     "SELECT id, content FROM nodes WHERE rowid > ?", (old_max,)
                 ).fetchall()
-                union, counts, per_node = (cache["union"], cache["counts"],
-                                           cache["per_node"])
-                for nid, content in rows:
-                    gs = self._core_grams(content)
-                    per_node[str(nid)] = gs
-                    union |= gs
-                    for g in gs:
-                        counts[g] = counts.get(g, 0) + 1
-                self._known_sig = sig
-                self._known_total_len = total_len
-                return union, counts, per_node, sig
+                # #462：三项「更多」只证明总量变大，**不证明没有删除**——删 1 增 ≥2
+                # 时节点数照样增加，被删节点不在 `rowid > old_max` 的新行里，增量
+                # 并入会把它的核心词永久留在参考集（新奇度算 0，写入层级掉档）。
+                # 两道证明都通过才允许增量：
+                #   ① 计数平衡：旧节点数 + 新增行数 == 现节点数。同 id 覆盖写
+                #      （INSERT OR REPLACE 换 rowid）会使该式不成立 ⇒ 全量重建；
+                #   ② 旧 id 一个不少：`per_node` 的键集合 ⊆ 现存 id。删除最大
+                #      rowid 的行后，SQLite 会复用该 rowid，①会误判通过，②兜住。
+                if (old_cnt + len(rows) == sig[0]
+                        and set(cache["per_node"]) <= live_ids):
+                    union, counts, per_node = (cache["union"], cache["counts"],
+                                               cache["per_node"])
+                    for nid, content in rows:
+                        gs = self._core_grams(content)
+                        per_node[str(nid)] = gs
+                        union |= gs
+                        for g in gs:
+                            counts[g] = counts.get(g, 0) + 1
+                    self._known_sig = sig
+                    self._known_total_len = total_len
+                    return union, counts, per_node, sig
         rows = self.engine.store.conn.execute(
             "SELECT id, content FROM nodes").fetchall()
         union, counts, per_node = set(), {}, {}
@@ -433,6 +455,19 @@ class LongTermMemoryGate:
         if result.pop("_need_links", False):
             # 事务外建边（见边界④）；失败与改前同值（`links=0`），不抛出。
             result["links"] = self._snapshot_link(result.get("node_id"), content)
+        divergent_id = result.pop("_divergent_id", None)
+        if divergent_id:
+            # issue #481：与判为实质分歧的既有节点登记 OPPOSITE 边（未复核
+            # 0.3）——放在事务外，避免 `add_edge` 的 `_commit_locked()` 提前
+            # 终结外层写事务（与 `_snapshot_link` 同一原因，见边界④）。
+            try:
+                self.engine.register_conflict(result.get("node_id"), divergent_id)
+                result["conflict_registered"] = True
+            except Exception as exc:
+                result["conflict_registered"] = False
+                _log.warning(
+                    "write_snapshot 分歧边登记失败（更正节点已落库，冲突待复核"
+                    " 面缺失）：%s: %s", type(exc).__name__, exc)
         return result
 
     def _snapshot_probe(self, content: str, source: str, tags: list) -> dict:
@@ -443,16 +478,29 @@ class LongTermMemoryGate:
         复核其结论（见 `write_snapshot` 边界③）。
         """
         engine = self.engine
-        from .core import MemoryLayer
+        from .core import LayeredStore, MemoryLayer
         existing_id = None
+        divergent_id = None
         try:
             hits = engine.store.search_content(
                 content, layers=[MemoryLayer.KNOWLEDGE, MemoryLayer.CONTEXT], limit=1)
-            if hits and hits[0][1] >= 0.95:
-                existing_id = hits[0][0].id
+            if hits:
+                cand = hits[0][0]
+                # issue #481：存在性判据按**正文**（不计 tag_bonus）复核，且
+                # 要求无实质分歧（否定/数值）——旧实现只看 search_content 的
+                # 合成分 ≥0.95（含 0.05 tag_bonus）：差一个「不」或一个数字
+                # 即被判为同一内容 ⇒ 更正被丢弃、错误节点被提权到 0.9 并
+                # protect+no_forget（永久置顶召回）。有分歧另立节点并挂
+                # OPPOSITE 边待复核，而不是把更正并进错误节点。
+                sim = LayeredStore.char_bigram_jaccard(content, cand.content or "")
+                if sim >= 0.95:
+                    if engine._assertion_divergence(content, cand.content or ""):
+                        divergent_id = cand.id
+                    else:
+                        existing_id = cand.id
         except Exception:
             pass
-        return {"existing_id": existing_id,
+        return {"existing_id": existing_id, "divergent_id": divergent_id,
                 "ev": self.evaluate(content, source, tags, existing_id)}
 
     def _recheck_existing(self, candidate: str, content: str):
@@ -470,7 +518,10 @@ class LongTermMemoryGate:
             node = store.get_node(candidate)
             if node is not None and LayeredStore.char_bigram_jaccard(
                     content, node.content or "") >= 0.95:
-                return candidate
+                # issue #481：预判到事务之间候选可能被并发改写成实质分歧
+                # （否定/数值），此时不得沿用——否则更正仍会被并进错误节点。
+                if not self.engine._assertion_divergence(content, node.content or ""):
+                    return candidate
         row = store.conn.execute(
             "SELECT id FROM nodes WHERE content=? AND layer IN (?,?) "
             "ORDER BY rowid LIMIT 1",
@@ -615,6 +666,11 @@ class LongTermMemoryGate:
                   "layer": stored_layer, "evaluated_layer": decided,
                   "features": ev["features"],
                   "write_failed": write_failed, "write_error": write_error}
+        # issue #481：新建腿若预判到「实质分歧」的既有节点，把其 id 透传给
+        # `write_snapshot`，由事务**提交后**登记 OPPOSITE 边（add_edge 自带
+        # commit，不能留在本事务内，见 write_snapshot 边界④）。
+        if existing_id is None and probe.get("divergent_id"):
+            result["_divergent_id"] = probe["divergent_id"]
         if decided == "long_term":
             try:
                 engine.protect_node(node_id, f"LongTermMemoryGate:{source}")
