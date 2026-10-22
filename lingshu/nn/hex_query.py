@@ -62,8 +62,42 @@ class ConnectionLibrary:
         self.records.append(rec)
 
     def save(self, path: str):
-        with open(path, "w", encoding="utf-8") as f:
-            json.dump(self.records, f, ensure_ascii=False, indent=1)
+        """Publish a complete library, preserving the previous file on failure.
+
+        Each call owns one exclusive temporary file. Concurrent saves publish
+        in replace order; contents are not merged. Preserve the old target's
+        mode and symlink destination, as the previous in-place writer did.
+        File fsync does not promise directory durability after power loss.
+        """
+        import uuid
+
+        target = os.path.realpath(path)
+        temporary = os.path.join(os.path.dirname(target),
+                                 f".lingshu-query.tmp-{os.getpid()}-{uuid.uuid4().hex}")
+        owned = False
+        try:
+            with open(temporary, "x", encoding="utf-8") as f:
+                owned = True
+                json.dump(self.records, f, ensure_ascii=False, indent=1)
+                f.flush()
+                os.fsync(f.fileno())
+            try:
+                os.chmod(temporary, os.stat(target).st_mode & 0o7777)
+            except FileNotFoundError:
+                pass
+            os.replace(temporary, target)
+        except BaseException:
+            if owned:
+                try:
+                    if os.path.exists(temporary):
+                        try:
+                            os.chmod(temporary, 0o600)
+                        except OSError:
+                            pass
+                    os.unlink(temporary)
+                except OSError:
+                    pass
+            raise
 
     @classmethod
     def load(cls, path: str) -> "ConnectionLibrary":
