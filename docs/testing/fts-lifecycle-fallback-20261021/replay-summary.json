@@ -1,0 +1,252 @@
+{
+  "windows": {
+    "python": "3.12.10",
+    "platform": "Windows",
+    "sqlite": "3.49.1",
+    "baseline": "f5dcd58165cbf64393d1f2d4dfc61f781485ec29",
+    "guard_sha256": "173b3b3454f27f7035459f35be2f4abbc76faa4a1602cf7ee099ca3e3fef8e99",
+    "records": [
+      {
+        "case": "fixed",
+        "ok": true,
+        "returncode": 0,
+        "passed": 6,
+        "failed_tests": [],
+        "errors": 0,
+        "skipped": 0,
+        "expected_failures": [],
+        "expected_assertion": "",
+        "pytest_summary": "6 passed in 0.98s",
+        "source_sha256": {
+          "lingshu/core/retrieval.py": "c4f67d4b0e5a18623da4fd2f74549db01e20a3792c3af13d70d3f35af6210d1b"
+        }
+      },
+      {
+        "case": "baseline",
+        "ok": true,
+        "returncode": 1,
+        "passed": 2,
+        "failed_tests": [
+          "test_default_client_does_not_hide_old_or_new_memories[indexed]",
+          "test_default_client_does_not_hide_old_or_new_memories[queued]",
+          "test_lifecycle_change_during_candidate_read_is_rejected",
+          "test_partial_tracking_loss_falls_back_for_updated_content"
+        ],
+        "errors": 0,
+        "skipped": 0,
+        "expected_failures": [
+          "test_default_client_does_not_hide_old_or_new_memories[queued]",
+          "test_default_client_does_not_hide_old_or_new_memories[indexed]",
+          "test_partial_tracking_loss_falls_back_for_updated_content",
+          "test_lifecycle_change_during_candidate_read_is_rejected"
+        ],
+        "expected_assertion": "",
+        "pytest_summary": "4 failed, 2 passed in 1.02s",
+        "source_sha256": {
+          "lingshu/core/retrieval.py": "425bc3109fe4977ea49c7c5300f2681f60f6cc7ce260b6d4e80511353353ecbc"
+        }
+      },
+      {
+        "case": "trust_detached_index",
+        "ok": true,
+        "returncode": 1,
+        "passed": 0,
+        "failed_tests": [
+          "test_default_client_does_not_hide_old_or_new_memories[indexed]"
+        ],
+        "errors": 0,
+        "skipped": 0,
+        "expected_failures": [
+          "test_default_client_does_not_hide_old_or_new_memories[indexed]"
+        ],
+        "expected_assertion": "detached FTS hid a persisted new memory",
+        "pytest_summary": "1 failed in 0.56s",
+        "source_sha256": {
+          "lingshu/core/retrieval.py": "d1c8881ae34d144bdf02bda64215ae9f571179830cf1df1b3f5dd12208ed2987"
+        }
+      },
+      {
+        "case": "accept_partial_tracking",
+        "ok": true,
+        "returncode": 1,
+        "passed": 0,
+        "failed_tests": [
+          "test_partial_tracking_loss_falls_back_for_updated_content"
+        ],
+        "errors": 0,
+        "skipped": 0,
+        "expected_failures": [
+          "test_partial_tracking_loss_falls_back_for_updated_content"
+        ],
+        "expected_assertion": "partial FTS tracking loss hid corrected content",
+        "pytest_summary": "1 failed in 0.51s",
+        "source_sha256": {
+          "lingshu/core/retrieval.py": "ec755ca5f98781600b7debd353fe885c820c36067b1d4346f254c7ebe1a8f3d0"
+        }
+      },
+      {
+        "case": "ignore_lifecycle_epoch",
+        "ok": true,
+        "returncode": 1,
+        "passed": 0,
+        "failed_tests": [
+          "test_lifecycle_change_during_candidate_read_is_rejected"
+        ],
+        "errors": 0,
+        "skipped": 0,
+        "expected_failures": [
+          "test_lifecycle_change_during_candidate_read_is_rejected"
+        ],
+        "expected_assertion": "FTS lifecycle change was accepted as a valid index read",
+        "pytest_summary": "1 failed in 0.58s",
+        "source_sha256": {
+          "lingshu/core/retrieval.py": "4327d3b365c9fde5b5882f9bfe2f655ac18c7891519ce4984d4626a21a32b948"
+        }
+      },
+      {
+        "case": "commit_caller_before_sync",
+        "ok": true,
+        "returncode": 1,
+        "passed": 0,
+        "failed_tests": [
+          "test_index_read_preserves_caller_transaction"
+        ],
+        "errors": 0,
+        "skipped": 0,
+        "expected_failures": [
+          "test_index_read_preserves_caller_transaction"
+        ],
+        "expected_assertion": "FTS read committed its caller",
+        "pytest_summary": "1 failed in 0.54s",
+        "source_sha256": {
+          "lingshu/core/retrieval.py": "567ee01218d6c3d67a30dcf69cc047afe37f3a2d7948cf9fb02f020cb200c2d6"
+        }
+      }
+    ]
+  },
+  "linux": {
+    "python": "3.13.12",
+    "platform": "Linux",
+    "sqlite": "3.46.1",
+    "baseline": "f5dcd58165cbf64393d1f2d4dfc61f781485ec29",
+    "guard_sha256": "173b3b3454f27f7035459f35be2f4abbc76faa4a1602cf7ee099ca3e3fef8e99",
+    "records": [
+      {
+        "case": "fixed",
+        "ok": true,
+        "returncode": 0,
+        "passed": 6,
+        "failed_tests": [],
+        "errors": 0,
+        "skipped": 0,
+        "expected_failures": [],
+        "expected_assertion": "",
+        "pytest_summary": "6 passed in 3.30s",
+        "source_sha256": {
+          "lingshu/core/retrieval.py": "c4f67d4b0e5a18623da4fd2f74549db01e20a3792c3af13d70d3f35af6210d1b"
+        }
+      },
+      {
+        "case": "baseline",
+        "ok": true,
+        "returncode": 1,
+        "passed": 2,
+        "failed_tests": [
+          "test_default_client_does_not_hide_old_or_new_memories[indexed]",
+          "test_default_client_does_not_hide_old_or_new_memories[queued]",
+          "test_lifecycle_change_during_candidate_read_is_rejected",
+          "test_partial_tracking_loss_falls_back_for_updated_content"
+        ],
+        "errors": 0,
+        "skipped": 0,
+        "expected_failures": [
+          "test_default_client_does_not_hide_old_or_new_memories[queued]",
+          "test_default_client_does_not_hide_old_or_new_memories[indexed]",
+          "test_partial_tracking_loss_falls_back_for_updated_content",
+          "test_lifecycle_change_during_candidate_read_is_rejected"
+        ],
+        "expected_assertion": "",
+        "pytest_summary": "4 failed, 2 passed in 3.19s",
+        "source_sha256": {
+          "lingshu/core/retrieval.py": "425bc3109fe4977ea49c7c5300f2681f60f6cc7ce260b6d4e80511353353ecbc"
+        }
+      },
+      {
+        "case": "trust_detached_index",
+        "ok": true,
+        "returncode": 1,
+        "passed": 0,
+        "failed_tests": [
+          "test_default_client_does_not_hide_old_or_new_memories[indexed]"
+        ],
+        "errors": 0,
+        "skipped": 0,
+        "expected_failures": [
+          "test_default_client_does_not_hide_old_or_new_memories[indexed]"
+        ],
+        "expected_assertion": "detached FTS hid a persisted new memory",
+        "pytest_summary": "1 failed in 1.07s",
+        "source_sha256": {
+          "lingshu/core/retrieval.py": "d1c8881ae34d144bdf02bda64215ae9f571179830cf1df1b3f5dd12208ed2987"
+        }
+      },
+      {
+        "case": "accept_partial_tracking",
+        "ok": true,
+        "returncode": 1,
+        "passed": 0,
+        "failed_tests": [
+          "test_partial_tracking_loss_falls_back_for_updated_content"
+        ],
+        "errors": 0,
+        "skipped": 0,
+        "expected_failures": [
+          "test_partial_tracking_loss_falls_back_for_updated_content"
+        ],
+        "expected_assertion": "partial FTS tracking loss hid corrected content",
+        "pytest_summary": "1 failed in 0.91s",
+        "source_sha256": {
+          "lingshu/core/retrieval.py": "ec755ca5f98781600b7debd353fe885c820c36067b1d4346f254c7ebe1a8f3d0"
+        }
+      },
+      {
+        "case": "ignore_lifecycle_epoch",
+        "ok": true,
+        "returncode": 1,
+        "passed": 0,
+        "failed_tests": [
+          "test_lifecycle_change_during_candidate_read_is_rejected"
+        ],
+        "errors": 0,
+        "skipped": 0,
+        "expected_failures": [
+          "test_lifecycle_change_during_candidate_read_is_rejected"
+        ],
+        "expected_assertion": "FTS lifecycle change was accepted as a valid index read",
+        "pytest_summary": "1 failed in 0.99s",
+        "source_sha256": {
+          "lingshu/core/retrieval.py": "4327d3b365c9fde5b5882f9bfe2f655ac18c7891519ce4984d4626a21a32b948"
+        }
+      },
+      {
+        "case": "commit_caller_before_sync",
+        "ok": true,
+        "returncode": 1,
+        "passed": 0,
+        "failed_tests": [
+          "test_index_read_preserves_caller_transaction"
+        ],
+        "errors": 0,
+        "skipped": 0,
+        "expected_failures": [
+          "test_index_read_preserves_caller_transaction"
+        ],
+        "expected_assertion": "FTS read committed its caller",
+        "pytest_summary": "1 failed in 0.88s",
+        "source_sha256": {
+          "lingshu/core/retrieval.py": "567ee01218d6c3d67a30dcf69cc047afe37f3a2d7948cf9fb02f020cb200c2d6"
+        }
+      }
+    ]
+  }
+}
