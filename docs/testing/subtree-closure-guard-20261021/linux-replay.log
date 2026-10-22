@@ -1,0 +1,61 @@
+CASE fixed
+......                                                                   [100%]
+6 passed in 3.41s
+
+CASE baseline
+FFF...                                                                   [100%]
+=================================== FAILURES ===================================
+____________ test_fanout_beyond_500_is_rejected_without_any_writes _____________
+tests/test_subtree_closure_guard.py:62: in test_fanout_beyond_500_is_rejected_without_any_writes
+    _assert_incomplete_rejected(engine, parent, old)
+tests/test_subtree_closure_guard.py:55: in _assert_incomplete_rejected
+    assert rejected, "incomplete subtree was replaced instead of rejected"
+E   AssertionError: incomplete subtree was replaced instead of rejected
+E   assert False
+_________ test_budget_hidden_protected_grandchild_keeps_the_whole_tree _________
+tests/test_subtree_closure_guard.py:71: in test_budget_hidden_protected_grandchild_keeps_the_whole_tree
+    _assert_incomplete_rejected(engine, parent, old)
+tests/test_subtree_closure_guard.py:55: in _assert_incomplete_rejected
+    assert rejected, "incomplete subtree was replaced instead of rejected"
+E   AssertionError: incomplete subtree was replaced instead of rejected
+E   assert False
+___________ test_depth_65_is_rejected_and_all_ancestor_edges_survive ___________
+tests/test_subtree_closure_guard.py:77: in test_depth_65_is_rejected_and_all_ancestor_edges_survive
+    _assert_incomplete_rejected(engine, parent, old)
+tests/test_subtree_closure_guard.py:55: in _assert_incomplete_rejected
+    assert rejected, "incomplete subtree was replaced instead of rejected"
+E   AssertionError: incomplete subtree was replaced instead of rejected
+E   assert False
+=========================== short test summary info ============================
+FAILED tests/test_subtree_closure_guard.py::test_fanout_beyond_500_is_rejected_without_any_writes
+FAILED tests/test_subtree_closure_guard.py::test_budget_hidden_protected_grandchild_keeps_the_whole_tree
+FAILED tests/test_subtree_closure_guard.py::test_depth_65_is_rejected_and_all_ancestor_edges_survive
+3 failed, 3 passed in 4.03s
+
+CASE ignore_incomplete_closure
+F                                                                        [100%]
+=================================== FAILURES ===================================
+____________ test_fanout_beyond_500_is_rejected_without_any_writes _____________
+tests/test_subtree_closure_guard.py:62: in test_fanout_beyond_500_is_rejected_without_any_writes
+    _assert_incomplete_rejected(engine, parent, old)
+tests/test_subtree_closure_guard.py:55: in _assert_incomplete_rejected
+    assert rejected, "incomplete subtree was replaced instead of rejected"
+E   AssertionError: incomplete subtree was replaced instead of rejected
+E   assert False
+=========================== short test summary info ============================
+FAILED tests/test_subtree_closure_guard.py::test_fanout_beyond_500_is_rejected_without_any_writes
+1 failed in 1.26s
+
+CASE check_only_old_root_boundary
+F                                                                        [100%]
+=================================== FAILURES ===================================
+___________ test_depth_65_is_rejected_and_all_ancestor_edges_survive ___________
+tests/test_subtree_closure_guard.py:77: in test_depth_65_is_rejected_and_all_ancestor_edges_survive
+    _assert_incomplete_rejected(engine, parent, old)
+tests/test_subtree_closure_guard.py:55: in _assert_incomplete_rejected
+    assert rejected, "incomplete subtree was replaced instead of rejected"
+E   AssertionError: incomplete subtree was replaced instead of rejected
+E   assert False
+=========================== short test summary info ============================
+FAILED tests/test_subtree_closure_guard.py::test_depth_65_is_rejected_and_all_ancestor_edges_survive
+1 failed in 0.97s

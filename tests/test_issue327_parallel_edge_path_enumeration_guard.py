@@ -20,8 +20,10 @@
 （「6 节点无环链路径数 k⁵；k=16 即 105 万条/1.3 GB」）。仓内无规定该预算的理论章节，
 属经验标定（本件 #327）。
 边界（削掉的判别力，如实标注）：① 达上限时返回**前 max_paths 条**，未加
-`truncated` 标记（会改返回类型/元素语义）；② 本件只收「枚举无上限」这一半，
-平行边**合并**（建议 1）不做——`add_edge` 仍不合并。
+  `truncated` 标记（会改返回类型/元素语义）；② 本件只收「枚举无上限」这一半，
+  平行边**合并**（建议 1）当年不做——`add_edge` 仍不合并。（★#801 追记：引擎
+  `add_edge` 后续已按 issue #801 默认去重、另提供 `dedup=False` 平行边逃生口；
+  本守卫构图改走该参数，判据/断言 Q1–Q4 一字未动——枚举有界性仍由本件钉住。）
 
 断言组（把修复抽掉（去掉 max_paths 早退）⇒ Q1/Q2/Q3 红）：
   Q1 枚举有界：k=12 的 6 节点链 `reason_causal(start)` 与
@@ -53,12 +55,18 @@ STEPS = ["乌云密布", "开始下雨", "路面湿滑", "车辆减速", "道路
 
 
 def _chain(k: int):
-    """6 节点无环链，每跳 k 条平行边（issue 同款构造）。"""
+    """6 节点无环链，每跳 k 条平行边（issue 同款构造）。
+
+    #801 适配：引擎 `add_edge` 自 #801 起默认对同 (source, target, relation_type)
+    去重（命中返回已有边）——本守卫的判据是「k 条平行边**已存在**时枚举有界」，
+    不是「add_edge 不去重」，故构图改走 #801 提供的显式平行边逃生口
+    `dedup=False`（issue #801 建议 2）；k 条平行边照旧逐条落库，Q1–Q4 断言不变。
+    """
     e = SpacetimeMemoryEngine(":memory:")
     ns = [e.add_perception(s, skip_dedup=True) for s in STEPS]
     for a, b in zip(ns, ns[1:]):
         for _ in range(k):
-            e.add_edge(a.id, b.id, EdgeType.CAUSAL, confidence=0.8)
+            e.add_edge(a.id, b.id, EdgeType.CAUSAL, confidence=0.8, dedup=False)
     return e, ns
 
 

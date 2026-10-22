@@ -1,0 +1,20 @@
+{
+  "guard": "tests/test_archive_schema_registration.py",
+  "total": 6,
+  "sources": ["lingshu/core/core.py"],
+  "baseline_failures": ["test_v3_database_is_migrated_before_normal_delete", "test_current_version_with_missing_table_is_repaired", "test_backup_roundtrip_preserves_pre_archive_importance"],
+  "mutations": [
+    {"name": "ignore_archive_schema_structure", "test": "test_current_version_with_missing_table_is_repaired",
+      "assertion": "archive_state missing after structural migration check",
+      "changes": [{"file": "lingshu/core/core.py", "class": "LayeredStore", "method": "_init_tables",
+        "old": "and self._SCHEMA_TABLES <= have", "new": "and (self._SCHEMA_TABLES - {'archive_state'}) <= have"}]},
+    {"name": "omit_archive_backup_rows", "test": "test_backup_roundtrip_preserves_pre_archive_importance",
+      "assertion": "backup omitted the pre-archive restoration state",
+      "changes": [{"file": "lingshu/core/core.py", "class": "SpacetimeMemoryEngine", "method": "export_all",
+        "old": "            for table in self.M13_TABLES:", "new": "            for table in [t for t in self.M13_TABLES if t != 'archive_state']:"}]},
+    {"name": "ignore_archive_import_role", "test": "test_shared_archive_state_cannot_be_imported_by_sub",
+      "assertion": "SUB import wrote shared archive state",
+      "changes": [{"file": "lingshu/core/core.py", "class": "SpacetimeMemoryEngine", "method": "import_all",
+        "old": "            if table == \"archive_state\":", "new": "            if False:"}]}
+  ]
+}

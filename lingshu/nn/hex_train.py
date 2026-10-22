@@ -335,7 +335,7 @@ def train_infogap(net: HexNet, x: np.ndarray, y: np.ndarray,
         grew = reverted = False
         if stall >= stall_patience and growths + reverts < max_growth:
             d_before = net.loss(xb, yb)
-            conv_snap, mix_snap, K_before = net.conv.copy(), net.mix.copy(), net.K
+            conv_snap, mix_snap, fc_snap, K_before = net.conv.copy(), net.mix.copy(), net.fc.copy(), net.K
             net.grow_kernel()
             growths += 1
             stall = 0
@@ -361,12 +361,12 @@ def train_infogap(net: HexNet, x: np.ndarray, y: np.ndarray,
                                 "verdict": "GROW",
                                 "note": f"新条件分支通过验证({d_before:.4f}->{d_after:.4f})"})
             else:
-                net.conv, net.mix, net.K = conv_snap, mix_snap, K_before
+                net.conv, net.mix, net.fc, net.K = conv_snap, mix_snap, fc_snap, K_before
                 reverts += 1
                 growths -= 1
                 reverted = True
-                history.append({"step": step, "D": round(d_after, 5), "K": net.K,
-                                "verdict": "REVERT",
+                history.append({"step": step, "D": round(d_before, 5), "K": net.K,
+                                "verdict": "REVERT", "attempt_D": round(d_after, 5),
                                 "note": f"新分支验证失败,撤销不固化({d_before:.4f}->{d_after:.4f})"})
             if verbose:
                 tag = "固化" if grew else "撤销"
@@ -379,7 +379,8 @@ def train_infogap(net: HexNet, x: np.ndarray, y: np.ndarray,
         if log_every and step % log_every == 0 and verbose:
             print(f"  [step {step}] D={d:.4f} 死区={dead_zone:.4f} 冻结{sample.size - updates}/{sample.size}")
 
-    return {"algo": ALGO, "dead_zone": round(dead_zone, 5), "final_D": history[-1]["D"],
+    final_D = history[-1]["D"] if history else round(d0, 5)
+    return {"algo": ALGO, "dead_zone": round(dead_zone, 5), "final_D": final_D,
             "steps": len(history), "growths": growths, "reverts": reverts,
             "final_K": net.K, "n_params": net.n_params(),
             "frozen_total": frozen_total,
@@ -387,6 +388,18 @@ def train_infogap(net: HexNet, x: np.ndarray, y: np.ndarray,
 
 
 # ==================== 自监督预训练（x-prediction 掩码重建） ====================
+
+def _draw_hole(rng, shape, ratio):
+    """#452：抽掩码；ratio>0 且 shape 非空时保证至少一个 cell 被遮。
+
+    空掩码会让重建损失对空数组求均值（NaN），再以 NaN 梯度写进卷积核。
+    只在命中空掩码时多消耗一个整数随机数；非空路径的抽样序列与改前逐位一致。
+    """
+    hole = rng.random(shape) < ratio
+    if ratio > 0 and hole.size and not hole.any():
+        hole.flat[rng.integers(hole.size)] = True
+    return hole
+
 
 def pretrain_selfsup(net: HexNet, x: np.ndarray, mask_ratio: float = 0.25,
                      lr: float = 0.05, eps: float = 1e-3,
@@ -412,11 +425,15 @@ def pretrain_selfsup(net: HexNet, x: np.ndarray, mask_ratio: float = 0.25,
     rng = np.random.default_rng(seed)
     # 固定评估样本与掩码：init/final 必须测量同一个重建任务（PR #429）。
     evaluation = x[:batch, ..., :1]
-    eval_hole = np.random.default_rng(seed).random(evaluation.shape[:3]) < mask_ratio
+    eval_hole = _draw_hole(np.random.default_rng(seed), evaluation.shape[:3], mask_ratio)
     eval_masked = evaluation.copy()
     eval_masked[eval_hole] = 0.0
 
     def recon_loss(masked, target, hole) -> float:
+        # #452：空掩码时 `pred[hole]` 为空，`.mean()` 产生 NaN，再用 NaN 梯度
+        # 更新卷积核 ⇒ 整个前向输出 NaN。无遮蔽任务时损失按 0 计（不更新）。
+        if not hole.any():
+            return 0.0
         # 通道语义：pred 为单通道，须与同一通道比较，不广播到另外两个颜色通道。
         h = hex_conv_batch_multi(masked[..., :1], net.conv[:, None, :])
         pred = h.mean(axis=-1, keepdims=True)
@@ -432,7 +449,7 @@ def pretrain_selfsup(net: HexNet, x: np.ndarray, mask_ratio: float = 0.25,
         idx = rng.permutation(len(x))[:batch]
         xb = x[idx]
         masked = xb.copy()
-        hole = rng.random(xb.shape[:3]) < mask_ratio
+        hole = _draw_hole(rng, xb.shape[:3], mask_ratio)
         masked[hole] = 0.0
         vec = net.conv.ravel().copy()
         sample = rng.choice(conv_vec_len, size=min(samples_per_step, conv_vec_len),

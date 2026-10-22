@@ -1,0 +1,75 @@
+CASE fixed
+......                                                                   [100%]
+6 passed in 0.33s
+
+CASE baseline
+FFF...                                                                   [100%]
+=================================== FAILURES ===================================
+_________ test_anonymous_allocation_cannot_consume_a_later_explicit_id _________
+tests/test_identity_reserved_ids.py:24: in test_anonymous_allocation_cannot_consume_a_later_explicit_id
+    assert len(set(ids)) == 2, "anonymous allocation consumed a reserved explicit ID"
+E   AssertionError: anonymous allocation consumed a reserved explicit ID
+E   assert 1 == 2
+E    +  where 1 = len({'wm_308774'})
+E    +    where {'wm_308774'} = set(['wm_308774', 'wm_308774'])
+____________ test_long_fallback_cannot_overwrite_an_existing_entity ____________
+tests/test_identity_reserved_ids.py:36: in test_long_fallback_cannot_overwrite_an_existing_entity
+    assert len(model.nodes) == 3, "long fallback ID overwrote an existing entity"
+E   AssertionError: long fallback ID overwrote an existing entity
+E   assert 2 == 3
+E    +  where 2 = len({'wm_000000': WMNode(eid='wm_000000', category='old-a', pos=(2.0, 1.5, 2.0), confidence=0.5, behavior_inferred='unknow...tegory='old-b', pos=(8.0, 1.5, 8.0), confidence=0.5, behavior_inferred='unknown', first_seen=1, last_seen=2, attrs={})})
+E    +    where {'wm_000000': WMNode(eid='wm_000000', category='old-a', pos=(2.0, 1.5, 2.0), confidence=0.5, behavior_inferred='unknow...tegory='old-b', pos=(8.0, 1.5, 8.0), confidence=0.5, behavior_inferred='unknown', first_seen=1, last_seen=2, attrs={})} = <lingshu.world.world_model.UnifiedWorldModel object at 0x72bd83c85a90>.nodes
+____________ test_long_fallback_cannot_consume_a_later_explicit_id _____________
+tests/test_identity_reserved_ids.py:47: in test_long_fallback_cannot_consume_a_later_explicit_id
+    assert len(model.nodes) == 3, "long fallback consumed a reserved explicit ID"
+E   AssertionError: long fallback consumed a reserved explicit ID
+E   assert 2 == 3
+E    +  where 2 = len({'wm_000000': WMNode(eid='wm_000000', category='old', pos=(2.0, 1.5, 2.0), confidence=0.5, behavior_inferred='unknown'...category='new', pos=(8.0, 1.5, 8.0), confidence=0.5, behavior_inferred='unknown', first_seen=2, last_seen=2, attrs={})})
+E    +    where {'wm_000000': WMNode(eid='wm_000000', category='old', pos=(2.0, 1.5, 2.0), confidence=0.5, behavior_inferred='unknown'...category='new', pos=(8.0, 1.5, 8.0), confidence=0.5, behavior_inferred='unknown', first_seen=2, last_seen=2, attrs={})} = <lingshu.world.world_model.UnifiedWorldModel object at 0x72bd83eefbb0>.nodes
+=========================== short test summary info ============================
+FAILED tests/test_identity_reserved_ids.py::test_anonymous_allocation_cannot_consume_a_later_explicit_id
+FAILED tests/test_identity_reserved_ids.py::test_long_fallback_cannot_overwrite_an_existing_entity
+FAILED tests/test_identity_reserved_ids.py::test_long_fallback_cannot_consume_a_later_explicit_id
+3 failed, 3 passed in 0.46s
+
+CASE ignore_reserved_short_ids
+F                                                                        [100%]
+=================================== FAILURES ===================================
+_________ test_anonymous_allocation_cannot_consume_a_later_explicit_id _________
+tests/test_identity_reserved_ids.py:24: in test_anonymous_allocation_cannot_consume_a_later_explicit_id
+    assert len(set(ids)) == 2, "anonymous allocation consumed a reserved explicit ID"
+E   AssertionError: anonymous allocation consumed a reserved explicit ID
+E   assert 1 == 2
+E    +  where 1 = len({'wm_308774'})
+E    +    where {'wm_308774'} = set(['wm_308774', 'wm_308774'])
+=========================== short test summary info ============================
+FAILED tests/test_identity_reserved_ids.py::test_anonymous_allocation_cannot_consume_a_later_explicit_id
+1 failed in 0.42s
+
+CASE ignore_existing_long_ids
+F                                                                        [100%]
+=================================== FAILURES ===================================
+____________ test_long_fallback_cannot_overwrite_an_existing_entity ____________
+tests/test_identity_reserved_ids.py:36: in test_long_fallback_cannot_overwrite_an_existing_entity
+    assert len(model.nodes) == 3, "long fallback ID overwrote an existing entity"
+E   AssertionError: long fallback ID overwrote an existing entity
+E   assert 2 == 3
+E    +  where 2 = len({'wm_000000': WMNode(eid='wm_000000', category='old-a', pos=(2.0, 1.5, 2.0), confidence=0.5, behavior_inferred='unknow...tegory='old-b', pos=(8.0, 1.5, 8.0), confidence=0.5, behavior_inferred='unknown', first_seen=1, last_seen=2, attrs={})})
+E    +    where {'wm_000000': WMNode(eid='wm_000000', category='old-a', pos=(2.0, 1.5, 2.0), confidence=0.5, behavior_inferred='unknow...tegory='old-b', pos=(8.0, 1.5, 8.0), confidence=0.5, behavior_inferred='unknown', first_seen=1, last_seen=2, attrs={})} = <lingshu.world.world_model.UnifiedWorldModel object at 0x733fa21cb0e0>.nodes
+=========================== short test summary info ============================
+FAILED tests/test_identity_reserved_ids.py::test_long_fallback_cannot_overwrite_an_existing_entity
+1 failed in 0.43s
+
+CASE ignore_reserved_long_ids
+F                                                                        [100%]
+=================================== FAILURES ===================================
+____________ test_long_fallback_cannot_consume_a_later_explicit_id _____________
+tests/test_identity_reserved_ids.py:47: in test_long_fallback_cannot_consume_a_later_explicit_id
+    assert len(model.nodes) == 3, "long fallback consumed a reserved explicit ID"
+E   AssertionError: long fallback consumed a reserved explicit ID
+E   assert 2 == 3
+E    +  where 2 = len({'wm_000000': WMNode(eid='wm_000000', category='old', pos=(2.0, 1.5, 2.0), confidence=0.5, behavior_inferred='unknown'...category='new', pos=(8.0, 1.5, 8.0), confidence=0.5, behavior_inferred='unknown', first_seen=2, last_seen=2, attrs={})})
+E    +    where {'wm_000000': WMNode(eid='wm_000000', category='old', pos=(2.0, 1.5, 2.0), confidence=0.5, behavior_inferred='unknown'...category='new', pos=(8.0, 1.5, 8.0), confidence=0.5, behavior_inferred='unknown', first_seen=2, last_seen=2, attrs={})} = <lingshu.world.world_model.UnifiedWorldModel object at 0x73b41d1cb0e0>.nodes
+=========================== short test summary info ============================
+FAILED tests/test_identity_reserved_ids.py::test_long_fallback_cannot_consume_a_later_explicit_id
+1 failed in 0.42s

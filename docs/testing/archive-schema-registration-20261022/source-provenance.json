@@ -1,0 +1,78 @@
+{
+  "baseline": "1eafb3f57a3f9a83d067c0a39568aca4588cfdff",
+  "sha256_lf": {
+    "lingshu/core/core.py": "919b7e1ffd6b865dc218e9b4659478e7c963c07382a19fb83c7b5f17ff5914b9",
+    "tests/test_archive_schema_registration.py": "41357496d31d4441374c4230eb158bc89a87b0dbaa9b78077db56275672257a0",
+    "tests/fixtures/archive_schema_registration_mutations.json": "a73ae1e4d9df566aa3632309a4f239aa8a5b5c15d1e99966cc611b0273fb11f4"
+  },
+  "runs": {
+    "windows": {
+      "platform": "Windows",
+      "python": "3.12.10",
+      "sqlite": "3.49.1",
+      "baseline": "1eafb3f57a3f9a83d067c0a39568aca4588cfdff",
+      "validated_commit": "29f7baaf5da171998afd82ab7c0975637a823a2d",
+      "sha256_lf": {
+        "lingshu/core/core.py": "919b7e1ffd6b865dc218e9b4659478e7c963c07382a19fb83c7b5f17ff5914b9",
+        "tests/test_archive_schema_registration.py": "41357496d31d4441374c4230eb158bc89a87b0dbaa9b78077db56275672257a0",
+        "tests/fixtures/archive_schema_registration_mutations.json": "a73ae1e4d9df566aa3632309a4f239aa8a5b5c15d1e99966cc611b0273fb11f4"
+      },
+      "commands": [
+        {
+          "name": "replay",
+          "returncode": 0
+        },
+        {
+          "name": "related",
+          "returncode": 0
+        },
+        {
+          "name": "manifest",
+          "returncode": 0
+        },
+        {
+          "name": "time-core",
+          "returncode": 0
+        }
+      ],
+      "related_total": 23,
+      "related_failures": [],
+      "related_errors": [],
+      "related_skips": []
+    },
+    "linux": {
+      "platform": "Linux",
+      "python": "3.13.12",
+      "sqlite": "3.46.1",
+      "baseline": "1eafb3f57a3f9a83d067c0a39568aca4588cfdff",
+      "validated_commit": "29f7baaf5da171998afd82ab7c0975637a823a2d",
+      "sha256_lf": {
+        "lingshu/core/core.py": "919b7e1ffd6b865dc218e9b4659478e7c963c07382a19fb83c7b5f17ff5914b9",
+        "tests/test_archive_schema_registration.py": "41357496d31d4441374c4230eb158bc89a87b0dbaa9b78077db56275672257a0",
+        "tests/fixtures/archive_schema_registration_mutations.json": "a73ae1e4d9df566aa3632309a4f239aa8a5b5c15d1e99966cc611b0273fb11f4"
+      },
+      "commands": [
+        {
+          "name": "replay",
+          "returncode": 0
+        },
+        {
+          "name": "related",
+          "returncode": 0
+        },
+        {
+          "name": "manifest",
+          "returncode": 0
+        },
+        {
+          "name": "time-core",
+          "returncode": 0
+        }
+      ],
+      "related_total": 23,
+      "related_failures": [],
+      "related_errors": [],
+      "related_skips": []
+    }
+  }
+}

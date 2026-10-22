@@ -1,0 +1,26 @@
+{
+  "guard": "tests/test_subtree_closure_guard.py",
+  "total": 6,
+  "sources": ["lingshu/core/core.py"],
+  "baseline_failures": [
+    "test_fanout_beyond_500_is_rejected_without_any_writes",
+    "test_budget_hidden_protected_grandchild_keeps_the_whole_tree",
+    "test_depth_65_is_rejected_and_all_ancestor_edges_survive"
+  ],
+  "mutations": [
+    {
+      "name": "ignore_incomplete_closure",
+      "test": "test_fanout_beyond_500_is_rejected_without_any_writes",
+      "assertion": "incomplete subtree was replaced instead of rejected",
+      "changes": [{"file": "lingshu/core/core.py", "class": "SpacetimeMemoryEngine", "method": "subgraph_replace",
+        "old": "                if row[0] not in removed_set:", "new": "                if False:"}]
+    },
+    {
+      "name": "check_only_old_root_boundary",
+      "test": "test_depth_65_is_rejected_and_all_ancestor_edges_survive",
+      "assertion": "incomplete subtree was replaced instead of rejected",
+      "changes": [{"file": "lingshu/core/core.py", "class": "SpacetimeMemoryEngine", "method": "subgraph_replace",
+        "old": "            chunk = removed[i:i + _SQL_IN_CHUNK]", "new": "            chunk = [old_sub_root_id]"}]
+    }
+  ]
+}

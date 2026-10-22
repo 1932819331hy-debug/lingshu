@@ -13,6 +13,7 @@
 把 BM25_CAP 改成 1.0 且 BM25_K 改成 0.01，test_containment_is_not_duplicate 必红。
 """
 import os
+import sqlite3
 
 import pytest
 
@@ -164,3 +165,28 @@ def test_verbatim_does_not_hide_similar_nodes(fts_on):
     hits = e.store.search_content(q, limit=3)
     assert hits[0][0].id == new.id
     assert old.id in [h[0].id for h in hits]
+
+
+def test_write_path_populates_fts_eagerly(tmp_path, fts_on):
+    """#797：写入即入索引——add_perception 返回后、任何检索之前，nodes_fts 已有行。
+
+    判据（issue #797 复现的三读数）：
+      · 外部连接（不经 store 对象，杜绝 lazy sync 顺带补齐）读 nodes_fts 行数 == 写入数；
+      · FTSIndex.candidates 收**裸字符串**查询（str 是 Sequence[str]，按字符迭代会拆成
+        单字而恒零命中）也返回 >0 候选；
+      · search_content 结果不因索引即时化而变。
+
+    变异哨兵：删掉 add_node 提交后的 `_fts.sync()`（core.py #797 段）⇒ 第一断言必红
+    （写后检索前 nodes_fts 恒 0）；删掉 candidates 的裸字符串容错 ⇒ 第二断言必红。"""
+    db = str(tmp_path / "fts.db")
+    e = SpacetimeMemoryEngine(db)
+    e.add_perception("full text search test with keywords", skip_dedup=True)
+    e.add_perception("another article about machine learning", skip_dedup=True)
+    conn = sqlite3.connect(db)  # 独立连接：只看已提交事实
+    n_nodes = conn.execute("SELECT COUNT(*) FROM nodes").fetchone()[0]
+    n_fts = conn.execute("SELECT COUNT(*) FROM nodes_fts").fetchone()[0]
+    conn.close()
+    assert n_fts == n_nodes == 2  # 写入即入索引，不等检索
+    cands = e.store._fts.candidates("full text search")
+    assert len(cands) > 0
+    assert len(e.store.search_content("full text search", limit=3)) == 1

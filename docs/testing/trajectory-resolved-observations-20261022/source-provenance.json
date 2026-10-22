@@ -1,0 +1,78 @@
+{
+  "baseline": "1eafb3f57a3f9a83d067c0a39568aca4588cfdff",
+  "sha256_lf": {
+    "lingshu/world/world_model.py": "a11f4ca33fb5071eff5e75190f6421e8d45f683ef7f0b9855360c96f045541ef",
+    "tests/test_trajectory_resolved_observations.py": "2ad7a7fbbd6057f7bb84f917cf5bfa97360f961df6e2a08630949f7e4f666ee1",
+    "tests/fixtures/trajectory_resolved_observations_mutations.json": "603d1c201a57e97eb5f3771387fcf4a7291edd0f54e06322cc92396f34d0989c"
+  },
+  "runs": {
+    "windows": {
+      "platform": "Windows",
+      "python": "3.12.10",
+      "sqlite": "3.49.1",
+      "baseline": "1eafb3f57a3f9a83d067c0a39568aca4588cfdff",
+      "validated_commit": "4f4451d6b32f6bf1093e5b52d9eaf81f70e21f7b",
+      "sha256_lf": {
+        "lingshu/world/world_model.py": "a11f4ca33fb5071eff5e75190f6421e8d45f683ef7f0b9855360c96f045541ef",
+        "tests/test_trajectory_resolved_observations.py": "2ad7a7fbbd6057f7bb84f917cf5bfa97360f961df6e2a08630949f7e4f666ee1",
+        "tests/fixtures/trajectory_resolved_observations_mutations.json": "603d1c201a57e97eb5f3771387fcf4a7291edd0f54e06322cc92396f34d0989c"
+      },
+      "commands": [
+        {
+          "name": "replay",
+          "returncode": 0
+        },
+        {
+          "name": "related",
+          "returncode": 0
+        },
+        {
+          "name": "manifest",
+          "returncode": 0
+        },
+        {
+          "name": "time-core",
+          "returncode": 0
+        }
+      ],
+      "related_total": 52,
+      "related_failures": [],
+      "related_errors": [],
+      "related_skips": []
+    },
+    "linux": {
+      "platform": "Linux",
+      "python": "3.13.12",
+      "sqlite": "3.46.1",
+      "baseline": "1eafb3f57a3f9a83d067c0a39568aca4588cfdff",
+      "validated_commit": "4f4451d6b32f6bf1093e5b52d9eaf81f70e21f7b",
+      "sha256_lf": {
+        "lingshu/world/world_model.py": "a11f4ca33fb5071eff5e75190f6421e8d45f683ef7f0b9855360c96f045541ef",
+        "tests/test_trajectory_resolved_observations.py": "2ad7a7fbbd6057f7bb84f917cf5bfa97360f961df6e2a08630949f7e4f666ee1",
+        "tests/fixtures/trajectory_resolved_observations_mutations.json": "603d1c201a57e97eb5f3771387fcf4a7291edd0f54e06322cc92396f34d0989c"
+      },
+      "commands": [
+        {
+          "name": "replay",
+          "returncode": 0
+        },
+        {
+          "name": "related",
+          "returncode": 0
+        },
+        {
+          "name": "manifest",
+          "returncode": 0
+        },
+        {
+          "name": "time-core",
+          "returncode": 0
+        }
+      ],
+      "related_total": 52,
+      "related_failures": [],
+      "related_errors": [],
+      "related_skips": []
+    }
+  }
+}

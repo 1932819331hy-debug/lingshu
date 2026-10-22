@@ -1,0 +1,256 @@
+{
+  "windows": {
+    "python": "3.12.10",
+    "platform": "Windows",
+    "sqlite": "3.49.1",
+    "baseline": "1eafb3f57a3f9a83d067c0a39568aca4588cfdff",
+    "guard_sha256": "2ad7a7fbbd6057f7bb84f917cf5bfa97360f961df6e2a08630949f7e4f666ee1",
+    "records": [
+      {
+        "case": "fixed",
+        "ok": true,
+        "returncode": 0,
+        "passed": 8,
+        "failed_tests": [],
+        "errors": 0,
+        "skipped": 0,
+        "expected_failures": [],
+        "expected_assertion": "",
+        "pytest_summary": "8 passed in 0.22s",
+        "source_sha256": {
+          "lingshu/world/world_model.py": "a11f4ca33fb5071eff5e75190f6421e8d45f683ef7f0b9855360c96f045541ef"
+        }
+      },
+      {
+        "case": "baseline",
+        "ok": true,
+        "returncode": 1,
+        "passed": 3,
+        "failed_tests": [
+          "test_anonymous_prediction_errors_reach_the_paired_guard",
+          "test_anonymous_quaternions_reach_the_resolved_rotation_track",
+          "test_anonymous_real_observations_reach_the_trajectory_buffer",
+          "test_default_sensor_can_support_smooth_motion_after_a_random_prefix",
+          "test_default_sensor_observations_reach_the_trajectory_buffer"
+        ],
+        "errors": 0,
+        "skipped": 0,
+        "expected_failures": [
+          "test_anonymous_real_observations_reach_the_trajectory_buffer",
+          "test_default_sensor_observations_reach_the_trajectory_buffer",
+          "test_default_sensor_can_support_smooth_motion_after_a_random_prefix",
+          "test_anonymous_prediction_errors_reach_the_paired_guard",
+          "test_anonymous_quaternions_reach_the_resolved_rotation_track"
+        ],
+        "expected_assertion": "",
+        "pytest_summary": "5 failed, 3 passed in 0.38s",
+        "source_sha256": {
+          "lingshu/world/world_model.py": "d51abaddae09162768d2de80cb95b04f7536ac6491f41b10571525eb0057d5c0"
+        }
+      },
+      {
+        "case": "ignore_stochastic_backtest",
+        "ok": true,
+        "returncode": 1,
+        "passed": 0,
+        "failed_tests": [
+          "test_default_sensor_random_motion_keeps_its_stochastic_bound"
+        ],
+        "errors": 0,
+        "skipped": 0,
+        "expected_failures": [
+          "test_default_sensor_random_motion_keeps_its_stochastic_bound"
+        ],
+        "expected_assertion": "random sensor motion was promoted to smooth",
+        "pytest_summary": "1 failed in 0.32s",
+        "source_sha256": {
+          "lingshu/world/world_model.py": "911805303f45343b20bbcc9ba4bcfccb387e7cf92e03ed3853d8de141c6879be"
+        }
+      },
+      {
+        "case": "use_unresolved_trajectory_input",
+        "ok": true,
+        "returncode": 1,
+        "passed": 0,
+        "failed_tests": [
+          "test_anonymous_real_observations_reach_the_trajectory_buffer"
+        ],
+        "errors": 0,
+        "skipped": 0,
+        "expected_failures": [
+          "test_anonymous_real_observations_reach_the_trajectory_buffer"
+        ],
+        "expected_assertion": "anonymous observations missing from trajectory buffer",
+        "pytest_summary": "1 failed in 0.33s",
+        "source_sha256": {
+          "lingshu/world/world_model.py": "b55f740c71345c85a0de83605eb15047e9d287f093b5c666959a18fc6bb07073"
+        }
+      },
+      {
+        "case": "use_unresolved_paired_guard_input",
+        "ok": true,
+        "returncode": 1,
+        "passed": 0,
+        "failed_tests": [
+          "test_anonymous_prediction_errors_reach_the_paired_guard"
+        ],
+        "errors": 0,
+        "skipped": 0,
+        "expected_failures": [
+          "test_anonymous_prediction_errors_reach_the_paired_guard"
+        ],
+        "expected_assertion": "resolved observation missing from paired guard",
+        "pytest_summary": "1 failed in 0.33s",
+        "source_sha256": {
+          "lingshu/world/world_model.py": "1f84f3c080ac1c8986b0c2fc7edc7cada3db5f695ef8dff3f062399ab94e8cd8"
+        }
+      },
+      {
+        "case": "use_unresolved_rotation_input",
+        "ok": true,
+        "returncode": 1,
+        "passed": 0,
+        "failed_tests": [
+          "test_anonymous_quaternions_reach_the_resolved_rotation_track"
+        ],
+        "errors": 0,
+        "skipped": 0,
+        "expected_failures": [
+          "test_anonymous_quaternions_reach_the_resolved_rotation_track"
+        ],
+        "expected_assertion": "resolved observation missing from rotation buffer",
+        "pytest_summary": "1 failed in 0.33s",
+        "source_sha256": {
+          "lingshu/world/world_model.py": "9087863fb8dbb6d4485dab42100bc516eb4d3a3b3352c6e371e7800df976ba9b"
+        }
+      }
+    ]
+  },
+  "linux": {
+    "python": "3.13.12",
+    "platform": "Linux",
+    "sqlite": "3.46.1",
+    "baseline": "1eafb3f57a3f9a83d067c0a39568aca4588cfdff",
+    "guard_sha256": "2ad7a7fbbd6057f7bb84f917cf5bfa97360f961df6e2a08630949f7e4f666ee1",
+    "records": [
+      {
+        "case": "fixed",
+        "ok": true,
+        "returncode": 0,
+        "passed": 8,
+        "failed_tests": [],
+        "errors": 0,
+        "skipped": 0,
+        "expected_failures": [],
+        "expected_assertion": "",
+        "pytest_summary": "8 passed in 0.34s",
+        "source_sha256": {
+          "lingshu/world/world_model.py": "a11f4ca33fb5071eff5e75190f6421e8d45f683ef7f0b9855360c96f045541ef"
+        }
+      },
+      {
+        "case": "baseline",
+        "ok": true,
+        "returncode": 1,
+        "passed": 3,
+        "failed_tests": [
+          "test_anonymous_prediction_errors_reach_the_paired_guard",
+          "test_anonymous_quaternions_reach_the_resolved_rotation_track",
+          "test_anonymous_real_observations_reach_the_trajectory_buffer",
+          "test_default_sensor_can_support_smooth_motion_after_a_random_prefix",
+          "test_default_sensor_observations_reach_the_trajectory_buffer"
+        ],
+        "errors": 0,
+        "skipped": 0,
+        "expected_failures": [
+          "test_anonymous_real_observations_reach_the_trajectory_buffer",
+          "test_default_sensor_observations_reach_the_trajectory_buffer",
+          "test_default_sensor_can_support_smooth_motion_after_a_random_prefix",
+          "test_anonymous_prediction_errors_reach_the_paired_guard",
+          "test_anonymous_quaternions_reach_the_resolved_rotation_track"
+        ],
+        "expected_assertion": "",
+        "pytest_summary": "5 failed, 3 passed in 0.50s",
+        "source_sha256": {
+          "lingshu/world/world_model.py": "d51abaddae09162768d2de80cb95b04f7536ac6491f41b10571525eb0057d5c0"
+        }
+      },
+      {
+        "case": "ignore_stochastic_backtest",
+        "ok": true,
+        "returncode": 1,
+        "passed": 0,
+        "failed_tests": [
+          "test_default_sensor_random_motion_keeps_its_stochastic_bound"
+        ],
+        "errors": 0,
+        "skipped": 0,
+        "expected_failures": [
+          "test_default_sensor_random_motion_keeps_its_stochastic_bound"
+        ],
+        "expected_assertion": "random sensor motion was promoted to smooth",
+        "pytest_summary": "1 failed in 0.42s",
+        "source_sha256": {
+          "lingshu/world/world_model.py": "911805303f45343b20bbcc9ba4bcfccb387e7cf92e03ed3853d8de141c6879be"
+        }
+      },
+      {
+        "case": "use_unresolved_trajectory_input",
+        "ok": true,
+        "returncode": 1,
+        "passed": 0,
+        "failed_tests": [
+          "test_anonymous_real_observations_reach_the_trajectory_buffer"
+        ],
+        "errors": 0,
+        "skipped": 0,
+        "expected_failures": [
+          "test_anonymous_real_observations_reach_the_trajectory_buffer"
+        ],
+        "expected_assertion": "anonymous observations missing from trajectory buffer",
+        "pytest_summary": "1 failed in 0.42s",
+        "source_sha256": {
+          "lingshu/world/world_model.py": "b55f740c71345c85a0de83605eb15047e9d287f093b5c666959a18fc6bb07073"
+        }
+      },
+      {
+        "case": "use_unresolved_paired_guard_input",
+        "ok": true,
+        "returncode": 1,
+        "passed": 0,
+        "failed_tests": [
+          "test_anonymous_prediction_errors_reach_the_paired_guard"
+        ],
+        "errors": 0,
+        "skipped": 0,
+        "expected_failures": [
+          "test_anonymous_prediction_errors_reach_the_paired_guard"
+        ],
+        "expected_assertion": "resolved observation missing from paired guard",
+        "pytest_summary": "1 failed in 0.43s",
+        "source_sha256": {
+          "lingshu/world/world_model.py": "1f84f3c080ac1c8986b0c2fc7edc7cada3db5f695ef8dff3f062399ab94e8cd8"
+        }
+      },
+      {
+        "case": "use_unresolved_rotation_input",
+        "ok": true,
+        "returncode": 1,
+        "passed": 0,
+        "failed_tests": [
+          "test_anonymous_quaternions_reach_the_resolved_rotation_track"
+        ],
+        "errors": 0,
+        "skipped": 0,
+        "expected_failures": [
+          "test_anonymous_quaternions_reach_the_resolved_rotation_track"
+        ],
+        "expected_assertion": "resolved observation missing from rotation buffer",
+        "pytest_summary": "1 failed in 0.43s",
+        "source_sha256": {
+          "lingshu/world/world_model.py": "9087863fb8dbb6d4485dab42100bc516eb4d3a3b3352c6e371e7800df976ba9b"
+        }
+      }
+    ]
+  }
+}

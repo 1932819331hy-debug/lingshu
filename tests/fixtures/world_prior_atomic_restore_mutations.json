@@ -1,0 +1,15 @@
+{
+  "guard": "tests/test_world_prior_atomic_restore.py", "total": 8,
+  "sources": ["lingshu/world/wm_simloop.py"],
+  "baseline_failures": ["test_failed_restore_preserves_the_entire_running_state[missing_motion]", "test_failed_restore_preserves_the_entire_running_state[bad_edge]", "test_failed_restore_preserves_the_entire_running_state[bad_history]", "test_failed_restore_preserves_the_entire_running_state[bad_hypothesis]", "test_failed_restore_preserves_the_entire_running_state[missing_rates]"],
+  "mutations": [
+    {"name": "stage_directly_on_the_running_model", "test": "test_failed_restore_preserves_the_entire_running_state[missing_motion]", "assertion": "failed prior restore changed running state",
+      "changes": [{"file": "lingshu/world/wm_simloop.py", "class": "SimulationLoop", "method": "load_priors", "old": "candidate = copy(self.wm)", "new": "candidate = self.wm"}]},
+    {"name": "publish_before_hypothesis_validation", "test": "test_failed_restore_preserves_the_entire_running_state[bad_hypothesis]", "assertion": "failed prior restore changed running state",
+      "changes": [{"file": "lingshu/world/wm_simloop.py", "class": "SimulationLoop", "method": "load_priors", "old": "            restored_hypotheses = {eid: h", "new": "            self.wm.__dict__.update(candidate.__dict__)\n            restored_hypotheses = {eid: h"}]},
+    {"name": "publish_loop_state_before_final_field", "test": "test_failed_restore_preserves_the_entire_running_state[missing_rates]", "assertion": "failed prior restore changed running state",
+      "changes": [{"file": "lingshu/world/wm_simloop.py", "class": "SimulationLoop", "method": "load_priors", "old": "            restored_rates = state[\"rolling_rates\"]", "new": "            self._hypotheses = restored_hypotheses\n            restored_rates = state[\"rolling_rates\"]"}]},
+    {"name": "replace_the_externally_held_model", "test": "test_valid_restore_preserves_the_held_model_object_and_observation_boundary", "assertion": "restoration replaced the held model object",
+      "changes": [{"file": "lingshu/world/wm_simloop.py", "class": "SimulationLoop", "method": "load_priors", "old": "            self.wm.__dict__.update(candidate.__dict__)", "new": "            self.wm = candidate"}]}
+  ]
+}

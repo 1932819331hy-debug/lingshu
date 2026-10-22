@@ -41,6 +41,7 @@
 不再以裸 `import numpy` 击穿整包导入;scipy 仍为可选稀疏后端(缺失降级 edge-list)。
 """
 from __future__ import annotations
+from contextlib import contextmanager
 import json
 import math
 import os
@@ -134,7 +135,8 @@ class _BorrowedConnection:
 
     引擎内部各处按「取连接 → 用完 close()」书写；`store=` / `conn=` 复用引擎连接
     （如 `:memory:`）时，真 `close()` 会把调用方的库一起关掉——本包装只让 `close()`
-    空转，不改变 `execute` / `commit` / `cursor` 的语义。
+    空转，不改变 `execute` / `commit` / `cursor` 的语义。事务由激活引擎的
+    `_transaction` 管理，借用已有事务时只操作自己的 SAVEPOINT。
     """
 
     def __init__(self, conn):
@@ -174,7 +176,8 @@ class ActivationEngine:
           · 只给 `db_path=":memory:"` → 显式 `ValueError`（不再静默拿空库）；
           · 文件路径 → 父目录不存在时自动创建（旧实现在干净目录下构造即
             `unable to open database file`）。
-        默认 `db_path` 仍相对 cwd（是否改为包内/用户目录属设计者裁，本件不动）。
+        相对 `db_path` 仍以构造时 cwd 选择原位置，实例随后固定该文件；进程 chdir
+        不得让同一实例的后续重连改写另一同名库。不改默认数据根的选择。
         判据来源：本件 #293（分诊表 `triage_lingshu_ALL.md` 行 293 判定成立）。
         """
         if store is not None:
@@ -188,7 +191,7 @@ class ActivationEngine:
                 "ActivationEngine: ':memory:' 每次连接都是新空库,请传 conn= 或 "
                 "store=(如 engine.store) 共享同一连接")
         else:
-            self.db_path = db_path
+            self.db_path = os.path.abspath(db_path)
             self._conn = None
             parent = os.path.dirname(os.path.abspath(db_path))
             if parent:
@@ -200,22 +203,59 @@ class ActivationEngine:
         self._adj_inh = None        # 本轮抑制邻接(仅 opposite 边,存 |decay|)
         self._node_index = None     # node_id → idx
         self._edge_meta = None      # (src_idx, dst_idx, decay) 兴奋边列表
-        self._inh_meta = None       # (src_idx, dst_idx, |decay|) 抑制边列表
+        self._inh_meta = None       # (src_idx, dst_idx, |decay|) 抑制边列表（单向）
+        self._adj_inh_unv = None    # 低置信(<0.5)抑制邻接（双向补充，issue #521）
+        self._inh_unv_meta = None   # (src_idx, dst_idx, |decay|×confidence) 低置信边列表
 
     # ---------------- 表结构(独立激活表,与内容记忆分离) ----------------
     def _ensure_tables(self):
-        con = self._con()
-        con.execute("""CREATE TABLE IF NOT EXISTS activation_nodes (
-            id TEXT PRIMARY KEY, workset TEXT NOT NULL, node_id TEXT NOT NULL,
-            activation REAL NOT NULL, source TEXT NOT NULL, hop INTEGER NOT NULL, ts REAL NOT NULL)""")
-        con.execute("CREATE INDEX IF NOT EXISTS idx_act_ws ON activation_nodes(workset)")
-        con.commit(); con.close()
+        with self._transaction() as con:
+            con.execute("""CREATE TABLE IF NOT EXISTS activation_nodes (
+                id TEXT PRIMARY KEY, workset TEXT NOT NULL, node_id TEXT NOT NULL,
+                activation REAL NOT NULL, source TEXT NOT NULL, hop INTEGER NOT NULL, ts REAL NOT NULL)""")
+            con.execute("CREATE INDEX IF NOT EXISTS idx_act_ws ON activation_nodes(workset)")
 
     def _con(self):
         """取连接：借用的共享连接优先（#293），否则按路径新开。"""
         if self._conn is not None:
             return self._conn
         return sqlite3.connect(self.db_path, timeout=30)
+
+    @contextmanager
+    def _transaction(self):
+        """Write atomically without committing a borrowed caller transaction.
+
+        Initialization participates in the same boundary. If its first schema
+        creation is rolled back by the caller, reconstruct the activation engine.
+        Commit/RELEASE failures use the same rollback path as statement failures.
+        """
+        con = self._con()
+        nested = con.in_transaction
+        savepoint = "activation_%s" % uuid.uuid4().hex
+        try:
+            if nested:
+                con.execute("SAVEPOINT %s" % savepoint)
+            else:
+                con.execute("BEGIN IMMEDIATE")
+            try:
+                yield con
+                if nested:
+                    con.execute("RELEASE SAVEPOINT %s" % savepoint)
+                else:
+                    con.commit()
+            except BaseException as error:
+                try:
+                    if con.in_transaction:
+                        if nested:
+                            con.execute("ROLLBACK TO SAVEPOINT %s" % savepoint)
+                            con.execute("RELEASE SAVEPOINT %s" % savepoint)
+                        else:
+                            con.rollback()
+                except sqlite3.Error as rollback_error:
+                    error.add_note("Activation rollback failed: %s" % rollback_error)
+                raise
+        finally:
+            con.close()
 
     def _warn_if_content_tables_absent(self):
         """#714：构造期给出一条明确 warning——`nodes` 表缺席时激活面是**空工作态**。
@@ -262,8 +302,17 @@ class ActivationEngine:
         except sqlite3.OperationalError:  # #714:无内容表 ⇒ 空图
             node_rows = []
         node_ids = [r[0] for r in node_rows]
+        # issue #521：抑制幅度要按边的 confidence 缩放（未复核 0.3 的 opposite
+        # 边不得满额否决）。旧 schema 可能没有 confidence 列——用 PRAGMA 探测，
+        # 缺列时按 0.3 兜底，避免把「列不存在」误判成「无内容表」而清空整图。
         try:
-            cur.execute("SELECT source_id, target_id, relation_type, condition_space FROM edges")
+            _edge_cols = {r[1] for r in cur.execute("PRAGMA table_info(edges)")}
+        except sqlite3.OperationalError:
+            _edge_cols = set()
+        _conf_expr = "confidence" if "confidence" in _edge_cols else "0.3 AS confidence"
+        try:
+            cur.execute("SELECT source_id, target_id, relation_type, condition_space, "
+                        + _conf_expr + " FROM edges")
             edges = cur.fetchall()
         except sqlite3.OperationalError:  # #714:无内容表 ⇒ 空图
             edges = []
@@ -278,7 +327,8 @@ class ActivationEngine:
                 cur_cs[nid] = {}
         rows, cols, decays = [], [], []
         inh_rows, inh_cols, inh_mags = [], [], []
-        for src, dst, rtype, cs_json in edges:
+        unv_rows, unv_cols, unv_mags = [], [], []
+        for src, dst, rtype, cs_json, edge_conf in edges:
             si, di = idx.get(src), idx.get(dst)
             if si is None or di is None:
                 continue
@@ -299,7 +349,21 @@ class ActivationEngine:
             except (TypeError, ValueError):
                 d = d * COND_MATCH_NEUTRAL
             if d < 0:  # 负记忆同价(第五篇):相反边走独立抑制通路,不进兴奋邻接(issue #229)
-                inh_rows.append(si); inh_cols.append(di); inh_mags.append(-d)
+                # issue #521：**低置信**（< 默认 0.5，含 register_conflict 的 0.3）
+                # 的 opposite 边按置信缩放、并进双向补充面（contested）；默认 0.5
+                # 及以上的边保持既有「满额单向」语义（#229 的既有契约，勿回归）。
+                try:
+                    _c = float(edge_conf) if edge_conf is not None else 0.5
+                except (TypeError, ValueError):
+                    _c = 0.5
+                if _c != _c:  # NaN
+                    _c = 0.5
+                _c = min(1.0, max(0.0, _c))
+                if _c < 0.5:
+                    inh_rows.append(si); inh_cols.append(di); inh_mags.append(-d * _c)
+                    unv_rows.append(si); unv_cols.append(di); unv_mags.append(-d * _c)
+                else:
+                    inh_rows.append(si); inh_cols.append(di); inh_mags.append(-d)
             else:
                 rows.append(si); cols.append(di); decays.append(d)
         if csr_matrix is not None and rows:
@@ -312,11 +376,18 @@ class ActivationEngine:
                                  shape=(n, n))
         else:
             adj_inh = None  # 降级:edge-list 抑制
+        if csr_matrix is not None and unv_rows:
+            adj_inh_unv = csr_matrix((np.array(unv_mags, dtype=np.float32),
+                                      (unv_rows, unv_cols)), shape=(n, n))
+        else:
+            adj_inh_unv = None
         self._adj = adj
         self._adj_inh = adj_inh
+        self._adj_inh_unv = adj_inh_unv
         self._node_index = idx
         self._edge_meta = (rows, cols, decays)
         self._inh_meta = (inh_rows, inh_cols, inh_mags)
+        self._inh_unv_meta = (unv_rows, unv_cols, unv_mags)
         self._node_ids = node_ids
         # 节点条件空间(节点级 cond_match 用;装载期已消费,留作审计/调试)
         self._node_cond = cur_cs
@@ -464,11 +535,20 @@ class ActivationEngine:
             supp = np.zeros(n, dtype=np.float32)
             if self._adj_inh is not None:
                 supp = self._max_plus(self._adj_inh, act)
-            else:  # edge-list 降级
+                # issue #521：**低置信**边（<0.5）额外做反向抑制（双向），
+                # 未复核 0.3 边不得只按存储方向让后写者单方面否决先写者；
+                # 默认 0.5+ 的边保持既有单向（#229）。
+                if self._adj_inh_unv is not None:
+                    supp = np.maximum(supp, self._max_plus(self._adj_inh_unv.T, act))
+            else:  # edge-list 降级（低置信边双向同口径）
                 inh_rows, inh_cols, inh_mags = self._inh_meta
                 for si, di, m in zip(inh_rows, inh_cols, inh_mags):
                     if act[si] > 0:
                         supp[di] = max(supp[di], act[si] * m)
+                unv_rows, unv_cols, unv_mags = self._inh_unv_meta
+                for si, di, m in zip(unv_rows, unv_cols, unv_mags):
+                    if act[di] > 0:
+                        supp[si] = max(supp[si], act[di] * m)
             if supp.any():
                 act = np.maximum(act - supp, 0.0)
             for i in np.nonzero(act >= act_floor)[0]:
@@ -511,18 +591,17 @@ class ActivationEngine:
         #314：`hops` 给每个 node_id 的**首次激活跳号**（种子/自条件 = 0）；缺省仍写 0
         （签名向后兼容——不传即旧行为）。
         """
-        con = self._con()
-        con.execute("DELETE FROM activation_nodes WHERE workset=?", (workset,))
-        ts = time.time()
-        src_map = sources or {}
-        hop_map = hops or {}
-        for nid, a in members:
-            con.execute(
-                "INSERT OR REPLACE INTO activation_nodes VALUES (?,?,?,?,?,?,?)",
-                ("act_%s_%d" % (uuid.uuid4().hex[:8], int(ts * 1000)),
-                 workset, nid, a, src_map.get(nid, "propagate"),
-                 hop_map.get(nid, 0), ts))
-        con.commit(); con.close()
+        with self._transaction() as con:
+            con.execute("DELETE FROM activation_nodes WHERE workset=?", (workset,))
+            ts = time.time()
+            src_map = sources or {}
+            hop_map = hops or {}
+            for nid, a in members:
+                con.execute(
+                    "INSERT OR REPLACE INTO activation_nodes VALUES (?,?,?,?,?,?,?)",
+                    ("act_%s_%d" % (uuid.uuid4().hex[:8], int(ts * 1000)),
+                     workset, nid, a, src_map.get(nid, "propagate"),
+                     hop_map.get(nid, 0), ts))
 
     def _append_audit(self, audit: Dict):
         os.makedirs(os.path.dirname(self.audit_path) or ".", exist_ok=True)
@@ -604,45 +683,13 @@ class ActivationEngine:
         ws = workset or snapshot["workset"]
         # ① 写前物化（非可迭代 ⇒ 在任何 DELETE 之前抛出，目标零变更）。
         members = list(snapshot["members"])
-        con = self._con()
-        savepoint = None
-        try:
-            # ② 单事务：DELETE 与全部 INSERT 同生共死。
-            if con.in_transaction:
-                savepoint = "import_workset_%s" % uuid.uuid4().hex[:8]
-                con.execute("SAVEPOINT %s" % savepoint)
-            else:
-                con.execute("BEGIN IMMEDIATE")
+        with self._transaction() as con:
             ts = time.time()
             con.execute("DELETE FROM activation_nodes WHERE workset=?", (ws,))
             for m in members:
                 con.execute("INSERT OR REPLACE INTO activation_nodes VALUES (?,?,?,?,?,?,?)",
                             ("act_%s_%d" % (uuid.uuid4().hex[:8], int(ts * 1000)),
                              ws, m["node_id"], m["activation"], "restored", m.get("hop", 0), ts))
-        except BaseException:
-            # 回滚自己这一段（嵌套时只回滚到 SAVEPOINT，不动调用方既有事务），原样抛。
-            if savepoint is None:
-                con.rollback()
-            else:
-                try:
-                    con.execute("ROLLBACK TO SAVEPOINT %s" % savepoint)
-                    con.execute("RELEASE SAVEPOINT %s" % savepoint)
-                except sqlite3.Error as _sp_err:
-                    # 回滚段自身失败（SAVEPOINT 已被 SQLite 隐式释放等）**不静默**：
-                    # 出声记录后仍抛**原异常**——本方法不重定义错误类型（见 docstring
-                    # 边界③），此处只保证「回滚未成」可被调用方/日志面看见。
-                    warnings.warn(
-                        "ActivationEngine.import_workset: 回滚到 SAVEPOINT %s 失败"
-                        "（%s）；本次异常照原样抛出，调用方事务状态请自行复核"
-                        % (savepoint, _sp_err))
-            raise
-        else:
-            if savepoint is None:
-                con.commit()
-            else:
-                con.execute("RELEASE SAVEPOINT %s" % savepoint)
-        finally:
-            con.close()
         return {"status": "ok", "workset": ws, "restored": len(members)}
 
 

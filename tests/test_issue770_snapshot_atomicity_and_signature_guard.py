@@ -34,10 +34,12 @@
    `BEGIN IMMEDIATE` 自冲突并把互等窗口放大到 `busy_timeout`（实测 4 进程 × 6 次
    出现 30s 级 `database is locked`）。长期层的相似边建边同理移到提交之后。
 ② 签名第三项由 `SUM(LENGTH(content))` 改为**正文内容指纹**（逐行
-   `(rowid, 摘要)` 折叠成 8 字节整数）；**增量分支的三条门槛逐字保持改前形制**
-   ⇒ B/C/D 三格既有行为不变。返回形状仍是 `(int, int, int)`。
+   `(rowid, 摘要)` 折叠成 8 字节整数）；增量分支的三条门槛保留。返回形状仍是
+   `(int, int, int)`。
+   ★后续 #462 修复在增量分支补了「计数平衡 + 旧 id 一个不少」两道无删除证明
+   ⇒ D 格（删 1 增 2）由「增量并入」反转为**全量重建**，本文件 G3 判据随之更新。
 
-断言组（把 `longterm_gate.py` 回退到 `origin/main` ⇒ G1/G5/G6/G9 必红；
+断言组（把 `longterm_gate.py` 回退到 #770 修复前 ⇒ G1/G3/G5/G6/G9 必红；
 还原 ⇒ 全绿且 `git diff` 为空）
 -------------------------------------------------------------------------
   G1 **A 格（等长原地改写）确定性**：签名必变、缓存对象必重建、新正文 gram 全数
@@ -45,8 +47,8 @@
      （改前：签名 `(1,1,13)`→`(1,1,13)` 不变、新 gram 0 入、旧 gram 全留、
      `novelty=1.0`）。
   G2 **B/C 格（变长改写）仍全量重建**：新 gram 全入、旧 gram 退出。
-  G3 **D 格（删 1 增 2）行为不变**（#462 残留形态属另一笔账面，本件不得改动）：
-     三项门槛全增 ⇒ **仍走增量**（`union` 对象同一）。
+  G3 **D 格（删 1 增 2）全量重建**（#462 修复后反转）：三项门槛仍全增，但
+     「无删除」证明不成立 ⇒ **不得增量**（`union` 对象不复用、被删 gram 退出）。
   G4 **纯追加仍走增量**（#389 的工作负载：每条输入写一个节点）⇒ `union` 对象同一、
      节点数 +1（防「改成每次全量重建」把 #389 的增量收益打掉）。
   G5 **确定性读—写窗口**（不靠概率）：A 线程在「读到旧 `tags`」之后停顿一个窗口，
@@ -69,8 +71,9 @@
 `@_transactional` 的 AST 守卫（`tests/test_core_thread_safety.py`）**只扫
 `lingshu/core/core.py` 一个文件**，`longterm_gate.py` 不在其扫描面内 ⇒ 本件不扩该
 扫描面（扩面会让全包 20 个未挂装饰器的方法当场转红，属另一笔）。`promote_from_context`
-的同类读改写、`#462` 的增量残留形态、`_known_snapshot` 的逐行摘要与「删行 rowid 复用」
-不可分辨（混合形态仍走增量）均**不在本件范围**。
+的同类读改写**不在本件范围**。`_known_snapshot` 的删除误判（#462）已由后续修复
+处理（见 G3 反转）；剩余未覆盖面＝「同 rowid 原地 UPDATE ∧ 同期追加节点」的混合
+形态（旧缓存未存逐行摘要，检测它属另一次改动面，见该函数 docstring 的已知残留）。
 
 运行（仓根）：python -X utf8 -m pytest tests/test_issue770_snapshot_atomicity_and_signature_guard.py -q --no-header
 """
@@ -205,16 +208,19 @@ def test_g2_variable_length_rewrite_still_rebuilds():
             e.close()
 
 
-def test_g3_delete_one_add_two_keeps_incremental_behaviour():
-    """G3：D 格（删 1 增 2，#462 形态）—— 既有行为**不变**：仍走增量并入。
+def test_g3_delete_one_add_two_rebuilds_without_stale_grams():
+    """G3：D 格（删 1 增 2，#462）—— 修复后必须**全量重建**。
 
-    本件按派工口径**只修 A 格**：D 格的「被删/被改节点 gram 留存」是另一个已挂
-    账面，本件不得顺手改（改法见 `_known_snapshot` docstring 的「已知残留」）。
+    #770 当时的派工口径是「只修 A 格，D 的增量行为原样保留（#462 属另一笔
+    账面）」，故旧版此例锁的是 `union is u1`。账面 #462 已修：增量分支补了
+    「计数平衡 + 旧 id 一个不少」两道证明，D 格现在落到全量重建。本用例随之反转，
+    并断言被删行的 gram 不在新并集里。
     """
     e = _eng()
     try:
         g = e._ensure_gate()
         nid = e.add_perception(LEN_EQ_A, importance=0.5).id
+        victim_grams = g._core_grams(LEN_EQ_A)
         u1, _, _, s1 = g._known_snapshot()
         e.store.conn.execute("DELETE FROM nodes WHERE id=?", (nid,))
         e.store.conn.commit()
@@ -222,9 +228,10 @@ def test_g3_delete_one_add_two_keeps_incremental_behaviour():
         e.add_perception("foxtrot444555666", importance=0.5, skip_dedup=True)
         u2, _, _, s2 = g._known_snapshot()
         assert s2 != s1, "D 格签名未变：%r -> %r" % (s1, s2)
-        assert u2 is u1, (
-            "D 格（删 1 增 2）的增量路径被改动 —— 本件不得改 D 的既有行为"
-            "（#462 残留属另一笔账面）：union 对象应复用")
+        assert u2 is not u1, (
+            "删 1 增 2 仍走增量并入（union 对象被复用）—— #462 修复后必须全量重建")
+        assert not (victim_grams & u2), (
+            "被删节点的 gram 仍留在参考集（#462）：%r" % sorted(victim_grams & u2))
     finally:
         e.close()
 

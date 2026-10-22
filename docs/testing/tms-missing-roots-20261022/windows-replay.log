@@ -1,0 +1,85 @@
+CASE fixed
+......                                                                   [100%]
+6 passed in 0.86s
+
+CASE baseline
+FFFF..                                                                   [100%]
+================================== FAILURES ===================================
+_____ test_deleted_root_cannot_recover_confidence_from_retained_evidence ______
+tests\test_tms_missing_roots.py:42: in test_deleted_root_cannot_recover_confidence_from_retained_evidence
+    assert outcome[p] == 0.0, "deleted propagation root recovered stale evidence confidence"
+E   AssertionError: deleted propagation root recovered stale evidence confidence
+E   assert 0.666667 == 0.0
+__________ test_reopened_database_agrees_with_the_undermined_report ___________
+tests\test_tms_missing_roots.py:52: in test_reopened_database_agrees_with_the_undermined_report
+    assert other.store.get_node(c).confidence == 0.0, "persisted conclusion retained a deleted premise belief"
+E   AssertionError: persisted conclusion retained a deleted premise belief
+E   assert 0.5 == 0.0
+E    +  where 0.5 = STNode(id='node_c98fe65f_1792637563770', content='derived result', modality='text', spatial_coordinates={}, temporal_c...92637563.7706277, created_at=1792637563.7706277, tags=[], semantic_coordinates={}, state_attributes={}, entity_id=None).confidence
+E    +    where STNode(id='node_c98fe65f_1792637563770', content='derived result', modality='text', spatial_coordinates={}, temporal_c...92637563.7706277, created_at=1792637563.7706277, tags=[], semantic_coordinates={}, state_attributes={}, entity_id=None) = get_node('node_c98fe65f_1792637563770')
+E    +      where get_node = <lingshu.core.core.LayeredStore object at 0x00000197B08110A0>.get_node
+E    +        where <lingshu.core.core.LayeredStore object at 0x00000197B08110A0> = <lingshu.core.core.SpacetimeMemoryEngine object at 0x00000197B0810170>.store
+_____ test_missing_intermediate_cannot_transmit_corroborated_own_evidence _____
+tests\test_tms_missing_roots.py:68: in test_missing_intermediate_cannot_transmit_corroborated_own_evidence
+    assert outcome[c] == 0.0, "missing corroborated intermediate still supported its descendant"
+E   AssertionError: missing corroborated intermediate still supported its descendant
+E   assert 0.5 == 0.0
+_____________ test_unknown_propagation_root_has_no_implicit_prior _____________
+tests\test_tms_missing_roots.py:73: in test_unknown_propagation_root_has_no_implicit_prior
+    assert outcome == {"never-created": 0.0}, "unknown propagation roots received a prior"
+E   AssertionError: unknown propagation roots received a prior
+E   assert {'never-created': 0.5} == {'never-created': 0.0}
+E
+E     Differing items:
+E     {'never-created': 0.5} != {'never-created': 0.0}
+E     Use -v to get more diff
+=========================== short test summary info ===========================
+FAILED tests/test_tms_missing_roots.py::test_deleted_root_cannot_recover_confidence_from_retained_evidence
+FAILED tests/test_tms_missing_roots.py::test_reopened_database_agrees_with_the_undermined_report
+FAILED tests/test_tms_missing_roots.py::test_missing_intermediate_cannot_transmit_corroborated_own_evidence
+FAILED tests/test_tms_missing_roots.py::test_unknown_propagation_root_has_no_implicit_prior
+4 failed, 2 passed in 1.00s
+
+CASE trust_retained_evidence_for_missing_roots
+F                                                                        [100%]
+================================== FAILURES ===================================
+_____ test_deleted_root_cannot_recover_confidence_from_retained_evidence ______
+tests\test_tms_missing_roots.py:42: in test_deleted_root_cannot_recover_confidence_from_retained_evidence
+    assert outcome[p] == 0.0, "deleted propagation root recovered stale evidence confidence"
+E   AssertionError: deleted propagation root recovered stale evidence confidence
+E   assert 0.666667 == 0.0
+=========================== short test summary info ===========================
+FAILED tests/test_tms_missing_roots.py::test_deleted_root_cannot_recover_confidence_from_retained_evidence
+1 failed in 0.61s
+
+CASE give_unknown_roots_the_ledger_prior
+F                                                                        [100%]
+================================== FAILURES ===================================
+_____________ test_unknown_propagation_root_has_no_implicit_prior _____________
+tests\test_tms_missing_roots.py:73: in test_unknown_propagation_root_has_no_implicit_prior
+    assert outcome == {"never-created": 0.0}, "unknown propagation roots received a prior"
+E   AssertionError: unknown propagation roots received a prior
+E   assert {'never-created': 0.5} == {'never-created': 0.0}
+E
+E     Differing items:
+E     {'never-created': 0.5} != {'never-created': 0.0}
+E     Use -v to get more diff
+=========================== short test summary info ===========================
+FAILED tests/test_tms_missing_roots.py::test_unknown_propagation_root_has_no_implicit_prior
+1 failed in 0.59s
+
+CASE persist_a_default_missing_belief
+F                                                                        [100%]
+================================== FAILURES ===================================
+__________ test_reopened_database_agrees_with_the_undermined_report ___________
+tests\test_tms_missing_roots.py:52: in test_reopened_database_agrees_with_the_undermined_report
+    assert other.store.get_node(c).confidence == 0.0, "persisted conclusion retained a deleted premise belief"
+E   AssertionError: persisted conclusion retained a deleted premise belief
+E   assert 0.5 == 0.0
+E    +  where 0.5 = STNode(id='node_2ee4fe13_1792637567840', content='derived result', modality='text', spatial_coordinates={}, temporal_c...92637567.8405986, created_at=1792637567.8405986, tags=[], semantic_coordinates={}, state_attributes={}, entity_id=None).confidence
+E    +    where STNode(id='node_2ee4fe13_1792637567840', content='derived result', modality='text', spatial_coordinates={}, temporal_c...92637567.8405986, created_at=1792637567.8405986, tags=[], semantic_coordinates={}, state_attributes={}, entity_id=None) = get_node('node_2ee4fe13_1792637567840')
+E    +      where get_node = <lingshu.core.core.LayeredStore object at 0x00000128D7DD93A0>.get_node
+E    +        where <lingshu.core.core.LayeredStore object at 0x00000128D7DD93A0> = <lingshu.core.core.SpacetimeMemoryEngine object at 0x00000128D7B71160>.store
+=========================== short test summary info ===========================
+FAILED tests/test_tms_missing_roots.py::test_reopened_database_agrees_with_the_undermined_report
+1 failed in 0.63s

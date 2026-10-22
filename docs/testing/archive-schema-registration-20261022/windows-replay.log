@@ -1,0 +1,70 @@
+CASE fixed
+......                                                                   [100%]
+6 passed in 1.18s
+
+CASE baseline
+FFF...                                                                   [100%]
+================================== FAILURES ===================================
+______________ test_v3_database_is_migrated_before_normal_delete ______________
+tests\test_archive_schema_registration.py:40: in test_v3_database_is_migrated_before_normal_delete
+    assert _has_archive_table(engine), "archive_state missing after reopening a v3 database"
+E   AssertionError: archive_state missing after reopening a v3 database
+E   assert False
+E    +  where False = _has_archive_table(<lingshu.core.core.SpacetimeMemoryEngine object at 0x0000010C7F95BD10>)
+_____________ test_current_version_with_missing_table_is_repaired _____________
+tests\test_archive_schema_registration.py:52: in test_current_version_with_missing_table_is_repaired
+    assert _has_archive_table(engine), "archive_state missing after structural migration check"
+E   AssertionError: archive_state missing after structural migration check
+E   assert False
+E    +  where False = _has_archive_table(<lingshu.core.core.SpacetimeMemoryEngine object at 0x0000010C7F9CAA80>)
+___________ test_backup_roundtrip_preserves_pre_archive_importance ____________
+tests\test_archive_schema_registration.py:66: in test_backup_roundtrip_preserves_pre_archive_importance
+    assert data.get("archive_state"), "backup omitted the pre-archive restoration state"
+E   AssertionError: backup omitted the pre-archive restoration state
+E   assert None
+E    +  where None = <built-in method get of dict object at 0x0000010C7FE03380>('archive_state')
+E    +    where <built-in method get of dict object at 0x0000010C7FE03380> = {'meta': {'version': 'v1.6', 'exported_at': 1792605851.0137165, 'condition_space': '全库备份 · 有损投影', 'skipped_tables': ['...nt': 'archive and restore', 'modality': 'text', 'spatial_coordinates': '{}', ...}], 'edges': [], 'blindspots': [], ...}.get
+=========================== short test summary info ===========================
+FAILED tests/test_archive_schema_registration.py::test_v3_database_is_migrated_before_normal_delete
+FAILED tests/test_archive_schema_registration.py::test_current_version_with_missing_table_is_repaired
+FAILED tests/test_archive_schema_registration.py::test_backup_roundtrip_preserves_pre_archive_importance
+3 failed, 3 passed in 1.15s
+
+CASE ignore_archive_schema_structure
+F                                                                        [100%]
+================================== FAILURES ===================================
+_____________ test_current_version_with_missing_table_is_repaired _____________
+tests\test_archive_schema_registration.py:52: in test_current_version_with_missing_table_is_repaired
+    assert _has_archive_table(engine), "archive_state missing after structural migration check"
+E   AssertionError: archive_state missing after structural migration check
+E   assert False
+E    +  where False = _has_archive_table(<lingshu.core.core.SpacetimeMemoryEngine object at 0x0000017EBC80BFE0>)
+=========================== short test summary info ===========================
+FAILED tests/test_archive_schema_registration.py::test_current_version_with_missing_table_is_repaired
+1 failed in 0.61s
+
+CASE omit_archive_backup_rows
+F                                                                        [100%]
+================================== FAILURES ===================================
+___________ test_backup_roundtrip_preserves_pre_archive_importance ____________
+tests\test_archive_schema_registration.py:66: in test_backup_roundtrip_preserves_pre_archive_importance
+    assert data.get("archive_state"), "backup omitted the pre-archive restoration state"
+E   AssertionError: backup omitted the pre-archive restoration state
+E   assert None
+E    +  where None = <built-in method get of dict object at 0x00000247A6759940>('archive_state')
+E    +    where <built-in method get of dict object at 0x00000247A6759940> = {'meta': {'version': 'v1.6', 'exported_at': 1792605853.8189235, 'condition_space': '全库备份 · 有损投影', 'skipped_tables': ['...nt': 'archive and restore', 'modality': 'text', 'spatial_coordinates': '{}', ...}], 'edges': [], 'blindspots': [], ...}.get
+=========================== short test summary info ===========================
+FAILED tests/test_archive_schema_registration.py::test_backup_roundtrip_preserves_pre_archive_importance
+1 failed in 0.61s
+
+CASE ignore_archive_import_role
+F                                                                        [100%]
+================================== FAILURES ===================================
+_____________ test_shared_archive_state_cannot_be_imported_by_sub _____________
+tests\test_archive_schema_registration.py:92: in test_shared_archive_state_cannot_be_imported_by_sub
+    assert row is None, "SUB import wrote shared archive state"
+E   AssertionError: SUB import wrote shared archive state
+E   assert <sqlite3.Row object at 0x0000021610D2FBB0> is None
+=========================== short test summary info ===========================
+FAILED tests/test_archive_schema_registration.py::test_shared_archive_state_cannot_be_imported_by_sub
+1 failed in 0.61s

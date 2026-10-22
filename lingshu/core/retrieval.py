@@ -12,7 +12,9 @@
     零新依赖（标准库 sqlite3 自带 FTS5；不可用时整体回退原路径）。
   - 同步不靠在触发器里切词（那会要求每条连接都注册 Python 函数）：触发器只把变更节点
     id 写进脏队列 ``nodes_fts_dirty``（纯 SQL，任何连接、任何写入路径——包括绕过
-    ``add_node`` 的裸 SQL——都会入队），检索前由 Python 增量排空。
+    ``add_node`` 的裸 SQL——都会入队），检索前由 Python 增量排空；#797 起
+    ``LayeredStore.add_node`` 写路径提交后**立即**排空一次（节点行与索引行同事务
+    可见），绕过 ``add_node`` 的路径仍靠检索前排空兜底。
   - ``INSERT OR REPLACE`` 会换 rowid，故 FTS 行与节点经 ``nodes_fts_map(nid→frid)``
     以 id 关联；内容哈希不变的重复写入（如只改置信度）跳过重建。
 
@@ -231,14 +233,35 @@ class FTSIndex:
         except sqlite3.Error:
             pass
 
+    def _tracking_epoch(self) -> int:
+        """派生索引失去跟踪时交回原检索路径，不把空缓存当成无记忆。
+
+        默认配置的另一实例会 detach 全库触发器；存活对象不能仅凭存在就
+        继续相信索引。schema_version 同时用于识别一次读取期间的拆除/重挂。
+        """
+        conn = self.store.conn
+        epoch = conn.execute("PRAGMA schema_version").fetchone()[0]
+        names = {r[0] for r in conn.execute(
+            "SELECT name FROM sqlite_master WHERE type='trigger' AND name IN (?,?,?)",
+            _TRIGGERS)}
+        if names != set(_TRIGGERS):
+            raise sqlite3.OperationalError("FTS 跟踪触发器不完整，回退原检索路径")
+        return epoch
+
+    def _require_tracking_epoch(self, epoch: int) -> None:
+        if self.store.conn.execute("PRAGMA schema_version").fetchone()[0] != epoch:
+            raise sqlite3.OperationalError("FTS 读取期间派生结构已变更，回退原检索路径")
+
     # ---------- 增量同步 ----------
     def sync(self, batch: int = 2000) -> int:
         store = self.store
         done = 0
+        epoch = self._tracking_epoch()
         while True:
             c = store.conn
             ids = [r[0] for r in c.execute("SELECT nid FROM nodes_fts_dirty LIMIT ?", (batch,))]
             if not ids:
+                self._require_tracking_epoch(epoch)
                 return done
             with store._tx():
                 for nid in ids:
@@ -264,7 +287,16 @@ class FTSIndex:
     # ---------- 检索 ----------
     def candidates(self, query_terms: Sequence[str], layers=None,
                    k: int = 100) -> Optional[List[Tuple[tuple, float]]]:
-        """返回 [(nodes 行, BM25 正分)]，按 BM25 降序；无可用二元组时返回 None（交回原路径）。"""
+        """返回 [(nodes 行, BM25 正分)]，按 BM25 降序；无可用二元组时返回 None（交回原路径）。
+
+        #797：``query_terms`` 收到**裸字符串**（如 ``candidates('full text search')``）时，
+        ``str`` 本身是 ``Sequence[str]``——按字符迭代会把查询拆成单字，而索引文档是
+        二元组 token，单字 MATCH 恒零命中 ⇒ 恒空列表（#797 复现读数之二）。此处把
+        裸字符串按**一个词条**处理（与 ``candidates(['full text search'])`` 等价，
+        ``grams`` 自带空白折叠，跨词二元组同样成立）。内部调用方（``_search_content_fts``
+        传词条列表）行为不变。"""
+        if isinstance(query_terms, str):
+            query_terms = [query_terms]
         toks: List[str] = []
         seen = set()
         for t in query_terms:
@@ -275,6 +307,7 @@ class FTSIndex:
         if not toks:
             return None
         toks = toks[:MAX_QUERY_GRAMS]
+        epoch = self._tracking_epoch()
         self.sync()
         match = " OR ".join('"' + g + '"' for g in toks)
         # 先在 FTS 内部按 rank 截断（rank 即 bm25，FTS5 对 ORDER BY rank LIMIT 走 top-k 优化），
@@ -300,10 +333,15 @@ class FTSIndex:
             if n_inner <= inner:
                 break
             inner = inner << 2  # 内层放大 4 倍
+        self._require_tracking_epoch(epoch)
         return [(tuple(r)[:-1], -float(r["_b"])) for r in rows[:want]]
 
     def scores_within(self, query_terms: Sequence[str], nids: Sequence[str]) -> dict:
-        """{nid: BM25 正分}：只在给定节点集合内打分（结构锚定的容器内排序）；未命中者不出现。"""
+        """{nid: BM25 正分}：只在给定节点集合内打分（结构锚定的容器内排序）；未命中者不出现。
+
+        #797：与 ``candidates`` 同款裸字符串容错（见该方法 docstring）。"""
+        if isinstance(query_terms, str):
+            query_terms = [query_terms]
         toks: List[str] = []
         seen = set()
         for t in query_terms:
@@ -313,6 +351,7 @@ class FTSIndex:
                     toks.append(g)
         if not toks or not nids:
             return {}
+        epoch = self._tracking_epoch()
         self.sync()
         match = " OR ".join('"' + g + '"' for g in toks[:MAX_QUERY_GRAMS])
         conn = self.store.conn
@@ -325,6 +364,7 @@ class FTSIndex:
                    % ",".join("?" for _ in part))
             for r in conn.execute(sql, [match] + part).fetchall():
                 out[r["nid"]] = -float(r["b"])
+        self._require_tracking_epoch(epoch)
         return out
 
     def temporal_neighbors(self, nids: Sequence[str], layers=None,
