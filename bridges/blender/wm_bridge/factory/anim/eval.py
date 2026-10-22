@@ -489,18 +489,21 @@ def _projectile_state(m, t, where="motion"):
     rem = tau
     bounces = 0
     max_b = int(m.get("max_bounces") or 8)
-    # 与主实现同判据（#777）：只有「第 1 轮就没有下一次落地」与「预算用尽」才钳位；
-    # `disc < 0`（永远回不到地面）与 `rem < flight`（正常空中腿）保持自由抛体外推。
+    # 与主实现同判据（#777/#817）：钳位只发生在 (a) 预算用尽、(b) 两根皆非正且
+    # pz >= ground（贴地静止）；`disc < 0`（永远回不到地面）、两根皆非正且
+    # pz < ground（落点在「过去」）、以及 `rem < flight`（正常空中腿）都自由抛体。
     resting = False
     while True:
         disc = vz * vz - 2.0 * gz * (pz - ground)
-        if disc < 0.0:                       # 数值噪声：已经在下面了，贴地处理
+        if disc < 0.0:                       # 永远回不到地面 ⇒ 自由抛体（不钳位）
             break
         flight = (-vz - math.sqrt(disc)) / gz
         if flight <= 0.0:
             flight = (-vz + math.sqrt(disc)) / gz
         if flight <= 0.0:
-            resting = True
+            # 与主实现同判据（#817）：两根皆非正 ⇒ 只有 pz >= ground（贴地静止）
+            # 才钳位；pz < ground（落点在「过去」）走自由抛体，不把面下初值抬上来。
+            resting = pz >= ground
             break
         if rem < flight:
             break
