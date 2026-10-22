@@ -1,0 +1,79 @@
+CASE fixed
+......                                                                   [100%]
+6 passed in 0.37s
+
+CASE baseline
+FFFF..                                                                   [100%]
+================================== FAILURES ===================================
+_______ test_initial_connection_directions_match_the_real_base_network ________
+tests\test_unit_direction.py:17: in test_initial_connection_directions_match_the_real_base_network
+    assert np.array_equal(actual, expected), "initial inhibitory connections changed direction"
+E   AssertionError: initial inhibitory connections changed direction
+E   assert False
+E    +  where False = <function array_equal at 0x000001F94A95EA70>(array([1., 1., 1., 1., 1., 1., 1., 1., 1., 1., 1., 1., 1., 1., 1., 1., 1.,\n       1., 1., 1., 1., 1., 1., 1., 1., 1., 1., 1., 1., 1., 1., 1., 1., 1.,\n       1., 1.]), array([ 1., -1., -1.,  1.,  1., -1.,  1., -1., -1.,  1.,  1., -1., -1.,\n        1.,  1.,  1., -1.,  1.,  1.,  1.,  1., -1., -1.,  1.,  1., -1.,\n        1., -1., -1., -1.,  1.,  1., -1., -1.,  1., -1.]))
+E    +    where <function array_equal at 0x000001F94A95EA70> = np.array_equal
+________________ test_inhibitory_feature_lowers_its_card_logit ________________
+tests\test_unit_direction.py:26: in test_inhibitory_feature_lowers_its_card_logit
+    assert logits[1, card] < logits[0, card], "declared inhibitory feature raised its card logit"
+E   AssertionError: declared inhibitory feature raised its card logit
+E   assert np.float64(1.3188898545316046) < np.float64(0.0)
+_________ test_loading_negative_gain_cannot_flip_a_declared_direction _________
+tests\test_unit_direction.py:36: in test_loading_negative_gain_cannot_flip_a_declared_direction
+    assert np.all(unit.gain[unit.mask > 0] >= 0), "negative loaded gain reversed a declared connection"
+E   AssertionError: negative loaded gain reversed a declared connection
+E   assert np.False_
+E    +  where np.False_ = <function all at 0x000001F94A9C2DB0>(array([-1., -1., -1., -1., -1., -1., -1., -1., -1., -1., -1., -1., -1.,\n       -1., -1., -1., -1., -1., -1., -1., -1., -1., -1., -1., -1., -1.,\n       -1., -1., -1., -1., -1., -1., -1., -1., -1., -1.]) >= 0)
+E    +    where <function all at 0x000001F94A9C2DB0> = np.all
+_ test_finite_difference_training_preserves_the_frozen_connection_directions __
+tests\test_unit_direction.py:52: in test_finite_difference_training_preserves_the_frozen_connection_directions
+    assert np.all(unit.gain[mask > 0] >= 0), "training reversed a frozen connection direction"
+E   AssertionError: training reversed a frozen connection direction
+E   assert np.False_
+E    +  where np.False_ = <function all at 0x000001F94A9C2DB0>(array([ 1.5       ,  0.        , -2.        ,  1.27172383,  2.        ,\n       -2.        ,  2.        , -2.        , ...  0.5       ,  1.19548994,\n        0.8329369 ,  1.43543036,  1.55229115,  1.26052461,  1.5       ,\n       -0.77766586]) >= 0)
+E    +    where <function all at 0x000001F94A9C2DB0> = np.all
+=========================== short test summary info ===========================
+FAILED tests/test_unit_direction.py::test_initial_connection_directions_match_the_real_base_network
+FAILED tests/test_unit_direction.py::test_inhibitory_feature_lowers_its_card_logit
+FAILED tests/test_unit_direction.py::test_loading_negative_gain_cannot_flip_a_declared_direction
+FAILED tests/test_unit_direction.py::test_finite_difference_training_preserves_the_frozen_connection_directions
+4 failed, 2 passed in 0.50s
+
+CASE restore_signed_initial_gain
+F                                                                        [100%]
+================================== FAILURES ===================================
+_______ test_initial_connection_directions_match_the_real_base_network ________
+tests\test_unit_direction.py:17: in test_initial_connection_directions_match_the_real_base_network
+    assert np.array_equal(actual, expected), "initial inhibitory connections changed direction"
+E   AssertionError: initial inhibitory connections changed direction
+E   assert False
+E    +  where False = <function array_equal at 0x0000022CEAAA3270>(array([1., 1., 1., 1., 1., 1., 1., 1., 1., 1., 1., 1., 1., 1., 1., 1., 1.,\n       1., 1., 1., 1., 1., 1., 1., 1., 1., 1., 1., 1., 1., 1., 1., 1., 1.,\n       1., 1.]), array([ 1., -1., -1.,  1.,  1., -1.,  1., -1., -1.,  1.,  1., -1., -1.,\n        1.,  1.,  1., -1.,  1.,  1.,  1.,  1., -1., -1.,  1.,  1., -1.,\n        1., -1., -1., -1.,  1.,  1., -1., -1.,  1., -1.]))
+E    +    where <function array_equal at 0x0000022CEAAA3270> = np.array_equal
+=========================== short test summary info ===========================
+FAILED tests/test_unit_direction.py::test_initial_connection_directions_match_the_real_base_network
+1 failed in 0.42s
+
+CASE allow_negative_loaded_gain
+F                                                                        [100%]
+================================== FAILURES ===================================
+_________ test_loading_negative_gain_cannot_flip_a_declared_direction _________
+tests\test_unit_direction.py:36: in test_loading_negative_gain_cannot_flip_a_declared_direction
+    assert np.all(unit.gain[unit.mask > 0] >= 0), "negative loaded gain reversed a declared connection"
+E   AssertionError: negative loaded gain reversed a declared connection
+E   assert np.False_
+E    +  where np.False_ = <function all at 0x00000276FE2D27F0>(array([-1., -1., -1., -1., -1., -1., -1., -1., -1., -1., -1., -1., -1.,\n       -1., -1., -1., -1., -1., -1., -1., -1., -1., -1., -1., -1., -1.,\n       -1., -1., -1., -1., -1., -1., -1., -1., -1., -1.]) >= 0)
+E    +    where <function all at 0x00000276FE2D27F0> = np.all
+=========================== short test summary info ===========================
+FAILED tests/test_unit_direction.py::test_loading_negative_gain_cannot_flip_a_declared_direction
+1 failed in 0.42s
+
+CASE discard_declared_direction_in_forward
+F                                                                        [100%]
+================================== FAILURES ===================================
+________________ test_inhibitory_feature_lowers_its_card_logit ________________
+tests\test_unit_direction.py:26: in test_inhibitory_feature_lowers_its_card_logit
+    assert logits[1, card] < logits[0, card], "declared inhibitory feature raised its card logit"
+E   AssertionError: declared inhibitory feature raised its card logit
+E   assert np.float64(1.3188898545316046) < np.float64(0.0)
+=========================== short test summary info ===========================
+FAILED tests/test_unit_direction.py::test_inhibitory_feature_lowers_its_card_logit
+1 failed in 0.43s
