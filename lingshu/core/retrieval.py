@@ -12,7 +12,9 @@
     零新依赖（标准库 sqlite3 自带 FTS5；不可用时整体回退原路径）。
   - 同步不靠在触发器里切词（那会要求每条连接都注册 Python 函数）：触发器只把变更节点
     id 写进脏队列 ``nodes_fts_dirty``（纯 SQL，任何连接、任何写入路径——包括绕过
-    ``add_node`` 的裸 SQL——都会入队），检索前由 Python 增量排空。
+    ``add_node`` 的裸 SQL——都会入队），检索前由 Python 增量排空；#797 起
+    ``LayeredStore.add_node`` 写路径提交后**立即**排空一次（节点行与索引行同事务
+    可见），绕过 ``add_node`` 的路径仍靠检索前排空兜底。
   - ``INSERT OR REPLACE`` 会换 rowid，故 FTS 行与节点经 ``nodes_fts_map(nid→frid)``
     以 id 关联；内容哈希不变的重复写入（如只改置信度）跳过重建。
 
@@ -264,7 +266,16 @@ class FTSIndex:
     # ---------- 检索 ----------
     def candidates(self, query_terms: Sequence[str], layers=None,
                    k: int = 100) -> Optional[List[Tuple[tuple, float]]]:
-        """返回 [(nodes 行, BM25 正分)]，按 BM25 降序；无可用二元组时返回 None（交回原路径）。"""
+        """返回 [(nodes 行, BM25 正分)]，按 BM25 降序；无可用二元组时返回 None（交回原路径）。
+
+        #797：``query_terms`` 收到**裸字符串**（如 ``candidates('full text search')``）时，
+        ``str`` 本身是 ``Sequence[str]``——按字符迭代会把查询拆成单字，而索引文档是
+        二元组 token，单字 MATCH 恒零命中 ⇒ 恒空列表（#797 复现读数之二）。此处把
+        裸字符串按**一个词条**处理（与 ``candidates(['full text search'])`` 等价，
+        ``grams`` 自带空白折叠，跨词二元组同样成立）。内部调用方（``_search_content_fts``
+        传词条列表）行为不变。"""
+        if isinstance(query_terms, str):
+            query_terms = [query_terms]
         toks: List[str] = []
         seen = set()
         for t in query_terms:
@@ -303,7 +314,11 @@ class FTSIndex:
         return [(tuple(r)[:-1], -float(r["_b"])) for r in rows[:want]]
 
     def scores_within(self, query_terms: Sequence[str], nids: Sequence[str]) -> dict:
-        """{nid: BM25 正分}：只在给定节点集合内打分（结构锚定的容器内排序）；未命中者不出现。"""
+        """{nid: BM25 正分}：只在给定节点集合内打分（结构锚定的容器内排序）；未命中者不出现。
+
+        #797：与 ``candidates`` 同款裸字符串容错（见该方法 docstring）。"""
+        if isinstance(query_terms, str):
+            query_terms = [query_terms]
         toks: List[str] = []
         seen = set()
         for t in query_terms:

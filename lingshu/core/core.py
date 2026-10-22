@@ -2198,6 +2198,28 @@ class LayeredStore:
                              "protections_row": node.id in set(self.get_protected_nodes()),
                              "old_tags": list(overwrite_protected.tags or [])})
             self._commit_locked()
+        # #797：FTS 索引同步写入——`LINGSHU_FTS=1` 时节点写路径不再把索引更新
+        # 拖到「下一次检索」（旧实现在 add_node 落库后只靠触发器入脏队列，由
+        # `candidates()` 检索前排空 ⇒ 写入与检索之间 `nodes_fts` 恒 0 行，外部
+        # 连接读到的派生索引始终为空，`LINGSHU_FTS=1` 形同虚设）。修法（与 issue
+        # 建议同向，挂在**唯一写入汇聚点**——add_perception / add_context /
+        # set_anchor / add_structure_node / 自我快照全部经此）：本方法提交后立即
+        # `sync()` 排空脏队列，索引行与节点行同连接同事务可见（嵌套事务下 sync
+        # 走 SAVEPOINT，随外层一并提交/回滚，不会产生孤儿 FTS 行）。
+        # `import_all` 的裸 INSERT 路径不在本闸内——其脏队列仍由检索前的 lazy
+        # sync 增量补齐（既有机制，非本件收口面）。
+        # 失败面：FTS 是派生索引，sync 的 sqlite 失败不应炸掉已提交的节点写——
+        # 降级为 warn 并保留脏队列（lazy sync 下次检索重试）；按仓内纪律宽 except
+        # 必须带 warn，此处收窄到 `sqlite3.Error`（`sync` 自身不吞错）。
+        fts = getattr(self, "_fts", None)
+        if fts is not None:
+            try:
+                fts.sync()
+            except sqlite3.Error as exc:
+                warnings.warn(
+                    "#797 FTS 写路径同步失败（已提交的节点不受影响，索引留待下次"
+                    "检索前增量补齐）：%s: %s" % (type(exc).__name__, exc),
+                    RuntimeWarning, stacklevel=2)
         return node.id
 
     # ---- 引擎元数据（engine_meta key-value，跨进程持久化） ----
