@@ -1,0 +1,13 @@
+{
+  "guard": "tests/test_unit_direction.py", "total": 6,
+  "sources": ["lingshu/nn/hex_unit.py"],
+  "baseline_failures": ["test_initial_connection_directions_match_the_real_base_network", "test_inhibitory_feature_lowers_its_card_logit", "test_loading_negative_gain_cannot_flip_a_declared_direction", "test_finite_difference_training_preserves_the_frozen_connection_directions"],
+  "mutations": [
+    {"name": "restore_signed_initial_gain", "test": "test_initial_connection_directions_match_the_real_base_network", "assertion": "initial inhibitory connections changed direction",
+      "changes": [{"file": "lingshu/nn/hex_unit.py", "class": "UnitHeadNet", "method": "__init__", "old": "np.abs(head[c, idx]) / m * 1.5", "new": "head[c, idx] / m * 1.5"}]},
+    {"name": "allow_negative_loaded_gain", "test": "test_loading_negative_gain_cannot_flip_a_declared_direction", "assertion": "negative loaded gain reversed a declared connection",
+      "changes": [{"file": "lingshu/nn/hex_unit.py", "class": "UnitHeadNet", "method": "set_vec", "old": "np.clip(v[:k], 0.0, self.GAIN_BOUND)", "new": "np.clip(v[:k], -self.GAIN_BOUND, self.GAIN_BOUND)"}]},
+    {"name": "discard_declared_direction_in_forward", "test": "test_inhibitory_feature_lowers_its_card_logit", "assertion": "declared inhibitory feature raised its card logit",
+      "changes": [{"file": "lingshu/nn/hex_unit.py", "class": "UnitHeadNet", "method": "logits", "old": "(self.dir * self.gain) @ feat.T", "new": "self.gain @ feat.T"}]}
+  ]
+}
