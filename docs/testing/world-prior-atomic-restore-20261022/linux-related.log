@@ -7,3 +7,152 @@ SUMMARY manifests=2 entries=64 match=64 mismatch=0 bytes_mismatch=0 missing=0 ma
 
 TIME-CORE
 exit=0; raw log SHA256 6fab212a6115dd5eb201ee814513f2436cb913593a4d78a5751d3d1f8012ebfb
+
+IMPORT CLASSIFICATION REGISTRATION
+# guard temp base: <temporary-test-root>
+== A 组：逐名毒 cwd —— -c 形态构造（MARKER 不得出现） ==
+  PASS A1[entity_registry] -c 构造 rc=0 且有读数
+  PASS A2[entity_registry] 毒同名 .py 未被执行（MARKER 不存在）
+  PASS A3[entity_registry] 毒模块未进入 sys.modules
+  PASS A4[entity_registry] 该组件未装配且错误文本为原生形态（_v13_error）
+  PASS A1[cognitive_orchestrator] -c 构造 rc=0 且有读数
+  PASS A2[cognitive_orchestrator] 毒同名 .py 未被执行（MARKER 不存在）
+  PASS A3[cognitive_orchestrator] 毒模块未进入 sys.modules
+  PASS A4[cognitive_orchestrator] 该组件未装配且错误文本为原生形态（_v13_error）
+  PASS A1[blindspot_learning_loop] -c 构造 rc=0 且有读数
+  PASS A2[blindspot_learning_loop] 毒同名 .py 未被执行（MARKER 不存在）
+  PASS A3[blindspot_learning_loop] 毒模块未进入 sys.modules
+  PASS A4[blindspot_learning_loop] 该组件未装配且错误文本为原生形态（_v13_error）
+  PASS A1[semantic_space] -c 构造 rc=0 且有读数
+  PASS A2[semantic_space] 毒同名 .py 未被执行（MARKER 不存在）
+  PASS A3[semantic_space] 毒模块未进入 sys.modules
+  PASS A4[semantic_space] 该组件未装配且错误文本为原生形态（_semantic_error）
+  PASS A1[attention_policy] -c 构造 rc=0 且有读数
+  PASS A2[attention_policy] 毒同名 .py 未被执行（MARKER 不存在）
+  PASS A3[attention_policy] 毒模块未进入 sys.modules
+  PASS A4[attention_policy] 该组件未装配且错误文本为原生形态（_attention_error）
+  PASS A1[lifecycle_engine] -c 构造 rc=0 且有读数
+  PASS A2[lifecycle_engine] 毒同名 .py 未被执行（MARKER 不存在）
+  PASS A3[lifecycle_engine] 毒模块未进入 sys.modules
+  PASS A4[lifecycle_engine] 该组件未装配且错误文本为原生形态（_lifecycle_error）
+  PASS A1[flywheel_engine] -c 构造 rc=0 且有读数
+  PASS A2[flywheel_engine] 毒同名 .py 未被执行（MARKER 不存在）
+  PASS A3[flywheel_engine] 毒模块未进入 sys.modules
+  PASS A4[flywheel_engine] 该组件未装配且错误文本为原生形态（_flywheel_error）
+  PASS A1[self_cognition_engine] -c 构造 rc=0 且有读数
+  PASS A2[self_cognition_engine] 毒同名 .py 未被执行（MARKER 不存在）
+  PASS A3[self_cognition_engine] 毒模块未进入 sys.modules
+  PASS A4[self_cognition_engine] 该组件未装配且错误文本为原生形态（_self_cognition_error）
+  PASS A1[body] -c 构造 rc=0 且有读数
+  PASS A2[body] 毒同名 .py 未被执行（MARKER 不存在）
+  PASS A3[body] 毒模块未进入 sys.modules
+  PASS A4[body] 该组件未装配且错误文本为原生形态（_body_error）
+== A 组：pytest 形态构造（毒目录内含 test 文件，pytest 收集即 sys.path[0]=毒目录） ==
+  PASS A5[entity_registry] pytest 形态：毒组件未执行、守卫测试绿
+  PASS A5[cognitive_orchestrator] pytest 形态：毒组件未执行、守卫测试绿
+  PASS A5[blindspot_learning_loop] pytest 形态：毒组件未执行、守卫测试绿
+  PASS A5[semantic_space] pytest 形态：毒组件未执行、守卫测试绿
+  PASS A5[attention_policy] pytest 形态：毒组件未执行、守卫测试绿
+  PASS A5[lifecycle_engine] pytest 形态：毒组件未执行、守卫测试绿
+  PASS A5[flywheel_engine] pytest 形态：毒组件未执行、守卫测试绿
+  PASS A5[self_cognition_engine] pytest 形态：毒组件未执行、守卫测试绿
+  PASS A5[body] pytest 形态：毒组件未执行、守卫测试绿
+== A 组：链式位置收口——前一行成功时后续裸名仍不走 cwd ==
+  PASS A7a 链式毒文件（cognitive_orchestrator/blindspot_learning_loop）未被执行
+  PASS A7b 后续裸名在受控面缺失 ⇒ 原生缺失错误（不回落 cwd）
+  PASS A7c 显式根给全 v13 三件套 ⇒ _v13_ready=True、三槽位齐备（成功路径未破坏）
+  PASS A7d 链完整装配时毒 cwd 仍不执行
+== A 组：调用期同类裸名——毒 cwd 在首次调用触发时也不执行 ==
+  PASS A8a 调用期四类毒文件（vision/pattern_separation/scene_reconstruction/game_web）均未被执行
+  PASS A8b perceive_image 触发 vision 裸名 ⇒ 未装配降级（不落 cwd）
+  PASS A8c pattern_separation/scene_reconstruction/game_web 触发 ⇒ 原生缺失降级
+== A 组：10 名毒文件同时在场 → 一次构造全部不执行 ==
+  PASS A6 10 名毒文件同时在场：无一个被执行（MARKER.txt 不存在）
+== B 组：装配失败告警出口（warnings + self_check 字段） ==
+  PASS B1a -W always 构造成功 rc=0
+  PASS B1b 告警通道可观测（stderr ≥8 条 ComponentDiscoveryWarning，含 [issue156]）
+  PASS B1c 告警文本点名具体组件（此前装配失败完全静默）
+  PASS B2a self_check() 可取 component_assembly
+  PASS B2b component_assembly.failed 覆盖全部 9 个构造期组件
+  PASS B2b-34 prediction_engine 装配成功（#34：旧实现裸导入恒失败）
+  PASS B2c discovery.guard_installed=True（解析守卫在场）
+  PASS B2d discovery 报告：cwd/空串条目的解析**被拒**（refused_cwd_entry_count≥1，路 B 语义；旧口径 removed_count 恒 0）
+  PASS B2d-2 discovery 报告：cwd 条目**仍在** sys.path（路 B：不删条目）
+  PASS B2e 白名单含全部已知 15 名
+  PASS B2f discovery.path_scrub 可观测（applied + 解析期拒绝面在位 + refused_cwd_entry_count≥1 + 逃生口关）
+  PASS B3 告警被压制（-W ignore）时：构造不崩、self_check 通道仍报告全部失败（两路独立）
+== C 组：装配成功路径未被修坏（显式根 / PYTHONPATH / sys.modules 别名 / 合法条目保留） ==
+  PASS C1a 显式根（LINGSHU_COMPONENT_ROOT）：self_cognition_engine 正常装上
+  PASS C1b 显式根：body 正常装上
+  PASS C1c 显式根：semantic_space 正常装上
+  PASS C1d 显式根在场时毒 cwd 依旧不执行
+  PASS C2 PYTHONPATH（部署方显式面，非 cwd）：组件正常装上
+  PASS C3a sys.modules 别名（AEIS 命名空间注册形态）：命中别名，装配成功
+  PASS C3b 别名优先时毒 cwd 不执行
+  PASS C4 显式根提供 game_web 包（含子模块 generate）⇒ world_generator 正常装上
+  PASS C5 非 cwd 合法条目（PYTHONPATH 的 ghost .zip/.egg/ns 目录 + 仓根）未被误删
+== R 组（#34）：prediction_engine 相对导入回退（成功 + 收口两腿） ==
+  PASS R1[#34] 本仓形态：prediction_engine 装配成功、无错误（旧实现恒 None）
+  PASS R2[#34] 毒 cwd 的 prediction_engine.py 未被执行（回退腿不绕过 #156 收口）
+  PASS R3[#34] 受控面（显式根）提供该组件时优先命中（回退腿不夺取受控面语义）
+== D 组：全仓裸名分类（有牙）——标准库/组件/已知第三方/未知 ==
+  PASS D0a 标准库白名单 ⊆ sys.stdlib_module_names（解释器权威清单校验）
+  PASS D1 全仓裸名扫描：已知 15 名全部出现（≥20 处引用）
+  PASS D2 未知裸名 = ∅（出现未知即红：须登记为组件白名单/标准库/已知第三方）
+  PASS D3 白名单未缩水（≥已知 15 名）
+  PASS D4a 干净副本：未知裸名 = ∅（基线）
+  PASS D4b **有牙自证**：注入新裸名 totally_new_component_xyz_156 ⇒ 判据检为「未知」（必红）
+== F 组：标准库劫持面（v2 核心）——逐名毒 cwd 在 -c 形态下不执行 ==
+  PASS F1[json] -c 形态：cwd 毒 json.py 未执行、引擎照常装配 rc=0
+  PASS F1[hashlib] -c 形态：cwd 毒 hashlib.py 未执行、引擎照常装配 rc=0
+  PASS F1[hmac] -c 形态：cwd 毒 hmac.py 未执行、引擎照常装配 rc=0
+  PASS F1[sqlite3] -c 形态：cwd 毒 sqlite3.py 未执行、引擎照常装配 rc=0
+  PASS F1[threading] -c 形态：cwd 毒 threading.py 未执行、引擎照常装配 rc=0
+  PASS F1[uuid] -c 形态：cwd 毒 uuid.py 未执行、引擎照常装配 rc=0
+  PASS F1[dataclasses] -c 形态：cwd 毒 dataclasses.py 未执行、引擎照常装配 rc=0
+  PASS F1[typing] -c 形态：cwd 毒 typing.py 未执行、引擎照常装配 rc=0
+  PASS F1[inspect] -c 形态：cwd 毒 inspect.py 未执行、引擎照常装配 rc=0
+  PASS F1[ast] -c 形态：cwd 毒 ast.py 未执行、引擎照常装配 rc=0
+  PASS F1[contextlib] -c 形态：cwd 毒 contextlib.py 未执行、引擎照常装配 rc=0
+  PASS F1[datetime] -c 形态：cwd 毒 datetime.py 未执行、引擎照常装配 rc=0
+  PASS F1[enum] -c 形态：cwd 毒 enum.py 未执行、引擎照常装配 rc=0
+  PASS F1[collections] -c 形态：cwd 毒 collections.py 未执行、引擎照常装配 rc=0
+  PASS F1[copy] -c 形态：cwd 毒 copy.py 未执行、引擎照常装配 rc=0
+  PASS F1 汇总：15 个标准库毒名全部未执行（executed=0/15）
+  PASS F2 -m 形态（sys.path[0]=cwd 绝对路径）：cwd 毒 json.py 未执行、引擎照常装配
+== F3 组：非标准库第三方裸名（numpy/scipy）毒 cwd 逐名断言 ==
+  PASS F3a[numpy] 子进程取到读数 rc=0
+  PASS F3b[numpy] 毒 cwd 的 numpy.py 未被执行（MARKER 不存在）
+  PASS F3c[numpy] 解析结果**不是** cwd 毒件（非标准库裸名不落 cwd 面）
+  PASS F3a[scipy] 子进程取到读数 rc=0
+  PASS F3b[scipy] 毒 cwd 的 scipy.py 未被执行（MARKER 不存在）
+  PASS F3c[scipy] 解析结果**不是** cwd 毒件（非标准库裸名不落 cwd 面）
+  PASS F3 汇总：2 个非标准库第三方裸名毒文件全部未执行（executed=0/2）
+== G 组：逃生口 LINGSHU_ALLOW_CWD_IMPORTS（默认关；开＝放弃本层保护） ==
+  PASS G1a 逃生口关：子进程取到状态
+  PASS G1b 逃生口关：cwd 下同名的标准库文件（json.py）未被**执行**（MARKER 不存在）、引擎照常装配 rc=0
+  PASS G1b-2 逃生口关：cwd/空串条目**仍在** sys.path（路 B：不删条目、不改写宿主进程全局状态）
+  PASS G1c 逃生口关：状态标解析期拒绝面生效（route_finder_installed=True / refused_cwd_entry_count≥1）且逃生口关
+  PASS G1c-2 逃生口关：escape_hatch_open=False / cwd_scrub_active=True / removed_count=0（路 B 不删条目）
+  PASS G1d removed_kinds / refused_cwd_kinds 不含本机绝对路径（只记种类）
+  PASS G2a 逃生口开：子进程取到状态
+  PASS G2b 逃生口开：'' 被**保留**（本层保护关闭）
+  PASS G2c 逃生口开：状态标 escape_hatch_open=True / kept_cwd_kinds 非空
+  PASS G2d 逃生口开：stderr 有明确告警（CwdImportsAllowed + [issue156-v2]）
+  PASS G3 逃生口开 + cwd 毒 json.py ⇒ MARKER 出现（如实记录：开＝放弃本层保护）
+== S 组：脚本目录边界——`python <script>.py` 且脚本目录 != cwd ==
+  PASS S1 脚本目录（!= cwd）里的白名单毒组件未被执行（v1 漏点）
+  PASS S2 脚本目录不被当作受控面 ⇒ 白名单名原生缺失（不回落脚本目录）
+== E 组：边界诚实——密钥声明收窄到事实（v2 精确措辞） ==
+  PASS E1 docstring 点明「同进程」可读（原「永远无法读取」不成立）
+  PASS E2 docstring 显式给出「原表述不成立」的边界
+  PASS E3 docstring 精确表述本批范围（消除 cwd/空串 sys.path 解析）且同进程属设计级
+  PASS E4 docstring 明示仍不覆盖的情形（逃生口被显式打开）
+  PASS E5 _pathguard docstring 明写路 B 契约（**不删条目** / **不改写宿主进程全局状态**）
+  PASS E6 _pathguard docstring 明写「显式 `PYTHONPATH=<cwd>` 与保护面互斥，二者只能取一」（裁定帖两项一并裁定第 1 条）
+  PASS E7 _pathguard docstring 明示「脚本目录 ≠ cwd 时本模块不拒它、这一面保留不动」（#421 面保留不动）
+
+===== SUMMARY 127/127 通过 =====
+VERDICT=PASS（issue #156 v2 守卫 · #273 裁定路 B：cwd/空串 sys.path 面的裸名解析在**解析期被拒**（不删条目、宿主进程 sys.path 零改写）——白名单组件（逐名 × 两形态）+ 标准库（逐名）+ **非标准库第三方裸名（numpy/scipy 逐名）**毒 cwd 均不执行；脚本目录边界亦收口；AST 分类判据有牙（未知即红）；逃生口与解析期拒绝面状态可观测；显式根/PYTHONPATH/别名/非 cwd 合法条目四条装配路径未被修坏）
+.
+1 passed in 33.18s

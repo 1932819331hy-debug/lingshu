@@ -47,3 +47,11 @@ python -X utf8 tools/time_core_lint.py --json
 保留 [PR #461](https://github.com/FuRongJun-1999/lingshu/pull/461) 经验格式/恢复入口及 [PR #516](https://github.com/FuRongJun-1999/lingshu/pull/516) 的历史投影贡献。本件修的是恢复失败时半替换运行态，不重报格式、BOM、路径闸或历史回填。
 
 只保证同步恢复失败时的运行态不变，不提供并发读写隔离或收据真实性验证；传输使用本地收据协议，未验证真实脑端 MCP、DSH 宿主及生产数据。 未修改 dsh-memory 大脑区；未验证 DSH 宿主、生产记忆、线上发生频率、吞吐、断电/磁盘满或所有其它锁。维护者人审待完成。
+
+首次完整 CI 发现新增标准库 copy 未进入 #156 的具名分类表（D2/D4a），不是恢复业务守卫失败。按现有登记口径补 copy 的标准库分类，并增加 F1[copy] 目录遮蔽检查；未知裸名拒绝、sys.stdlib_module_names 权威核对、D4 负向自证及导入护栏均不放宽。[首次失败 CI](https://github.com/FuRongJun-1999/lingshu/actions/runs/39714384725)。
+
+补登记提交 `976a62e58bcda4424e18aced67e236a694b18bb4`：Windows `1 passed in 37.73s`；Linux `1 passed in 33.18s`，各内含 127/127 判据通过，无 SKIP。本次仅补跑该导入守卫；生产源码、新增恢复守卫和变异规格逐字节不变，复用前述双平台 8 守卫、4 变异及 55 相关回归，不把旧源码读数移用于新源码。公开追加日志仅归一化工作区前缀和临时根诊断；原日志哈希在来源清单中。
+
+```text
+python -X utf8 -m pytest tests/test_issue156_component_discovery.py -q -s
+```

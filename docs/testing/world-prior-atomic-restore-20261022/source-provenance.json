@@ -74,5 +74,33 @@
       "related_errors": [],
       "related_skips": []
     }
+  },
+  "import_classification_registration": {
+    "windows": {
+      "platform": "Windows",
+      "python": "3.12.10",
+      "commit": "976a62e58bcda4424e18aced67e236a694b18bb4",
+      "guard": "tests/test_issue156_component_discovery.py",
+      "guard_sha256_lf": "d9fa66abab5fa10c8e5e291587c925e40d52fdb7b4cc66aea14f373692d3d180",
+      "returncode": 0,
+      "pytest_summary": "1 passed in 37.73s",
+      "inner_passed": 127,
+      "inner_total": 127,
+      "boundary": "Only the changed import guard; previously passed production guards/mutations/related batch reused unchanged",
+      "raw_log_sha256_lf": "54a80dd889b28b2ba9e3c515f9491e4314169b8123c1ed2dd3729965f5a93875"
+    },
+    "linux": {
+      "platform": "Linux",
+      "python": "3.13.12",
+      "commit": "976a62e58bcda4424e18aced67e236a694b18bb4",
+      "guard": "tests/test_issue156_component_discovery.py",
+      "guard_sha256_lf": "d9fa66abab5fa10c8e5e291587c925e40d52fdb7b4cc66aea14f373692d3d180",
+      "returncode": 0,
+      "pytest_summary": "1 passed in 33.18s",
+      "inner_passed": 127,
+      "inner_total": 127,
+      "boundary": "Only the changed import guard; previously passed production guards/mutations/related batch reused unchanged",
+      "raw_log_sha256_lf": "d191570162eeceee60360f7c14c016dd6a74f160fb5198593cb6a3337ad7fa9e"
+    }
   }
 }
