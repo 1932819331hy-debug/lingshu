@@ -224,7 +224,11 @@ def fuse_consistency(clauses: List[Dict], detections: List[Dict]) -> Dict:
 
 def multimodal_check(net: HexHierNet, lat: np.ndarray, text: str,
                      n_expected: Optional[int] = None) -> Dict:
-    """完整管线:描述解析→图像空间拆分→融合四态判定(+拆分对齐率)。"""
+    """完整管线:描述解析→图像空间拆分→融合四态判定(+拆分对齐率)。
+
+    n_expected:期望检测到的物体数。None=不校验(返回体与修前逐字段相同);
+    非 None 时回显 n_expected 并给出 count_match,计数不符且原判 ACCEPT 时降 DEFER。
+    """
     clauses = parse_description(text)
     detections = spatial_detect(net, lat)[0]
     fused = fuse_consistency(clauses, detections)
@@ -243,4 +247,15 @@ def multimodal_check(net: HexHierNet, lat: np.ndarray, text: str,
     fused["align"] = round(align, 3)
     fused["clauses"] = len(clauses)
     fused["detections"] = len(detections)
+    # n_expected 契约(件 #860):显式「期望检测数」必须参与裁决,不能只收不读。
+    #   非 None ⇒ 回显原值 + 给出 count_match;不吻合且原判 ACCEPT ⇒ 降 DEFER,
+    #   score 不动、note 追加说明;None ⇒ 走原路径原样返回(不新增任何键)。
+    if n_expected is not None:
+        count_match = (len(detections) == n_expected)
+        fused["n_expected"] = n_expected
+        fused["count_match"] = count_match
+        if not count_match and fused["verdict"] == "ACCEPT":
+            fused["verdict"] = "DEFER"
+            fused["note"] = (f"{fused['note']};计数不符:"
+                             f"期望 {n_expected} 个,实测 {len(detections)} 个")
     return fused
