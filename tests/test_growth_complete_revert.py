@@ -18,7 +18,7 @@ def _trial(*, verify_steps=1, retain_gain=0.0, max_steps=1, max_growth=1):
 
     net.grow_kernel = capture_then_grow  # instrumentation only; actual grow/gradient/loss run
     report = train_infogap(net, x, y, samples_per_step=10000, batch=4, max_steps=max_steps,
-        stall_patience=1, max_growth=max_growth, verify_steps=verify_steps, retain_gain=retain_gain, seed=7)
+        stall_patience=1, stall_eps=1.0, max_growth=max_growth, verify_steps=verify_steps, retain_gain=retain_gain, seed=7)
     return net, x, y, snapshots, report
 
 
