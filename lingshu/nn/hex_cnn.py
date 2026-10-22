@@ -243,6 +243,18 @@ DEFAULT_KERNELS: Dict[str, np.ndarray] = {
 
 # ==================== 自监督微调 + 白箱固化 ====================
 
+def _draw_hole(rng, shape, ratio):
+    """#452：抽掩码；ratio>0 且 shape 非空时保证至少一个 cell 被遮。
+
+    空掩码会让重建损失对空数组求均值（NaN），再以 NaN 梯度写进核参数。
+    只在命中空掩码时多消耗一个整数随机数；非空路径的抽样序列与改前逐位一致。
+    """
+    hole = rng.random(shape) < ratio
+    if ratio > 0 and hole.size and not hole.any():
+        hole.flat[rng.integers(hole.size)] = True
+    return hole
+
+
 def selfsup_finetune(img_arr: np.ndarray, kernel_name: str = "center_surround",
                      cells_across: int = 48, epochs: int = 30, lr: float = 0.05,
                      mask_ratio: float = 0.25, seed: int = 7) -> Dict:
@@ -271,7 +283,7 @@ def selfsup_finetune(img_arr: np.ndarray, kernel_name: str = "center_surround",
     # 取值 ⇒ 同口径可比。此处正是 #593 之前 `init_loss` 抽的那一次 ⇒ `rng` 的抽样
     # 序列（进而各 epoch 训练掩码、核、`loss_curve`）与改前**逐位不变**；此后各
     # epoch 的掩码仍由 `rng` 逐轮重抽（本行不再额外消耗 `rng`）。
-    eval_hole = rng.random(lum.shape[:2]) < mask_ratio
+    eval_hole = _draw_hole(rng, lum.shape[:2], mask_ratio)
     rows, cols = lum.shape[:2]
     w = DEFAULT_KERNELS[kernel_name].copy()
     loss_curve = []
@@ -285,6 +297,9 @@ def selfsup_finetune(img_arr: np.ndarray, kernel_name: str = "center_surround",
         """
         masked = lum.copy()
         masked[hole] = 0.0
+        # #452：空掩码时 `.mean()` 对空数组产生 NaN，再以 NaN 梯度写核；无任务按 0 计。
+        if not hole.any():
+            return 0.0
         pred = hex_conv(masked, wv)[..., :1]
         return float(((pred[hole] - lum[hole]) ** 2).mean())
 
@@ -314,6 +329,8 @@ def save_consolidated(kernels: Dict[str, np.ndarray], meta: Dict, path: str) -> 
 
     原子落盘：先写同目录临时档再 os.replace 顶替目标档——写入中途失败（含
     元数据不可序列化）时目标档保持原样，不会被先截断成空档/半截坏档。
+    每次保存独占一个定长短名临时档，仅清理自己成功创建的文件；同进程并发保存互不
+    消费临时档。最终内容取最后一次成功 replace，不承诺调用顺序或合并。
 
     #498（#393 修复的副作用）：`os.replace` 把目标换成**新 inode** ⇒ ①新档权限
     取 `0o666 & ~umask`，不继承旧档刻意收紧的权限位（`0600` 固化档被静默放宽成
@@ -324,14 +341,18 @@ def save_consolidated(kernels: Dict[str, np.ndarray], meta: Dict, path: str) -> 
     默认）。用 `& 0o7777` 字面量而不在顶层 `import stat`（避免打掉 #156 组件
     发现的「未知裸名」判据 D2/D4a）。边界：只搬权限位，不搬属主/属组。
     """
+    import uuid
+
     payload = {"algo": ALGO, "consolidated": True,
                "kernels": {k: [round(float(x), 6) for x in v] for k, v in kernels.items()},
                **meta}
     target = os.path.realpath(path)
     os.makedirs(os.path.dirname(target) or ".", exist_ok=True)
-    tmp = f"{target}.tmp-{os.getpid()}"
+    tmp = os.path.join(os.path.dirname(target), f".lingshu-save.tmp-{os.getpid()}-{uuid.uuid4().hex}")
+    owns_tmp = False
     try:
-        with open(tmp, "w", encoding="utf-8") as f:
+        with open(tmp, "x", encoding="utf-8") as f:
+            owns_tmp = True
             json.dump(payload, f, ensure_ascii=False, indent=1)
             f.flush()
             os.fsync(f.fileno())
@@ -341,6 +362,8 @@ def save_consolidated(kernels: Dict[str, np.ndarray], meta: Dict, path: str) -> 
             pass
         os.replace(tmp, target)
     except BaseException:
+        if not owns_tmp:
+            raise
         try:
             # #498 反向腿：临时档可能刚被 chmod 成旧档的**只读位**——Windows 上只读
             # 档删不掉（`os.unlink` ⇒ PermissionError）⇒ 失败路径留下 `.tmp-` 残件。

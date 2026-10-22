@@ -39,8 +39,9 @@ import sys
 REPO = os.path.dirname(os.path.dirname(os.path.abspath(__file__)))
 GATE_YML = os.path.join(REPO, ".github", "workflows", "gate.yml")
 
-#: `--deselect <nodeid>`：nodeid 紧跟其后、同一行（本仓 gate.yml 的写法）。
-_DESELECT_RE = re.compile(r"--deselect[ \t]+(\S+)")
+#: `--deselect <nodeid>` 与 `--deselect=<nodeid>` 两种写法（#465）：pytest 两者等价；
+#: 只认空格形态会让等号写法绕过本守卫（「静默关掉回归保护」换个写法再发生）。
+_DESELECT_RE = re.compile(r"--deselect(?:[ \t]+|=)(\S+)")
 
 #: #341 点名的两条——它们**必须**随 tests/ 自动收集真跑，不得被 deselect。
 _HEX_TEXT_PAIR = (
@@ -95,13 +96,17 @@ def test_parser_reads_deselect_ids():
         "  pytest tests/ \\\n"
         "    --deselect tests/test_hex_text.py::test_multimodal_check_clean_vs_corrupt\n"
         '    --deselect "tests/foo.py::test_bar"\n'
+        "    --deselect=tests/baz.py::test_qux\n"
     )
     ids = _deselect_ids(sample)
     assert ids == ["tests/test_hex_text.py::test_multimodal_check_clean_vs_corrupt",
-                   "tests/foo.py::test_bar"], (
+                   "tests/foo.py::test_bar",
+                   "tests/baz.py::test_qux"], (
         "解析器没从含 deselect 的样本里读出预期 nodeid ⇒ 它坏了，"
         "本判据此时**无判别力**（会把任何名单都读成空集）。实读：%r" % (ids,))
     assert _deselect_ids("no deselect here") == [], "无 deselect 时应返回空集"
+    assert _deselect_ids("pytest --deselect=tests/baz.py::test_qux") == [
+        "tests/baz.py::test_qux"], "等号写法未被识别（#465）"
 
 
 # ---------------------------------------------------------------- 主判据
