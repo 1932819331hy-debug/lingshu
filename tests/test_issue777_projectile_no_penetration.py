@@ -187,6 +187,22 @@ def test_3b_disc_negative_leg_bit_identical():
         assert v == ev, "t=%r disc<0 腿速度被改动：期望 %r，实得 %r" % (t, ev, v)
 
 
+def test_3c_below_ground_with_two_nonpositive_roots_free_falls():
+    """#817 残余：p0 低于 `ground` 且 `disc >= 0` 但两根皆非正 ⇒ 自由抛体，不钳位。
+
+    旧实现把「两根皆非正」一律当 `resting`（贴地静止）⇒ 面下初值被凭空抬到
+    `ground`，与 docstring「`p0_up < ground_z` 时地面约束不成立、不做钳位」冲突。
+    本用例钉住 docstring 口径：落点在「过去」（两根皆非正）时按无地面自由抛体。
+    """
+    d = _decl(p0=(0.0, -1.0, 0.0), v0=(0.0, -5.0, 0.0))
+    for t in (0.1, 0.5, 1.0, 2.0):
+        ep = (0.0, -1.0 + (-5.0) * t + 0.5 * (-9.80665) * t * t, 0.0)
+        ev = (0.0, -5.0 + (-9.80665) * t, 0.0)
+        p, v = P.projectile_state(d, t)
+        assert p == ep, "t=%r 面下初值被钳位（应自由抛体）：期望 %r，实得 %r" % (t, ep, p)
+        assert v == ev, "t=%r 面下初值速度被清零：期望 %r，实得 %r" % (t, ev, v)
+
+
 # ------------------------------------------------------------- 4 无弹跳腿
 def test_4_no_bounce_leg_bit_identical():
     """无弹跳腿（`bounce` 缺省）读数必须与修前逐位相同。"""
@@ -294,3 +310,12 @@ def test_7b_mirror_implementation_same_clamp():
             p, v = fn(d, t)
             assert p[2] == GROUND, ("镜像贴地腿 t=%r up=%.17g" % (t, p[2]))
             assert v[2] == 0.0, ("镜像贴地腿 t=%r vz=%.17g" % (t, v[2]))
+    # #817 残余：pz 在 ground 以下且两根皆非正 ⇒ 与主实现同口径自由抛体（不钳位）
+    d = mdecl((0.0, 0.0, -1.0), (0.0, 0.0, -5.0))
+    for t in (0.1, 0.5, 1.0, 2.0):
+        mp, mv = fn(d, t)
+        pp, pv = P.projectile_state(
+            _decl(p0=(0.0, 0.0, -1.0), v0=(0.0, 0.0, -5.0), up=2), t)
+        assert mp == pp and mv == pv, (
+            "镜像面下初值 t=%r 与主实现不一致：镜像 %r/%r vs 主 %r/%r"
+            % (t, mp, mv, pp, pv))

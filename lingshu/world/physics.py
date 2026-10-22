@@ -2614,8 +2614,10 @@ def projectile_state(decl, t):
     vh, vu = _hv(v0, up)
     rem, bounces = tau, 0
     max_b = int(decl.get("max_bounces") or 8)
-    # 「退出时球是否已落到地面并停住」——只有这两种退出才钳位（#777）：
-    #   ① `flight <= 0`：第 1 轮就没有下一次落地（初值已贴地且 v_up <= 0）⇒ 贴地静止；
+    # 「退出时球是否已落到地面并停住」——只有这两种退出才钳位（#777/#817）：
+    #   ① `flight <= 0` **且 pu >= ground**：两根皆非正但球已贴地（初值贴地且
+    #      v_up <= 0，disc=0 时 flight=0）⇒ 贴地静止；`pu < ground`（落点在「过去」、
+    #      初值在地面以下）则**不钳位**，走自由抛体（#817 残余裁定，见 docstring）；
     #   ② `bounces >= max_b`：预算用尽 ⇒ 本段落地后停在地面。
     # ⚠ **不能**只看 `bounces >= max_b` 就钳位：`or` 里 `rem < flight` 排在它前面，
     #   而 `rem < flight` 是**正常空中腿**（球仍在空中，窗口在落地前结束）——那种情形下
@@ -2630,7 +2632,11 @@ def projectile_state(decl, t):
         if flight <= 0.0:
             flight = (-vu + math.sqrt(disc)) / gz
         if flight <= 0.0:
-            resting = True
+            # #817 残余裁定（按 docstring 口径）：两根皆非正 ⇒ 没有**未来**的落地时刻。
+            # 此刻球已在地面及以上（贴地且 v_up <= 0，disc=0 时 flight=0）⇒ 贴地静止；
+            # 若 pu < ground（初值在地面以下、落点在「过去」）⇒ 地面约束不成立，走
+            # 自由抛体外推、不钳位（否则会把面下初值凭空抬到 ground）。
+            resting = pu >= ground
             break
         if rem < flight:
             break
