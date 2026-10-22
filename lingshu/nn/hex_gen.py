@@ -18,6 +18,8 @@
 """
 from __future__ import annotations
 
+import re
+
 from typing import Dict, List, Optional, Tuple
 
 import numpy as np
@@ -240,14 +242,18 @@ def _match_attr(seg: str, table: Dict[str, tuple]) -> Optional[str]:
 def compile_description(text: str) -> Dict:
     """中文描述 → {parts: [{shape, color, zone, pattern, size}], defaults_applied}。
 
-    复用 hex_text.parse_description（形状/颜色/9 宫格位三元组）；
-    花纹/尺寸词在本模块解析（受限子语言：实心/条纹/点纹 + 大/小；
-    词表外输入 parse 层自然丢弃）；缺项按 DEFAULTS 补全并落账。
+    #420：先按子句切分，再逐句取窄词表字段。`hex_text.parse_description`
+    只保留窄词表（红/绿/蓝、圆/三角/条纹、复合方位）命中的子句——只含
+    扩展词（黄/橙/紫/粉/棕/黑/白/灰、方/矩形/星/心/六边/菱）的子句会在
+    进入开放词表前被整句丢掉。故这里「先切句，再让开放词表逐句生效」；
+    `parse_description` 只用来补窄词表的基础 shape/color/pos 字段。
+    花纹/尺寸词在本模块解析（实心/条纹/点纹 + 大/小）；缺项按 DEFAULTS 补全并落账。
     """
-    clauses = parse_description(text)
+    segments = [s.strip() for s in re.split(r"[,，、;;；。]+", text) if s.strip()]
     parts, defaults = [], []
-    for cl in clauses:
-        seg = cl.get("text", "")
+    for seg in segments:
+        base = parse_description(seg)
+        cl = base[0] if base else {}
         # 开放词汇优先（连接库生长面），回落 hex_text 基础三词
         pos = cl.get("pos")
         if pos is None:
