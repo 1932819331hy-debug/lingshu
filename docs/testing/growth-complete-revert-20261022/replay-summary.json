@@ -1,0 +1,214 @@
+{
+  "windows": {
+    "python": "3.12.10",
+    "platform": "Windows",
+    "sqlite": "3.49.1",
+    "baseline": "ef6f413dd5ffaa91b419b359dc6edcfc872bffed",
+    "guard_sha256": "96d4e4979ffffbf6966618acc3d45c8b5ceef6f523ce9f2afd07b397fc0d718c",
+    "records": [
+      {
+        "case": "fixed",
+        "ok": true,
+        "returncode": 0,
+        "passed": 6,
+        "failed_tests": [],
+        "errors": 0,
+        "skipped": 0,
+        "expected_failures": [],
+        "expected_assertion": "",
+        "pytest_summary": "6 passed in 0.39s",
+        "source_sha256": {
+          "lingshu/nn/hex_train.py": "0319f5bfa848958111c51442e7bd256ee5fe4349856231c33d160a1e5dad382b"
+        }
+      },
+      {
+        "case": "baseline",
+        "ok": true,
+        "returncode": 1,
+        "passed": 2,
+        "failed_tests": [
+          "test_repeated_reverts_preserve_each_final_boundary_and_the_growth_budget",
+          "test_revert_reports_the_restored_loss_and_keeps_the_rejected_reading",
+          "test_revert_restores_the_output_parameters",
+          "test_revert_restores_the_predictions_at_the_growth_boundary"
+        ],
+        "errors": 0,
+        "skipped": 0,
+        "expected_failures": [
+          "test_revert_restores_the_output_parameters",
+          "test_revert_restores_the_predictions_at_the_growth_boundary",
+          "test_revert_reports_the_restored_loss_and_keeps_the_rejected_reading",
+          "test_repeated_reverts_preserve_each_final_boundary_and_the_growth_budget"
+        ],
+        "expected_assertion": "",
+        "pytest_summary": "4 failed, 2 passed in 0.50s",
+        "source_sha256": {
+          "lingshu/nn/hex_train.py": "ce3c7f9d6b767adce4dff926aedac73a2d2df87f88ece55746f0aed37e1d059e"
+        }
+      },
+      {
+        "case": "leave_output_updates_after_revert",
+        "ok": true,
+        "returncode": 1,
+        "passed": 0,
+        "failed_tests": [
+          "test_revert_restores_the_output_parameters"
+        ],
+        "errors": 0,
+        "skipped": 0,
+        "expected_failures": [
+          "test_revert_restores_the_output_parameters"
+        ],
+        "expected_assertion": "rejected growth left output parameter drift",
+        "pytest_summary": "1 failed in 0.43s",
+        "source_sha256": {
+          "lingshu/nn/hex_train.py": "e55b550ecabd8e79b5a81d86c21fa477c446517c4f3e76fb61684fc21316c1b5"
+        }
+      },
+      {
+        "case": "restore_an_unrelated_output_snapshot",
+        "ok": true,
+        "returncode": 1,
+        "passed": 0,
+        "failed_tests": [
+          "test_revert_restores_the_predictions_at_the_growth_boundary"
+        ],
+        "errors": 0,
+        "skipped": 0,
+        "expected_failures": [
+          "test_revert_restores_the_predictions_at_the_growth_boundary"
+        ],
+        "expected_assertion": "rejected growth changed restored predictions",
+        "pytest_summary": "1 failed in 0.42s",
+        "source_sha256": {
+          "lingshu/nn/hex_train.py": "79ac1e1abfbc62d91e7db36aad44e46fd814a48576e864e05312a565b9adacd0"
+        }
+      },
+      {
+        "case": "report_the_rejected_candidate_loss",
+        "ok": true,
+        "returncode": 1,
+        "passed": 0,
+        "failed_tests": [
+          "test_revert_reports_the_restored_loss_and_keeps_the_rejected_reading"
+        ],
+        "errors": 0,
+        "skipped": 0,
+        "expected_failures": [
+          "test_revert_reports_the_restored_loss_and_keeps_the_rejected_reading"
+        ],
+        "expected_assertion": "REVERT reported the rejected candidate loss",
+        "pytest_summary": "1 failed in 0.42s",
+        "source_sha256": {
+          "lingshu/nn/hex_train.py": "ef6e9b431b808040448c9dd1b4e9b05d78736761d82591be16518ebb9eaba9d3"
+        }
+      }
+    ]
+  },
+  "linux": {
+    "python": "3.13.12",
+    "platform": "Linux",
+    "sqlite": "3.46.1",
+    "baseline": "ef6f413dd5ffaa91b419b359dc6edcfc872bffed",
+    "guard_sha256": "96d4e4979ffffbf6966618acc3d45c8b5ceef6f523ce9f2afd07b397fc0d718c",
+    "records": [
+      {
+        "case": "fixed",
+        "ok": true,
+        "returncode": 0,
+        "passed": 6,
+        "failed_tests": [],
+        "errors": 0,
+        "skipped": 0,
+        "expected_failures": [],
+        "expected_assertion": "",
+        "pytest_summary": "6 passed in 0.44s",
+        "source_sha256": {
+          "lingshu/nn/hex_train.py": "0319f5bfa848958111c51442e7bd256ee5fe4349856231c33d160a1e5dad382b"
+        }
+      },
+      {
+        "case": "baseline",
+        "ok": true,
+        "returncode": 1,
+        "passed": 2,
+        "failed_tests": [
+          "test_repeated_reverts_preserve_each_final_boundary_and_the_growth_budget",
+          "test_revert_reports_the_restored_loss_and_keeps_the_rejected_reading",
+          "test_revert_restores_the_output_parameters",
+          "test_revert_restores_the_predictions_at_the_growth_boundary"
+        ],
+        "errors": 0,
+        "skipped": 0,
+        "expected_failures": [
+          "test_revert_restores_the_output_parameters",
+          "test_revert_restores_the_predictions_at_the_growth_boundary",
+          "test_revert_reports_the_restored_loss_and_keeps_the_rejected_reading",
+          "test_repeated_reverts_preserve_each_final_boundary_and_the_growth_budget"
+        ],
+        "expected_assertion": "",
+        "pytest_summary": "4 failed, 2 passed in 0.52s",
+        "source_sha256": {
+          "lingshu/nn/hex_train.py": "ce3c7f9d6b767adce4dff926aedac73a2d2df87f88ece55746f0aed37e1d059e"
+        }
+      },
+      {
+        "case": "leave_output_updates_after_revert",
+        "ok": true,
+        "returncode": 1,
+        "passed": 0,
+        "failed_tests": [
+          "test_revert_restores_the_output_parameters"
+        ],
+        "errors": 0,
+        "skipped": 0,
+        "expected_failures": [
+          "test_revert_restores_the_output_parameters"
+        ],
+        "expected_assertion": "rejected growth left output parameter drift",
+        "pytest_summary": "1 failed in 0.40s",
+        "source_sha256": {
+          "lingshu/nn/hex_train.py": "e55b550ecabd8e79b5a81d86c21fa477c446517c4f3e76fb61684fc21316c1b5"
+        }
+      },
+      {
+        "case": "restore_an_unrelated_output_snapshot",
+        "ok": true,
+        "returncode": 1,
+        "passed": 0,
+        "failed_tests": [
+          "test_revert_restores_the_predictions_at_the_growth_boundary"
+        ],
+        "errors": 0,
+        "skipped": 0,
+        "expected_failures": [
+          "test_revert_restores_the_predictions_at_the_growth_boundary"
+        ],
+        "expected_assertion": "rejected growth changed restored predictions",
+        "pytest_summary": "1 failed in 0.44s",
+        "source_sha256": {
+          "lingshu/nn/hex_train.py": "79ac1e1abfbc62d91e7db36aad44e46fd814a48576e864e05312a565b9adacd0"
+        }
+      },
+      {
+        "case": "report_the_rejected_candidate_loss",
+        "ok": true,
+        "returncode": 1,
+        "passed": 0,
+        "failed_tests": [
+          "test_revert_reports_the_restored_loss_and_keeps_the_rejected_reading"
+        ],
+        "errors": 0,
+        "skipped": 0,
+        "expected_failures": [
+          "test_revert_reports_the_restored_loss_and_keeps_the_rejected_reading"
+        ],
+        "expected_assertion": "REVERT reported the rejected candidate loss",
+        "pytest_summary": "1 failed in 0.41s",
+        "source_sha256": {
+          "lingshu/nn/hex_train.py": "ef6e9b431b808040448c9dd1b4e9b05d78736761d82591be16518ebb9eaba9d3"
+        }
+      }
+    ]
+  }
+}

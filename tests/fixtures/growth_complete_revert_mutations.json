@@ -1,0 +1,13 @@
+{
+  "guard": "tests/test_growth_complete_revert.py", "total": 6,
+  "sources": ["lingshu/nn/hex_train.py"],
+  "baseline_failures": ["test_revert_restores_the_output_parameters", "test_revert_restores_the_predictions_at_the_growth_boundary", "test_revert_reports_the_restored_loss_and_keeps_the_rejected_reading", "test_repeated_reverts_preserve_each_final_boundary_and_the_growth_budget"],
+  "mutations": [
+    {"name": "leave_output_updates_after_revert", "test": "test_revert_restores_the_output_parameters", "assertion": "rejected growth left output parameter drift",
+      "changes": [{"file": "lingshu/nn/hex_train.py", "method": "train_infogap", "old": "net.conv, net.mix, net.fc, net.K = conv_snap, mix_snap, fc_snap, K_before", "new": "net.conv, net.mix, net.K = conv_snap, mix_snap, K_before"}]},
+    {"name": "restore_an_unrelated_output_snapshot", "test": "test_revert_restores_the_predictions_at_the_growth_boundary", "assertion": "rejected growth changed restored predictions",
+      "changes": [{"file": "lingshu/nn/hex_train.py", "method": "train_infogap", "old": "net.conv.copy(), net.mix.copy(), net.fc.copy(), net.K", "new": "net.conv.copy(), net.mix.copy(), np.zeros_like(net.fc), net.K"}]},
+    {"name": "report_the_rejected_candidate_loss", "test": "test_revert_reports_the_restored_loss_and_keeps_the_rejected_reading", "assertion": "REVERT reported the rejected candidate loss",
+      "changes": [{"file": "lingshu/nn/hex_train.py", "method": "train_infogap", "old": "\"D\": round(d_before, 5)", "new": "\"D\": round(d_after, 5)"}]}
+  ]
+}

@@ -335,7 +335,7 @@ def train_infogap(net: HexNet, x: np.ndarray, y: np.ndarray,
         grew = reverted = False
         if stall >= stall_patience and growths + reverts < max_growth:
             d_before = net.loss(xb, yb)
-            conv_snap, mix_snap, K_before = net.conv.copy(), net.mix.copy(), net.K
+            conv_snap, mix_snap, fc_snap, K_before = net.conv.copy(), net.mix.copy(), net.fc.copy(), net.K
             net.grow_kernel()
             growths += 1
             stall = 0
@@ -361,12 +361,12 @@ def train_infogap(net: HexNet, x: np.ndarray, y: np.ndarray,
                                 "verdict": "GROW",
                                 "note": f"新条件分支通过验证({d_before:.4f}->{d_after:.4f})"})
             else:
-                net.conv, net.mix, net.K = conv_snap, mix_snap, K_before
+                net.conv, net.mix, net.fc, net.K = conv_snap, mix_snap, fc_snap, K_before
                 reverts += 1
                 growths -= 1
                 reverted = True
-                history.append({"step": step, "D": round(d_after, 5), "K": net.K,
-                                "verdict": "REVERT",
+                history.append({"step": step, "D": round(d_before, 5), "K": net.K,
+                                "verdict": "REVERT", "attempt_D": round(d_after, 5),
                                 "note": f"新分支验证失败,撤销不固化({d_before:.4f}->{d_after:.4f})"})
             if verbose:
                 tag = "固化" if grew else "撤销"
