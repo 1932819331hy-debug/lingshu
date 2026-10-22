@@ -1,0 +1,70 @@
+CASE fixed
+.....                                                                    [100%]
+5 passed in 1.52s
+
+CASE baseline
+FFF..                                                                    [100%]
+================================== FAILURES ===================================
+________ test_import_after_chdir_does_not_overwrite_the_other_database ________
+<evidence-root>\activation\current\windows\replay\guard-_qk9l7xt\tests\test_activation_bound_path.py:48: in test_import_after_chdir_does_not_overwrite_the_other_database
+    assert _members(engines["a"]) == {ids["a"]: 0.9}, "activation write moved to another cwd database"
+E   AssertionError: activation write moved to another cwd database
+E   assert {'ctx_dc02a2c...6090398': 0.8} == {'ctx_dc02a2c...6090398': 0.9}
+E
+E     Differing items:
+E     {'ctx_dc02a2c2_1792606090398': 0.8} != {'ctx_dc02a2c2_1792606090398': 0.9}
+E     Use -v to get more diff
+___________ test_all_workset_readers_stay_on_the_original_database ____________
+<evidence-root>\activation\current\windows\replay\guard-_qk9l7xt\tests\test_activation_bound_path.py:55: in test_all_workset_readers_stay_on_the_original_database
+    assert active.carry_vector("session") == {ids["a"]: 0.8}, "activation read moved to another cwd database"
+E   AssertionError: activation read moved to another cwd database
+E   assert {'ctx_4876bce...090917': 0.25} == {'ctx_2805ccb...6090848': 0.8}
+E
+E     Left contains 1 more item:
+E     {'ctx_4876bced_1792606090917': 0.25}
+E     Right contains 1 more item:
+E     {'ctx_2805ccb4_1792606090848': 0.8}
+E     Use -v to get more diff
+_________ test_activate_reads_and_replaces_only_its_original_workset __________
+<evidence-root>\activation\current\windows\replay\guard-_qk9l7xt\tests\test_activation_bound_path.py:66: in test_activate_reads_and_replaces_only_its_original_workset
+    assert [nid for nid, _ in result["top"]] == [ids["a"]], "activate seeded from another cwd database"
+E   AssertionError: activate seeded from another cwd database
+E   assert ['ctx_5e1c7825_1792606091082'] == ['ctx_cd3e3e29_1792606091014']
+E
+E     At index 0 diff: 'ctx_5e1c7825_1792606091082' != 'ctx_cd3e3e29_1792606091014'
+E     Use -v to get more diff
+=========================== short test summary info ===========================
+FAILED tests/test_activation_bound_path.py::test_import_after_chdir_does_not_overwrite_the_other_database
+FAILED tests/test_activation_bound_path.py::test_all_workset_readers_stay_on_the_original_database
+FAILED tests/test_activation_bound_path.py::test_activate_reads_and_replaces_only_its_original_workset
+3 failed, 2 passed in 1.61s
+
+CASE retain_relative_database_path
+F                                                                        [100%]
+================================== FAILURES ===================================
+________ test_import_after_chdir_does_not_overwrite_the_other_database ________
+<evidence-root>\activation\current\windows\replay\guard-yx2s03ls\tests\test_activation_bound_path.py:48: in test_import_after_chdir_does_not_overwrite_the_other_database
+    assert _members(engines["a"]) == {ids["a"]: 0.9}, "activation write moved to another cwd database"
+E   AssertionError: activation write moved to another cwd database
+E   assert {'ctx_8b610e8...6092687': 0.8} == {'ctx_8b610e8...6092687': 0.9}
+E
+E     Differing items:
+E     {'ctx_8b610e8d_1792606092687': 0.8} != {'ctx_8b610e8d_1792606092687': 0.9}
+E     Use -v to get more diff
+=========================== short test summary info ===========================
+FAILED tests/test_activation_bound_path.py::test_import_after_chdir_does_not_overwrite_the_other_database
+1 failed in 0.83s
+
+CASE reconnect_by_basename
+F                                                                        [100%]
+================================== FAILURES ===================================
+___________ test_all_workset_readers_stay_on_the_original_database ____________
+<evidence-root>\activation\current\windows\replay\guard-xyv6ybbz\tests\test_activation_bound_path.py:55: in test_all_workset_readers_stay_on_the_original_database
+    assert active.carry_vector("session") == {ids["a"]: 0.8}, "activation read moved to another cwd database"
+           ^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^
+<evidence-root>\activation\current\windows\replay\guard-xyv6ybbz\lingshu\core\activation.py:578: in carry_vector
+    cur.execute("SELECT node_id, activation FROM activation_nodes WHERE workset=?",
+E   sqlite3.OperationalError: no such table: activation_nodes
+=========================== short test summary info ===========================
+FAILED tests/test_activation_bound_path.py::test_all_workset_readers_stay_on_the_original_database
+1 failed in 0.79s

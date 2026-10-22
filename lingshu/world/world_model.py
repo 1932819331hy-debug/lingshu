@@ -148,10 +148,15 @@ class UnifiedWorldModel:
         for _ in range(8):
             cand = "wm_" + "".join(self._rng.choice("0123456789abcdef")
                                    for _ in range(6))
-            if cand not in self.nodes:
+            if cand not in self.nodes and (taken is None or cand not in taken):
                 return cand
-        # 兜底：连续碰撞则加长 eid 避免极小概率的 6 位空间连撞
-        return "wm_" + "".join(self._rng.choice("0123456789abcdef") for _ in range(12))
+        # 长 ID 也可能撞上现有或本帧尚未落库的显式 ID；确定性后缀保证最终找到空位。
+        base = "wm_" + "".join(self._rng.choice("0123456789abcdef") for _ in range(12))
+        cand, suffix = base, 0
+        while cand in self.nodes or (taken is not None and cand in taken):
+            suffix += 1
+            cand = f"{base}_{suffix}"
+        return cand
 
     def _expected(self, eid: str) -> Optional[Dict]:
         """生成先验：上一 tick 对 eid 的预期（供 perceive 一致性检查）。"""
@@ -1106,9 +1111,11 @@ def _perceive_with_traj(self, observations=None, tool="observer",
     下层的关键字参数吃掉——调用方不报错，但 `tick` 静默失效。
     """
     buf = _wm_traj_buf(self)
+    out = _ORIG_WM_PERCEIVE(self, observations, tool, tick, timestamp)
+    # 本体已把匿名/默认传感器观测解析为真实 eid；所有派生视图消费同一份结果。
+    observations = out.get("observations", observations or [])
     prev_pos = {e: (buf.get(e) or [(0, None)])[-1][1]
                 for e in (str(o.get("eid", "")) for o in (observations or []))}
-    out = _ORIG_WM_PERCEIVE(self, observations, tool, tick, timestamp)
     last = getattr(self, "_last_prediction", None) or {}
     for o in (observations or []):
         eid = str(o.get("eid", ""))
@@ -1266,8 +1273,9 @@ def _wm_smooth_check(self, eid, age, mode_source, period_detected):
       · 原算法给的模式是**可外推型**（`bounded_noisy` 线性外推 / `bounded_stochastic`
         持续基线）——关系驱动型（`exact` / `chase_stochastic`，由 seek/flee 关系
         推出的确定性/分布型预测）**不碰**：那是目标驱动的先验，不是运动学外推的地盘；
+      · 随机基线须有第四点作独立回测，等加速度预测误差不大于同帧持续误差；
       · 该实体本 tick **被观测到**（`age == 0`）——否则位移是跨帧的，按"1 帧"外推无意义；
-      · 窗口内 ≥ 3 个观测点；
+      · 窗口内 ≥ 3 个观测点（随机基线 ≥ 4）；
       · (c) `|v1|` 与 `|v2|` 都 ≥ `smooth_speed_min`（速度未近似为 0）；
       · (b) `cos(v1, v2) ≥ smooth_reversal_cos`（相邻位移**未换向**）；
       · `|a| ≥ smooth_accel_min`（加速度与 0 无异 ⇒ 与线性外推等价 ⇒ 不接管，零变更）。
@@ -1290,6 +1298,21 @@ def _wm_smooth_check(self, eid, age, mode_source, period_detected):
     if len(seq) < m["smooth_min_samples"]:
         d["blocked"] = "not_enough_samples"
         return False, None, d
+    if mode_source == "bounded_stochastic":
+        # 随机基线没有方向证据：先用过去三点预测已到来的第四点，
+        # 至少不劣于持续基线才允许外推；偶然两次同向不算平滑证据。
+        if len(seq) < 4:
+            d["blocked"] = "stochastic_without_backtest"
+            return False, None, d
+        past, before, previous, actual = seq[-4:]
+        backtest = tuple(3 * previous[j] - 3 * before[j] + past[j] for j in range(3))
+        error = math.dist(backtest, actual)
+        persist_error = math.dist(previous, actual)
+        d["backtest_error"] = error
+        d["backtest_persist_error"] = persist_error
+        if error > persist_error:
+            d["blocked"] = "stochastic_backtest_worse_than_persistence"
+            return False, None, d
     p2, p1, p0 = seq[-1], seq[-2], seq[-3]
     v1 = tuple(p2[j] - p1[j] for j in range(3))
     v2 = tuple(p1[j] - p0[j] for j in range(3))
@@ -1487,6 +1510,7 @@ def _perceive_with_guard_pairs(self, observations=None, tool="observer",
     纯追加、零副作用（只写 `_err_ovr`），未观测到的实体不产生样本。
     """
     out = _ORIG3_WM_PERCEIVE(self, observations, tool, tick, timestamp)
+    observations = out.get("observations", observations or [])
     buf = getattr(self, "_traj_buf", None)
     last = getattr(self, "_last_prediction", None) or {}
     for o in (observations or []):
@@ -1936,6 +1960,7 @@ def _perceive_with_rot(self, observations=None, tool="observer",
     签名与转发同内层（见 `wm.perceive-signature/1`）。
     """
     out = _ORIG4_WM_PERCEIVE(self, observations, tool, tick, timestamp)
+    observations = out.get("observations", observations or [])
     if not _ROT["enabled"] or not observations:
         return out
     buf = getattr(self, "_rot_buf", None)

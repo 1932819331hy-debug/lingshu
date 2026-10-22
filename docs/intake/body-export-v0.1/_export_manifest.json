@@ -242,7 +242,7 @@
     {
      "file": "wm_simloop.py",
      "src": "aeis.wm_simloop",
-     "sha256": "f35a9750d2125e86",
+     "sha256": "7d33f88cf2ebcb2d",
      "rewrites": 8,
      "sanitized": 0,
      "patches": 0,
@@ -279,7 +279,7 @@
     {
      "file": "world_model.py",
      "src": "aeis.world_model",
-     "sha256": "d51abaddae091627",
+     "sha256": "f328599573397309",
      "rewrites": 4,
      "sanitized": 0,
      "patches": 0,
@@ -307,7 +307,7 @@
     {
      "file": "activation.py",
      "src": "aeis.activation",
-     "sha256": "218c8ab92525e586",
+     "sha256": "6f7a8259f726c645",
      "rewrites": 0,
      "sanitized": 0,
      "patches": 1,
@@ -329,7 +329,7 @@
     {
      "file": "core.py",
      "src": "aeis.core",
-     "sha256": "99babc389fd04f9e",
+     "sha256": "c192b9c3207adb7f",
      "rewrites": 34,
      "sanitized": 2,
      "patches": 2,
@@ -519,7 +519,7 @@
     {
      "file": "hex_train.py",
      "src": "aeis.hex_train",
-     "sha256": "ce3c7f9d6b767adc",
+     "sha256": "0319f5bfa8489581",
      "rewrites": 2,
      "sanitized": 1,
      "patches": 0,
@@ -530,7 +530,7 @@
     {
      "file": "hex_unit.py",
      "src": "aeis.hex_unit",
-     "sha256": "36594de8726159b6",
+     "sha256": "39aa28bade875edf",
      "rewrites": 0,
      "sanitized": 0,
      "patches": 0,
