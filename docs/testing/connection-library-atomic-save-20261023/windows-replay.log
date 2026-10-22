@@ -1,0 +1,96 @@
+CASE fixed
+........                                                                 [100%]
+8 passed in 0.40s
+
+CASE baseline
+FFFFF..F                                                                 [100%]
+================================== FAILURES ===================================
+____________ test_serialization_failure_preserves_existing_library ____________
+tests\test_connection_library_atomic_save.py:33: in test_serialization_failure_preserves_existing_library
+    assert target.read_bytes() == old, 'failed serialization destroyed the previous connection library'
+E   AssertionError: failed serialization destroyed the previous connection library
+E   assert b'[\r\n {\r\n...n   "value": ' == b'[\r\n {\r\n... 0\r\n }\r\n]'
+E
+E     At index 18 diff: b'r' != b'o'
+E     Use -v to get more diff
+____________________ test_failed_new_save_leaves_no_target ____________________
+tests\test_connection_library_atomic_save.py:44: in test_failed_new_save_leaves_no_target
+    assert not target.exists(), 'failed first save published a partial library'
+E   AssertionError: failed first save published a partial library
+E   assert not True
+E    +  where True = exists()
+E    +    where exists = WindowsPath('<evidence-root>/library/current/windows/replay/guard-i_9gpz8i/tmp/test_failed_new_save_leaves_no0/new.json').exists
+_________________ test_write_failure_preserves_existing_bytes _________________
+tests\test_connection_library_atomic_save.py:57: in test_write_failure_preserves_existing_bytes
+    assert target.read_bytes() == old, 'interrupted write changed the published library'
+E   AssertionError: interrupted write changed the published library
+E   assert b'[{"unfinished":' == b'[\r\n {\r\n... 0\r\n }\r\n]'
+E
+E     At index 1 diff: b'{' != b'\r'
+E     Use -v to get more diff
+__________ test_replace_failure_keeps_old_file_and_cleans_owned_temp __________
+tests\test_connection_library_atomic_save.py:69: in test_replace_failure_keeps_old_file_and_cleans_owned_temp
+    with pytest.raises(PermissionError, match='controlled publication denial'):
+         ^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^
+E   Failed: DID NOT RAISE PermissionError
+__________ test_exclusive_name_collision_never_consumes_another_file __________
+tests\test_connection_library_atomic_save.py:81: in test_exclusive_name_collision_never_consumes_another_file
+    with pytest.raises(FileExistsError):
+         ^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^
+E   Failed: DID NOT RAISE FileExistsError
+___________ test_concurrent_saves_publish_only_complete_owned_files ___________
+tests\test_connection_library_atomic_save.py:124: in test_concurrent_saves_publish_only_complete_owned_files
+    assert ready.wait(3), 'save never reached atomic publication'
+E   AssertionError: save never reached atomic publication
+E   assert False
+E    +  where False = wait(3)
+E    +    where wait = <threading.Event at 0x238eb19e030: unset>.wait
+=========================== short test summary info ===========================
+FAILED tests/test_connection_library_atomic_save.py::test_serialization_failure_preserves_existing_library
+FAILED tests/test_connection_library_atomic_save.py::test_failed_new_save_leaves_no_target
+FAILED tests/test_connection_library_atomic_save.py::test_write_failure_preserves_existing_bytes
+FAILED tests/test_connection_library_atomic_save.py::test_replace_failure_keeps_old_file_and_cleans_owned_temp
+FAILED tests/test_connection_library_atomic_save.py::test_exclusive_name_collision_never_consumes_another_file
+FAILED tests/test_connection_library_atomic_save.py::test_concurrent_saves_publish_only_complete_owned_files
+6 failed, 2 passed in 3.54s
+
+CASE truncate_the_target_while_serializing
+F                                                                        [100%]
+================================== FAILURES ===================================
+____________ test_serialization_failure_preserves_existing_library ____________
+tests\test_connection_library_atomic_save.py:33: in test_serialization_failure_preserves_existing_library
+    assert target.read_bytes() == old, 'failed serialization destroyed the previous connection library'
+E   AssertionError: failed serialization destroyed the previous connection library
+E   assert b'[\r\n {\r\n...n   "value": ' == b'[\r\n {\r\n... 0\r\n }\r\n]'
+E
+E     At index 18 diff: b'r' != b'o'
+E     Use -v to get more diff
+=========================== short test summary info ===========================
+FAILED tests/test_connection_library_atomic_save.py::test_serialization_failure_preserves_existing_library
+1 failed in 0.47s
+
+CASE allow_temp_name_reuse
+F                                                                        [100%]
+================================== FAILURES ===================================
+__________ test_exclusive_name_collision_never_consumes_another_file __________
+tests\test_connection_library_atomic_save.py:81: in test_exclusive_name_collision_never_consumes_another_file
+    with pytest.raises(FileExistsError):
+         ^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^
+E   Failed: DID NOT RAISE FileExistsError
+=========================== short test summary info ===========================
+FAILED tests/test_connection_library_atomic_save.py::test_exclusive_name_collision_never_consumes_another_file
+1 failed in 0.44s
+
+CASE leave_failed_first_save_published
+F                                                                        [100%]
+================================== FAILURES ===================================
+____________________ test_failed_new_save_leaves_no_target ____________________
+tests\test_connection_library_atomic_save.py:44: in test_failed_new_save_leaves_no_target
+    assert not target.exists(), 'failed first save published a partial library'
+E   AssertionError: failed first save published a partial library
+E   assert not True
+E    +  where True = exists()
+E    +    where exists = WindowsPath('<evidence-root>/library/current/windows/replay/guard-3r1nk34r/tmp/test_failed_new_save_leaves_no0/new.json').exists
+=========================== short test summary info ===========================
+FAILED tests/test_connection_library_atomic_save.py::test_failed_new_save_leaves_no_target
+1 failed in 0.45s
