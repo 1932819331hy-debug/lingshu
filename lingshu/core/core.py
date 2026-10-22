@@ -13315,8 +13315,12 @@ class SpacetimeMemoryEngine:
         transaction`，`tests/test_issue665_nested_tx_savepoint.py` 同面）。
         边界（削掉的判别力，如实标注）：① 事务回滚只覆盖**库内**副作用——进程内
         计数（`self._interaction_count`）与「本轮已计数」等内存态不随之回退
-        （既有语义，非本件引入；本件只消「半截落库」）。② 旧子树 `traverse` 的
-        `max_nodes=500` 截断（#139-G）仍不收口。
+        （既有语义，非本件引入；本件只消「半截落库」）。
+
+        #139-G：查询仍有 500 个后代、64 层的预算。删除前逐批检查枚举集合是否
+        对 hierarchical 入边闭合；任何漏收的孩子都使本次替换整体拒绝，避免把
+        查询截断误当成完整子树而静默留下孤儿。沿用设计稿 S-4=(b) 的有界拒绝
+        形状，不把只读 traverse 改成无界全图扫描；完整且恰好到边界的子树仍可替换。
         """
         # 范围、后代集合与保护判定也须处于同一写快照。只包住挂入/删除时，
         # 另一实例可在预检后保护或移走旧子树，导致部分替换或删除范围外节点。
@@ -13352,6 +13356,20 @@ class SpacetimeMemoryEngine:
                                        relation_types=["hierarchical"],
                                        direction="in", max_depth=64)
         removed = [old_sub_root_id] + [r["node_id"] for r in old_desc]
+        # 返回条数/最大深度等于预算并不能证明截断；查边界是否还有未收集的孩子。
+        # 所有已收节点都要查：宽图可能在较浅层就耗尽预算，漏点不只在第 64 层。
+        # 判定仍在入口写快照内，且发生在任何新子树写入或旧节点删除之前。
+        removed_set = set(removed)
+        for i in range(0, len(removed), _SQL_IN_CHUNK):
+            chunk = removed[i:i + _SQL_IN_CHUNK]
+            ph = ",".join("?" * len(chunk))
+            for row in self.store.conn.execute(
+                    f"SELECT source_id FROM edges WHERE target_id IN ({ph})"
+                    " AND relation_type=?", [*chunk, "hierarchical"]):
+                if row[0] not in removed_set:
+                    raise ValueError(
+                        "subgraph_replace 拒绝（旧子树不完整）：遍历预算或过滤遗漏了"
+                        " hierarchical 后代；未修改旧树，请缩小替换范围")
         # 可删性预检：任一不可删 ⇒ 整体拒绝（S-2=(a) 全有或全无），不做部分替换
         protected = set(self.store.get_protected_nodes())
         blocked = [nid for nid in removed
