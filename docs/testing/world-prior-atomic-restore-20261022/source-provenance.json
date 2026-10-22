@@ -1,0 +1,78 @@
+{
+  "baseline": "ef6f413dd5ffaa91b419b359dc6edcfc872bffed",
+  "sha256_lf": {
+    "lingshu/world/wm_simloop.py": "7d33f88cf2ebcb2d24f786d2e4690490d930372b1857b9401d731e1beffd227c",
+    "tests/test_world_prior_atomic_restore.py": "87aba07a593f5e2739d9043df1a5a9e85da778f7a8ff95f3ff413796b56973f0",
+    "tests/fixtures/world_prior_atomic_restore_mutations.json": "d1a8e6cf031cb9714a88bf82897166dbc0776e76a19f4201a7559c9390eb26f7"
+  },
+  "runs": {
+    "windows": {
+      "platform": "Windows",
+      "python": "3.12.10",
+      "sqlite": "3.49.1",
+      "baseline": "ef6f413dd5ffaa91b419b359dc6edcfc872bffed",
+      "validated_commit": "02693e3bd5caae2aba08434045abcaa977807a16",
+      "sha256_lf": {
+        "lingshu/world/wm_simloop.py": "7d33f88cf2ebcb2d24f786d2e4690490d930372b1857b9401d731e1beffd227c",
+        "tests/test_world_prior_atomic_restore.py": "87aba07a593f5e2739d9043df1a5a9e85da778f7a8ff95f3ff413796b56973f0",
+        "tests/fixtures/world_prior_atomic_restore_mutations.json": "d1a8e6cf031cb9714a88bf82897166dbc0776e76a19f4201a7559c9390eb26f7"
+      },
+      "commands": [
+        {
+          "name": "replay",
+          "returncode": 0
+        },
+        {
+          "name": "related",
+          "returncode": 0
+        },
+        {
+          "name": "manifest",
+          "returncode": 0
+        },
+        {
+          "name": "time-core",
+          "returncode": 0
+        }
+      ],
+      "related_total": 55,
+      "related_failures": [],
+      "related_errors": [],
+      "related_skips": []
+    },
+    "linux": {
+      "platform": "Linux",
+      "python": "3.13.12",
+      "sqlite": "3.46.1",
+      "baseline": "ef6f413dd5ffaa91b419b359dc6edcfc872bffed",
+      "validated_commit": "02693e3bd5caae2aba08434045abcaa977807a16",
+      "sha256_lf": {
+        "lingshu/world/wm_simloop.py": "7d33f88cf2ebcb2d24f786d2e4690490d930372b1857b9401d731e1beffd227c",
+        "tests/test_world_prior_atomic_restore.py": "87aba07a593f5e2739d9043df1a5a9e85da778f7a8ff95f3ff413796b56973f0",
+        "tests/fixtures/world_prior_atomic_restore_mutations.json": "d1a8e6cf031cb9714a88bf82897166dbc0776e76a19f4201a7559c9390eb26f7"
+      },
+      "commands": [
+        {
+          "name": "replay",
+          "returncode": 0
+        },
+        {
+          "name": "related",
+          "returncode": 0
+        },
+        {
+          "name": "manifest",
+          "returncode": 0
+        },
+        {
+          "name": "time-core",
+          "returncode": 0
+        }
+      ],
+      "related_total": 55,
+      "related_failures": [],
+      "related_errors": [],
+      "related_skips": []
+    }
+  }
+}
