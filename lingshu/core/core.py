@@ -1425,11 +1425,12 @@ class LayeredStore:
     #: 自动裁剪会与「审计只追加、无更新/删除路径」的既有声明契约冲突，保留窗口
     #: 的取值属设计者裁面（见 `prune_action_logs` docstring 与交付报告）。
     ACTION_LOGS_KEEP_ROWS = 10000
-    SCHEMA_VERSION = 3  # 建表块每新增表/列时 +1（配合 _init_tables 启动只读化守卫；
+    SCHEMA_VERSION = 4  # 建表块每新增表/列时 +1（配合 _init_tables 启动只读化守卫；
                         # 守卫已兼比结构 _SCHEMA_TABLES/_SCHEMA_COLUMNS，
                         # 版本号不再单独作「跳过建表块」的依据）
                         # v2：promotion_proposals 加 content_hash（#140）
                         # v3：新增 designer_todos 待办表（#130 路 B）
+                        # v4：登记 archive_state；旧 v3 库也必须补建归档恢复表。
                         # ★为什么必须 +1（#130 路 B 裁定帖原文）：只把表加进
                         # `_SCHEMA_TABLES` 而不升版本，**已有库**的启动只读化守卫
                         # 会因「版本匹配 + 结构齐全」跳过整个建表块 ⇒ 新表永不被
@@ -1440,7 +1441,7 @@ class LayeredStore:
     _SCHEMA_TABLES = frozenset(('nodes', 'edges', 'blindspots', 'skills', 'promotion_proposals',
                                 'protections', 'rejected_paths', 'verifier_standards',
                                 'escalation_points', 'action_logs', 'engine_meta', 'gap_history',
-                                'flywheel_reuse', 'designer_todos'))
+                                'flywheel_reuse', 'designer_todos', 'archive_state'))
     _SCHEMA_COLUMNS = {'nodes': ('semantic_coordinates', 'state_attributes', 'entity_id'),
                        'edges': ('source_evidence',), 'blindspots': ('predictability',),
                        'promotion_proposals': ('content_hash',)}
@@ -12296,7 +12297,7 @@ class SpacetimeMemoryEngine:
                   "protections", "rejected_paths", "verifier_standards",
                   "escalation_points", "entities",
                   "action_logs", "engine_meta", "gap_history", "flywheel_reuse",
-                  "designer_todos")
+                  "designer_todos", "archive_state")
 
     def _existing_tables(self) -> Set[str]:
         """当前库实际存在的表名（以 sqlite_master 为准，不假设 DDL 全集）。"""
@@ -12920,6 +12921,11 @@ class SpacetimeMemoryEngine:
             # 现按并集取列（后行真值不再被首行形状吞掉），并把「缺列行数」按表按列
             # 上报（`missing_columns`），使原先静默的 NULL 落库可观测。
             allowed = self._table_columns(table)
+            if table == "archive_state":
+                # 归档原值随备份恢复，但不得借此越过共享层的还原权限闸。
+                for row in rows:
+                    self.store.assert_node_writable_by_role(
+                        row.get("node_id"), action="导入共享层节点的归档恢复状态")
             keys = []
             for r in rows:
                 for k in r:
