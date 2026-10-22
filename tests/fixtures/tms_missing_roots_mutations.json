@@ -1,0 +1,13 @@
+{
+  "guard": "tests/test_tms_missing_roots.py", "total": 6,
+  "sources": ["lingshu/core/tms.py"],
+  "baseline_failures": ["test_deleted_root_cannot_recover_confidence_from_retained_evidence", "test_reopened_database_agrees_with_the_undermined_report", "test_missing_intermediate_cannot_transmit_corroborated_own_evidence", "test_unknown_propagation_root_has_no_implicit_prior"],
+  "mutations": [
+    {"name": "trust_retained_evidence_for_missing_roots", "test": "test_deleted_root_cannot_recover_confidence_from_retained_evidence", "assertion": "deleted propagation root recovered stale evidence confidence",
+      "changes": [{"file": "lingshu/core/tms.py", "class": "TruthMaintenance", "method": "propagate", "old": "if self.store.get_node(n) is None:", "new": "if self.store.get_node(n) is None and not own[n][\"entries\"]:"}]},
+    {"name": "give_unknown_roots_the_ledger_prior", "test": "test_unknown_propagation_root_has_no_implicit_prior", "assertion": "unknown propagation roots received a prior",
+      "changes": [{"file": "lingshu/core/tms.py", "class": "TruthMaintenance", "method": "propagate", "old": "if self.store.get_node(n) is None:", "new": "if self.store.get_node(n) is None and own[n][\"entries\"]:"}]},
+    {"name": "persist_a_default_missing_belief", "test": "test_reopened_database_agrees_with_the_undermined_report", "assertion": "persisted conclusion retained a deleted premise belief",
+      "changes": [{"file": "lingshu/core/tms.py", "class": "TruthMaintenance", "method": "propagate", "old": "\"confidence\": 0.0", "new": "\"confidence\": 0.5"}]}
+  ]
+}

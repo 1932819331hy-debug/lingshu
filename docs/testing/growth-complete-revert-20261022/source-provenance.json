@@ -1,0 +1,78 @@
+{
+  "baseline": "ef6f413dd5ffaa91b419b359dc6edcfc872bffed",
+  "sha256_lf": {
+    "lingshu/nn/hex_train.py": "0319f5bfa848958111c51442e7bd256ee5fe4349856231c33d160a1e5dad382b",
+    "tests/test_growth_complete_revert.py": "96d4e4979ffffbf6966618acc3d45c8b5ceef6f523ce9f2afd07b397fc0d718c",
+    "tests/fixtures/growth_complete_revert_mutations.json": "a08731b44c4ef71518d22009198c9cb94f755d24c1346cdaf482f01a172cd76b"
+  },
+  "runs": {
+    "windows": {
+      "platform": "Windows",
+      "python": "3.12.10",
+      "sqlite": "3.49.1",
+      "baseline": "ef6f413dd5ffaa91b419b359dc6edcfc872bffed",
+      "validated_commit": "e23b63d6ccd07a48911155f52c5103285e5f1c35",
+      "sha256_lf": {
+        "lingshu/nn/hex_train.py": "0319f5bfa848958111c51442e7bd256ee5fe4349856231c33d160a1e5dad382b",
+        "tests/test_growth_complete_revert.py": "96d4e4979ffffbf6966618acc3d45c8b5ceef6f523ce9f2afd07b397fc0d718c",
+        "tests/fixtures/growth_complete_revert_mutations.json": "a08731b44c4ef71518d22009198c9cb94f755d24c1346cdaf482f01a172cd76b"
+      },
+      "commands": [
+        {
+          "name": "replay",
+          "returncode": 0
+        },
+        {
+          "name": "related",
+          "returncode": 0
+        },
+        {
+          "name": "manifest",
+          "returncode": 0
+        },
+        {
+          "name": "time-core",
+          "returncode": 0
+        }
+      ],
+      "related_total": 6,
+      "related_failures": [],
+      "related_errors": [],
+      "related_skips": []
+    },
+    "linux": {
+      "platform": "Linux",
+      "python": "3.13.12",
+      "sqlite": "3.46.1",
+      "baseline": "ef6f413dd5ffaa91b419b359dc6edcfc872bffed",
+      "validated_commit": "e23b63d6ccd07a48911155f52c5103285e5f1c35",
+      "sha256_lf": {
+        "lingshu/nn/hex_train.py": "0319f5bfa848958111c51442e7bd256ee5fe4349856231c33d160a1e5dad382b",
+        "tests/test_growth_complete_revert.py": "96d4e4979ffffbf6966618acc3d45c8b5ceef6f523ce9f2afd07b397fc0d718c",
+        "tests/fixtures/growth_complete_revert_mutations.json": "a08731b44c4ef71518d22009198c9cb94f755d24c1346cdaf482f01a172cd76b"
+      },
+      "commands": [
+        {
+          "name": "replay",
+          "returncode": 0
+        },
+        {
+          "name": "related",
+          "returncode": 0
+        },
+        {
+          "name": "manifest",
+          "returncode": 0
+        },
+        {
+          "name": "time-core",
+          "returncode": 0
+        }
+      ],
+      "related_total": 6,
+      "related_failures": [],
+      "related_errors": [],
+      "related_skips": []
+    }
+  }
+}

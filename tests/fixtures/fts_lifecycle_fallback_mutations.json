@@ -1,0 +1,41 @@
+{
+  "guard": "tests/test_fts_lifecycle_fallback.py",
+  "total": 6,
+  "sources": ["lingshu/core/retrieval.py"],
+  "baseline_failures": [
+    "test_default_client_does_not_hide_old_or_new_memories[queued]",
+    "test_default_client_does_not_hide_old_or_new_memories[indexed]",
+    "test_partial_tracking_loss_falls_back_for_updated_content",
+    "test_lifecycle_change_during_candidate_read_is_rejected"
+  ],
+  "mutations": [
+    {
+      "name": "trust_detached_index",
+      "test": "test_default_client_does_not_hide_old_or_new_memories[indexed]",
+      "assertion": "detached FTS hid a persisted new memory",
+      "changes": [{"file": "lingshu/core/retrieval.py", "class": "FTSIndex", "method": "_tracking_epoch",
+        "old": "        if names != set(_TRIGGERS):", "new": "        if False:"}]
+    },
+    {
+      "name": "accept_partial_tracking",
+      "test": "test_partial_tracking_loss_falls_back_for_updated_content",
+      "assertion": "partial FTS tracking loss hid corrected content",
+      "changes": [{"file": "lingshu/core/retrieval.py", "class": "FTSIndex", "method": "_tracking_epoch",
+        "old": "        if names != set(_TRIGGERS):", "new": "        if not names:"}]
+    },
+    {
+      "name": "ignore_lifecycle_epoch",
+      "test": "test_lifecycle_change_during_candidate_read_is_rejected",
+      "assertion": "FTS lifecycle change was accepted as a valid index read",
+      "changes": [{"file": "lingshu/core/retrieval.py", "class": "FTSIndex", "method": "_require_tracking_epoch",
+        "old": "        if self.store.conn.execute(\"PRAGMA schema_version\").fetchone()[0] != epoch:", "new": "        if False:"}]
+    },
+    {
+      "name": "commit_caller_before_sync",
+      "test": "test_index_read_preserves_caller_transaction",
+      "assertion": "FTS read committed its caller",
+      "changes": [{"file": "lingshu/core/retrieval.py", "class": "FTSIndex", "method": "sync",
+        "old": "        epoch = self._tracking_epoch()", "new": "        self.store.conn.commit()\n        epoch = self._tracking_epoch()"}]
+    }
+  ]
+}

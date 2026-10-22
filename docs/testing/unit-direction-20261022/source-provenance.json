@@ -1,0 +1,78 @@
+{
+  "baseline": "ef6f413dd5ffaa91b419b359dc6edcfc872bffed",
+  "sha256_lf": {
+    "lingshu/nn/hex_unit.py": "39aa28bade875edf51ef4f32b6cb1afcff0429a244bb0f020c3eea03550d325c",
+    "tests/test_unit_direction.py": "d52e3da59247205cf7da26f3e23816ee7ec9c9097fb250712339758beab210e0",
+    "tests/fixtures/unit_direction_mutations.json": "16cf46c80f04336f815cce340a592570753b488685924432f3aeb4495d586773"
+  },
+  "runs": {
+    "windows": {
+      "platform": "Windows",
+      "python": "3.12.10",
+      "sqlite": "3.49.1",
+      "baseline": "ef6f413dd5ffaa91b419b359dc6edcfc872bffed",
+      "validated_commit": "95772933f7b6f9430bcfafdba48a7fa33547cd82",
+      "sha256_lf": {
+        "lingshu/nn/hex_unit.py": "39aa28bade875edf51ef4f32b6cb1afcff0429a244bb0f020c3eea03550d325c",
+        "tests/test_unit_direction.py": "d52e3da59247205cf7da26f3e23816ee7ec9c9097fb250712339758beab210e0",
+        "tests/fixtures/unit_direction_mutations.json": "16cf46c80f04336f815cce340a592570753b488685924432f3aeb4495d586773"
+      },
+      "commands": [
+        {
+          "name": "replay",
+          "returncode": 0
+        },
+        {
+          "name": "related",
+          "returncode": 0
+        },
+        {
+          "name": "manifest",
+          "returncode": 0
+        },
+        {
+          "name": "time-core",
+          "returncode": 0
+        }
+      ],
+      "related_total": 25,
+      "related_failures": [],
+      "related_errors": [],
+      "related_skips": []
+    },
+    "linux": {
+      "platform": "Linux",
+      "python": "3.13.12",
+      "sqlite": "3.46.1",
+      "baseline": "ef6f413dd5ffaa91b419b359dc6edcfc872bffed",
+      "validated_commit": "95772933f7b6f9430bcfafdba48a7fa33547cd82",
+      "sha256_lf": {
+        "lingshu/nn/hex_unit.py": "39aa28bade875edf51ef4f32b6cb1afcff0429a244bb0f020c3eea03550d325c",
+        "tests/test_unit_direction.py": "d52e3da59247205cf7da26f3e23816ee7ec9c9097fb250712339758beab210e0",
+        "tests/fixtures/unit_direction_mutations.json": "16cf46c80f04336f815cce340a592570753b488685924432f3aeb4495d586773"
+      },
+      "commands": [
+        {
+          "name": "replay",
+          "returncode": 0
+        },
+        {
+          "name": "related",
+          "returncode": 0
+        },
+        {
+          "name": "manifest",
+          "returncode": 0
+        },
+        {
+          "name": "time-core",
+          "returncode": 0
+        }
+      ],
+      "related_total": 25,
+      "related_failures": [],
+      "related_errors": [],
+      "related_skips": []
+    }
+  }
+}

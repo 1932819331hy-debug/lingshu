@@ -2,13 +2,13 @@
 """hex_unit · 单元化语义头(荣神经元模型:连接声明+感知偏差+有界增益)
 ====================================================================================
 荣 2026-09-07:「大脑 800 亿神经元自身参数就几个——识别连接,感知偏差,
-传递信号。语义在固定的连接网络组合和结构里。」
+    传递信号。语义在固定的连接网络组合和结构里。」
 
 两阶段:
   阶段一(结构发现,已由 base 网+剪枝完成):宽松训练 → 每卡 |w| top-k
     连接声明(方向=符号)——每条连接获得语义身份「该卡的第 N 证据源」;
   阶段二(结构固化,本模块):冻结连接结构,只调每卡两个有界属性——
-    感知偏差 θ(汇聚信号的响应阈值)与传递增益 g(|g|≤2)。
+    感知偏差 θ(汇聚信号的响应阈值)与传递增益 g(0≤g≤2)。
     参数 18 个(9 卡×2),纯 numpy 有限差分即可(秒级)。
 白箱:每条连接可直读("条纹卡 ← 特征7,方向+,g=0.8,θ=0.2")。
 """
@@ -46,7 +46,7 @@ class UnitHeadNet:
             idx = np.where(self.mask[c] > 0)[0]
             if len(idx):
                 m = np.abs(head[c, idx]).max() + 1e-9
-                self.gain[c, idx] = head[c, idx] / m * 1.5   # 有界 [-1.5,1.5]
+                self.gain[c, idx] = np.abs(head[c, idx]) / m * 1.5  # 幅度，方向只由 dir 承担
         self.theta = np.zeros(n_card, dtype=np.float64)
 
     # ---- 参数视图(有限差分统一索引:声明连接增益 ++ theta) ----
@@ -56,7 +56,7 @@ class UnitHeadNet:
 
     def set_vec(self, v: np.ndarray):
         k = int(self.mask.sum())
-        self.gain[self.mask > 0] = np.clip(v[:k], -self.GAIN_BOUND, self.GAIN_BOUND)
+        self.gain[self.mask > 0] = np.clip(v[:k], 0.0, self.GAIN_BOUND)
         self.theta = v[k:].copy()  # #557: 必须复制，不能持有调用方数组视图
 
     def n_params(self) -> int:

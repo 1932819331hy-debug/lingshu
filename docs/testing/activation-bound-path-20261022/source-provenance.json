@@ -1,0 +1,90 @@
+{
+  "baseline": "1eafb3f57a3f9a83d067c0a39568aca4588cfdff",
+  "sha256_lf": {
+    "lingshu/core/activation.py": "6f7a8259f726c645f256c110122b185abd1ff4437390b36537be7b9310ffbb16",
+    "tests/test_activation_bound_path.py": "a782201490db19e01ab3b94dc7be7384d3324d513b50a3b2b38aea0ef02f79d7",
+    "tests/fixtures/activation_bound_path_mutations.json": "a2de1dd8878005dde7167c534d3d10c838629d85293f97b1c21d7d275f7a66ee"
+  },
+  "runs": {
+    "windows": {
+      "platform": "Windows",
+      "python": "3.12.10",
+      "sqlite": "3.49.1",
+      "baseline": "1eafb3f57a3f9a83d067c0a39568aca4588cfdff",
+      "validated_commit": "e87fd4f",
+      "sha256_lf": {
+        "lingshu/core/activation.py": "6f7a8259f726c645f256c110122b185abd1ff4437390b36537be7b9310ffbb16",
+        "tests/test_activation_bound_path.py": "a782201490db19e01ab3b94dc7be7384d3324d513b50a3b2b38aea0ef02f79d7",
+        "tests/fixtures/activation_bound_path_mutations.json": "a2de1dd8878005dde7167c534d3d10c838629d85293f97b1c21d7d275f7a66ee"
+      },
+      "commands": [
+        {
+          "name": "replay",
+          "returncode": 0
+        },
+        {
+          "name": "related",
+          "returncode": 0
+        },
+        {
+          "name": "manifest",
+          "returncode": 0
+        },
+        {
+          "name": "time-core",
+          "returncode": 0
+        }
+      ],
+      "related_total": 22,
+      "related_failures": [],
+      "related_errors": [],
+      "related_skips": [],
+      "lint_anchor_sync_commit": "2385cda8390f398df7cbedf39db7a25c02aca05a",
+      "reused_passed_legs": [
+        "replay",
+        "related",
+        "manifest"
+      ]
+    },
+    "linux": {
+      "platform": "Linux",
+      "python": "3.13.12",
+      "sqlite": "3.46.1",
+      "baseline": "1eafb3f57a3f9a83d067c0a39568aca4588cfdff",
+      "validated_commit": "e87fd4f",
+      "sha256_lf": {
+        "lingshu/core/activation.py": "6f7a8259f726c645f256c110122b185abd1ff4437390b36537be7b9310ffbb16",
+        "tests/test_activation_bound_path.py": "a782201490db19e01ab3b94dc7be7384d3324d513b50a3b2b38aea0ef02f79d7",
+        "tests/fixtures/activation_bound_path_mutations.json": "a2de1dd8878005dde7167c534d3d10c838629d85293f97b1c21d7d275f7a66ee"
+      },
+      "commands": [
+        {
+          "name": "replay",
+          "returncode": 0
+        },
+        {
+          "name": "related",
+          "returncode": 0
+        },
+        {
+          "name": "manifest",
+          "returncode": 0
+        },
+        {
+          "name": "time-core",
+          "returncode": 0
+        }
+      ],
+      "related_total": 22,
+      "related_failures": [],
+      "related_errors": [],
+      "related_skips": [],
+      "lint_anchor_sync_commit": "2385cda8390f398df7cbedf39db7a25c02aca05a",
+      "reused_passed_legs": [
+        "replay",
+        "related",
+        "manifest"
+      ]
+    }
+  }
+}

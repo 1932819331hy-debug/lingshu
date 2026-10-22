@@ -1,0 +1,172 @@
+{
+  "windows": {
+    "python": "3.12.10",
+    "platform": "Windows",
+    "sqlite": "3.49.1",
+    "baseline": "1eafb3f57a3f9a83d067c0a39568aca4588cfdff",
+    "guard_sha256": "a782201490db19e01ab3b94dc7be7384d3324d513b50a3b2b38aea0ef02f79d7",
+    "records": [
+      {
+        "case": "fixed",
+        "ok": true,
+        "returncode": 0,
+        "passed": 5,
+        "failed_tests": [],
+        "errors": 0,
+        "skipped": 0,
+        "expected_failures": [],
+        "expected_assertion": "",
+        "pytest_summary": "5 passed in 1.52s",
+        "source_sha256": {
+          "lingshu/core/activation.py": "6f7a8259f726c645f256c110122b185abd1ff4437390b36537be7b9310ffbb16"
+        }
+      },
+      {
+        "case": "baseline",
+        "ok": true,
+        "returncode": 1,
+        "passed": 2,
+        "failed_tests": [
+          "test_activate_reads_and_replaces_only_its_original_workset",
+          "test_all_workset_readers_stay_on_the_original_database",
+          "test_import_after_chdir_does_not_overwrite_the_other_database"
+        ],
+        "errors": 0,
+        "skipped": 0,
+        "expected_failures": [
+          "test_import_after_chdir_does_not_overwrite_the_other_database",
+          "test_all_workset_readers_stay_on_the_original_database",
+          "test_activate_reads_and_replaces_only_its_original_workset"
+        ],
+        "expected_assertion": "",
+        "pytest_summary": "3 failed, 2 passed in 1.61s",
+        "source_sha256": {
+          "lingshu/core/activation.py": "218c8ab92525e58651f8e09af4d3afaee51e0b64103ac3325723a38ec0e38ddd"
+        }
+      },
+      {
+        "case": "retain_relative_database_path",
+        "ok": true,
+        "returncode": 1,
+        "passed": 0,
+        "failed_tests": [
+          "test_import_after_chdir_does_not_overwrite_the_other_database"
+        ],
+        "errors": 0,
+        "skipped": 0,
+        "expected_failures": [
+          "test_import_after_chdir_does_not_overwrite_the_other_database"
+        ],
+        "expected_assertion": "activation write moved to another cwd database",
+        "pytest_summary": "1 failed in 0.83s",
+        "source_sha256": {
+          "lingshu/core/activation.py": "658e4d8eb22ee003fd7096c3b7525eff2e5942424986cff5cde28d24c232d3bd"
+        }
+      },
+      {
+        "case": "reconnect_by_basename",
+        "ok": true,
+        "returncode": 1,
+        "passed": 0,
+        "failed_tests": [
+          "test_all_workset_readers_stay_on_the_original_database"
+        ],
+        "errors": 0,
+        "skipped": 0,
+        "expected_failures": [
+          "test_all_workset_readers_stay_on_the_original_database"
+        ],
+        "expected_assertion": "activation read moved to another cwd database",
+        "pytest_summary": "1 failed in 0.79s",
+        "source_sha256": {
+          "lingshu/core/activation.py": "ac180227bd6ab03e85cb2d64fe6dc2ac0660eeae5eab06ff40d7bfd06a0a3002"
+        }
+      }
+    ]
+  },
+  "linux": {
+    "python": "3.13.12",
+    "platform": "Linux",
+    "sqlite": "3.46.1",
+    "baseline": "1eafb3f57a3f9a83d067c0a39568aca4588cfdff",
+    "guard_sha256": "a782201490db19e01ab3b94dc7be7384d3324d513b50a3b2b38aea0ef02f79d7",
+    "records": [
+      {
+        "case": "fixed",
+        "ok": true,
+        "returncode": 0,
+        "passed": 5,
+        "failed_tests": [],
+        "errors": 0,
+        "skipped": 0,
+        "expected_failures": [],
+        "expected_assertion": "",
+        "pytest_summary": "5 passed in 4.24s",
+        "source_sha256": {
+          "lingshu/core/activation.py": "6f7a8259f726c645f256c110122b185abd1ff4437390b36537be7b9310ffbb16"
+        }
+      },
+      {
+        "case": "baseline",
+        "ok": true,
+        "returncode": 1,
+        "passed": 2,
+        "failed_tests": [
+          "test_activate_reads_and_replaces_only_its_original_workset",
+          "test_all_workset_readers_stay_on_the_original_database",
+          "test_import_after_chdir_does_not_overwrite_the_other_database"
+        ],
+        "errors": 0,
+        "skipped": 0,
+        "expected_failures": [
+          "test_import_after_chdir_does_not_overwrite_the_other_database",
+          "test_all_workset_readers_stay_on_the_original_database",
+          "test_activate_reads_and_replaces_only_its_original_workset"
+        ],
+        "expected_assertion": "",
+        "pytest_summary": "3 failed, 2 passed in 4.14s",
+        "source_sha256": {
+          "lingshu/core/activation.py": "218c8ab92525e58651f8e09af4d3afaee51e0b64103ac3325723a38ec0e38ddd"
+        }
+      },
+      {
+        "case": "retain_relative_database_path",
+        "ok": true,
+        "returncode": 1,
+        "passed": 0,
+        "failed_tests": [
+          "test_import_after_chdir_does_not_overwrite_the_other_database"
+        ],
+        "errors": 0,
+        "skipped": 0,
+        "expected_failures": [
+          "test_import_after_chdir_does_not_overwrite_the_other_database"
+        ],
+        "expected_assertion": "activation write moved to another cwd database",
+        "pytest_summary": "1 failed in 1.38s",
+        "source_sha256": {
+          "lingshu/core/activation.py": "658e4d8eb22ee003fd7096c3b7525eff2e5942424986cff5cde28d24c232d3bd"
+        }
+      },
+      {
+        "case": "reconnect_by_basename",
+        "ok": true,
+        "returncode": 1,
+        "passed": 0,
+        "failed_tests": [
+          "test_all_workset_readers_stay_on_the_original_database"
+        ],
+        "errors": 0,
+        "skipped": 0,
+        "expected_failures": [
+          "test_all_workset_readers_stay_on_the_original_database"
+        ],
+        "expected_assertion": "activation read moved to another cwd database",
+        "pytest_summary": "1 failed in 1.40s",
+        "source_sha256": {
+          "lingshu/core/activation.py": "ac180227bd6ab03e85cb2d64fe6dc2ac0660eeae5eab06ff40d7bfd06a0a3002"
+        }
+      }
+    ]
+  }
+}

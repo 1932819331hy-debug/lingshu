@@ -1,0 +1,214 @@
+{
+  "windows": {
+    "python": "3.12.10",
+    "platform": "Windows",
+    "sqlite": "3.49.1",
+    "baseline": "ef6f413dd5ffaa91b419b359dc6edcfc872bffed",
+    "guard_sha256": "7c1abdb0162589a7f7f6c7c5948e55426f58651b90c463657554c0e497d35d29",
+    "records": [
+      {
+        "case": "fixed",
+        "ok": true,
+        "returncode": 0,
+        "passed": 6,
+        "failed_tests": [],
+        "errors": 0,
+        "skipped": 0,
+        "expected_failures": [],
+        "expected_assertion": "",
+        "pytest_summary": "6 passed in 0.86s",
+        "source_sha256": {
+          "lingshu/core/tms.py": "e65579ab1a622d18763192f053bda2504533cea09e09bc30245769ac98b15e03"
+        }
+      },
+      {
+        "case": "baseline",
+        "ok": true,
+        "returncode": 1,
+        "passed": 2,
+        "failed_tests": [
+          "test_deleted_root_cannot_recover_confidence_from_retained_evidence",
+          "test_missing_intermediate_cannot_transmit_corroborated_own_evidence",
+          "test_reopened_database_agrees_with_the_undermined_report",
+          "test_unknown_propagation_root_has_no_implicit_prior"
+        ],
+        "errors": 0,
+        "skipped": 0,
+        "expected_failures": [
+          "test_deleted_root_cannot_recover_confidence_from_retained_evidence",
+          "test_reopened_database_agrees_with_the_undermined_report",
+          "test_missing_intermediate_cannot_transmit_corroborated_own_evidence",
+          "test_unknown_propagation_root_has_no_implicit_prior"
+        ],
+        "expected_assertion": "",
+        "pytest_summary": "4 failed, 2 passed in 1.00s",
+        "source_sha256": {
+          "lingshu/core/tms.py": "e7d0f5e0a86189b2dbd5c83d5b1eabc360d890cdb063996ec96a7e1544f21cee"
+        }
+      },
+      {
+        "case": "trust_retained_evidence_for_missing_roots",
+        "ok": true,
+        "returncode": 1,
+        "passed": 0,
+        "failed_tests": [
+          "test_deleted_root_cannot_recover_confidence_from_retained_evidence"
+        ],
+        "errors": 0,
+        "skipped": 0,
+        "expected_failures": [
+          "test_deleted_root_cannot_recover_confidence_from_retained_evidence"
+        ],
+        "expected_assertion": "deleted propagation root recovered stale evidence confidence",
+        "pytest_summary": "1 failed in 0.61s",
+        "source_sha256": {
+          "lingshu/core/tms.py": "648cc26f683948375236d0184bafb704279913b4564806e01d814d6ded46090a"
+        }
+      },
+      {
+        "case": "give_unknown_roots_the_ledger_prior",
+        "ok": true,
+        "returncode": 1,
+        "passed": 0,
+        "failed_tests": [
+          "test_unknown_propagation_root_has_no_implicit_prior"
+        ],
+        "errors": 0,
+        "skipped": 0,
+        "expected_failures": [
+          "test_unknown_propagation_root_has_no_implicit_prior"
+        ],
+        "expected_assertion": "unknown propagation roots received a prior",
+        "pytest_summary": "1 failed in 0.59s",
+        "source_sha256": {
+          "lingshu/core/tms.py": "14c8fab24d03845b7b0eb0ff895e71f37fef54cd1e626fc7c472bcd9ca199d66"
+        }
+      },
+      {
+        "case": "persist_a_default_missing_belief",
+        "ok": true,
+        "returncode": 1,
+        "passed": 0,
+        "failed_tests": [
+          "test_reopened_database_agrees_with_the_undermined_report"
+        ],
+        "errors": 0,
+        "skipped": 0,
+        "expected_failures": [
+          "test_reopened_database_agrees_with_the_undermined_report"
+        ],
+        "expected_assertion": "persisted conclusion retained a deleted premise belief",
+        "pytest_summary": "1 failed in 0.63s",
+        "source_sha256": {
+          "lingshu/core/tms.py": "ab757a6fcae8d32bfbb8e64de0c8cd4203786fa730d431066a1d6497c815b083"
+        }
+      }
+    ]
+  },
+  "linux": {
+    "python": "3.13.12",
+    "platform": "Linux",
+    "sqlite": "3.46.1",
+    "baseline": "ef6f413dd5ffaa91b419b359dc6edcfc872bffed",
+    "guard_sha256": "7c1abdb0162589a7f7f6c7c5948e55426f58651b90c463657554c0e497d35d29",
+    "records": [
+      {
+        "case": "fixed",
+        "ok": true,
+        "returncode": 0,
+        "passed": 6,
+        "failed_tests": [],
+        "errors": 0,
+        "skipped": 0,
+        "expected_failures": [],
+        "expected_assertion": "",
+        "pytest_summary": "6 passed in 2.78s",
+        "source_sha256": {
+          "lingshu/core/tms.py": "e65579ab1a622d18763192f053bda2504533cea09e09bc30245769ac98b15e03"
+        }
+      },
+      {
+        "case": "baseline",
+        "ok": true,
+        "returncode": 1,
+        "passed": 2,
+        "failed_tests": [
+          "test_deleted_root_cannot_recover_confidence_from_retained_evidence",
+          "test_missing_intermediate_cannot_transmit_corroborated_own_evidence",
+          "test_reopened_database_agrees_with_the_undermined_report",
+          "test_unknown_propagation_root_has_no_implicit_prior"
+        ],
+        "errors": 0,
+        "skipped": 0,
+        "expected_failures": [
+          "test_deleted_root_cannot_recover_confidence_from_retained_evidence",
+          "test_reopened_database_agrees_with_the_undermined_report",
+          "test_missing_intermediate_cannot_transmit_corroborated_own_evidence",
+          "test_unknown_propagation_root_has_no_implicit_prior"
+        ],
+        "expected_assertion": "",
+        "pytest_summary": "4 failed, 2 passed in 2.87s",
+        "source_sha256": {
+          "lingshu/core/tms.py": "e7d0f5e0a86189b2dbd5c83d5b1eabc360d890cdb063996ec96a7e1544f21cee"
+        }
+      },
+      {
+        "case": "trust_retained_evidence_for_missing_roots",
+        "ok": true,
+        "returncode": 1,
+        "passed": 0,
+        "failed_tests": [
+          "test_deleted_root_cannot_recover_confidence_from_retained_evidence"
+        ],
+        "errors": 0,
+        "skipped": 0,
+        "expected_failures": [
+          "test_deleted_root_cannot_recover_confidence_from_retained_evidence"
+        ],
+        "expected_assertion": "deleted propagation root recovered stale evidence confidence",
+        "pytest_summary": "1 failed in 1.04s",
+        "source_sha256": {
+          "lingshu/core/tms.py": "648cc26f683948375236d0184bafb704279913b4564806e01d814d6ded46090a"
+        }
+      },
+      {
+        "case": "give_unknown_roots_the_ledger_prior",
+        "ok": true,
+        "returncode": 1,
+        "passed": 0,
+        "failed_tests": [
+          "test_unknown_propagation_root_has_no_implicit_prior"
+        ],
+        "errors": 0,
+        "skipped": 0,
+        "expected_failures": [
+          "test_unknown_propagation_root_has_no_implicit_prior"
+        ],
+        "expected_assertion": "unknown propagation roots received a prior",
+        "pytest_summary": "1 failed in 0.89s",
+        "source_sha256": {
+          "lingshu/core/tms.py": "14c8fab24d03845b7b0eb0ff895e71f37fef54cd1e626fc7c472bcd9ca199d66"
+        }
+      },
+      {
+        "case": "persist_a_default_missing_belief",
+        "ok": true,
+        "returncode": 1,
+        "passed": 0,
+        "failed_tests": [
+          "test_reopened_database_agrees_with_the_undermined_report"
+        ],
+        "errors": 0,
+        "skipped": 0,
+        "expected_failures": [
+          "test_reopened_database_agrees_with_the_undermined_report"
+        ],
+        "expected_assertion": "persisted conclusion retained a deleted premise belief",
+        "pytest_summary": "1 failed in 1.11s",
+        "source_sha256": {
+          "lingshu/core/tms.py": "ab757a6fcae8d32bfbb8e64de0c8cd4203786fa730d431066a1d6497c815b083"
+        }
+      }
+    ]
+  }
+}

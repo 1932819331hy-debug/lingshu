@@ -1,0 +1,210 @@
+{
+  "windows": {
+    "python": "3.12.10",
+    "platform": "Windows",
+    "sqlite": "3.49.1",
+    "baseline": "1eafb3f57a3f9a83d067c0a39568aca4588cfdff",
+    "guard_sha256": "a12e0e877f02d2f7133f3d0f740c8ce2d121d51d0390066b0b473172eb2e3ff7",
+    "records": [
+      {
+        "case": "fixed",
+        "ok": true,
+        "returncode": 0,
+        "passed": 6,
+        "failed_tests": [],
+        "errors": 0,
+        "skipped": 0,
+        "expected_failures": [],
+        "expected_assertion": "",
+        "pytest_summary": "6 passed in 0.23s",
+        "source_sha256": {
+          "lingshu/world/world_model.py": "418e0faad8dde9d1dcd2a1cec6397f260987a3513215db2c599d05beb1ab4573"
+        }
+      },
+      {
+        "case": "baseline",
+        "ok": true,
+        "returncode": 1,
+        "passed": 3,
+        "failed_tests": [
+          "test_anonymous_allocation_cannot_consume_a_later_explicit_id",
+          "test_long_fallback_cannot_consume_a_later_explicit_id",
+          "test_long_fallback_cannot_overwrite_an_existing_entity"
+        ],
+        "errors": 0,
+        "skipped": 0,
+        "expected_failures": [
+          "test_anonymous_allocation_cannot_consume_a_later_explicit_id",
+          "test_long_fallback_cannot_overwrite_an_existing_entity",
+          "test_long_fallback_cannot_consume_a_later_explicit_id"
+        ],
+        "expected_assertion": "",
+        "pytest_summary": "3 failed, 3 passed in 0.36s",
+        "source_sha256": {
+          "lingshu/world/world_model.py": "d51abaddae09162768d2de80cb95b04f7536ac6491f41b10571525eb0057d5c0"
+        }
+      },
+      {
+        "case": "ignore_reserved_short_ids",
+        "ok": true,
+        "returncode": 1,
+        "passed": 0,
+        "failed_tests": [
+          "test_anonymous_allocation_cannot_consume_a_later_explicit_id"
+        ],
+        "errors": 0,
+        "skipped": 0,
+        "expected_failures": [
+          "test_anonymous_allocation_cannot_consume_a_later_explicit_id"
+        ],
+        "expected_assertion": "anonymous allocation consumed a reserved explicit ID",
+        "pytest_summary": "1 failed in 0.32s",
+        "source_sha256": {
+          "lingshu/world/world_model.py": "874e7dd7e90c522aa492a6de20567272f49ee7c85643679cb3cc3ca44a249b1f"
+        }
+      },
+      {
+        "case": "ignore_existing_long_ids",
+        "ok": true,
+        "returncode": 1,
+        "passed": 0,
+        "failed_tests": [
+          "test_long_fallback_cannot_overwrite_an_existing_entity"
+        ],
+        "errors": 0,
+        "skipped": 0,
+        "expected_failures": [
+          "test_long_fallback_cannot_overwrite_an_existing_entity"
+        ],
+        "expected_assertion": "long fallback ID overwrote an existing entity",
+        "pytest_summary": "1 failed in 0.32s",
+        "source_sha256": {
+          "lingshu/world/world_model.py": "f04d0db190a0125d8c096b505ce2474b7279030a08a5f037f52010b629a95fd0"
+        }
+      },
+      {
+        "case": "ignore_reserved_long_ids",
+        "ok": true,
+        "returncode": 1,
+        "passed": 0,
+        "failed_tests": [
+          "test_long_fallback_cannot_consume_a_later_explicit_id"
+        ],
+        "errors": 0,
+        "skipped": 0,
+        "expected_failures": [
+          "test_long_fallback_cannot_consume_a_later_explicit_id"
+        ],
+        "expected_assertion": "long fallback consumed a reserved explicit ID",
+        "pytest_summary": "1 failed in 0.32s",
+        "source_sha256": {
+          "lingshu/world/world_model.py": "299f6b2895aef7ee442d0ab7f8dee491ac613e0f49dbaf0287491c3582f9ce5e"
+        }
+      }
+    ]
+  },
+  "linux": {
+    "python": "3.13.12",
+    "platform": "Linux",
+    "sqlite": "3.46.1",
+    "baseline": "1eafb3f57a3f9a83d067c0a39568aca4588cfdff",
+    "guard_sha256": "a12e0e877f02d2f7133f3d0f740c8ce2d121d51d0390066b0b473172eb2e3ff7",
+    "records": [
+      {
+        "case": "fixed",
+        "ok": true,
+        "returncode": 0,
+        "passed": 6,
+        "failed_tests": [],
+        "errors": 0,
+        "skipped": 0,
+        "expected_failures": [],
+        "expected_assertion": "",
+        "pytest_summary": "6 passed in 0.33s",
+        "source_sha256": {
+          "lingshu/world/world_model.py": "418e0faad8dde9d1dcd2a1cec6397f260987a3513215db2c599d05beb1ab4573"
+        }
+      },
+      {
+        "case": "baseline",
+        "ok": true,
+        "returncode": 1,
+        "passed": 3,
+        "failed_tests": [
+          "test_anonymous_allocation_cannot_consume_a_later_explicit_id",
+          "test_long_fallback_cannot_consume_a_later_explicit_id",
+          "test_long_fallback_cannot_overwrite_an_existing_entity"
+        ],
+        "errors": 0,
+        "skipped": 0,
+        "expected_failures": [
+          "test_anonymous_allocation_cannot_consume_a_later_explicit_id",
+          "test_long_fallback_cannot_overwrite_an_existing_entity",
+          "test_long_fallback_cannot_consume_a_later_explicit_id"
+        ],
+        "expected_assertion": "",
+        "pytest_summary": "3 failed, 3 passed in 0.46s",
+        "source_sha256": {
+          "lingshu/world/world_model.py": "d51abaddae09162768d2de80cb95b04f7536ac6491f41b10571525eb0057d5c0"
+        }
+      },
+      {
+        "case": "ignore_reserved_short_ids",
+        "ok": true,
+        "returncode": 1,
+        "passed": 0,
+        "failed_tests": [
+          "test_anonymous_allocation_cannot_consume_a_later_explicit_id"
+        ],
+        "errors": 0,
+        "skipped": 0,
+        "expected_failures": [
+          "test_anonymous_allocation_cannot_consume_a_later_explicit_id"
+        ],
+        "expected_assertion": "anonymous allocation consumed a reserved explicit ID",
+        "pytest_summary": "1 failed in 0.42s",
+        "source_sha256": {
+          "lingshu/world/world_model.py": "874e7dd7e90c522aa492a6de20567272f49ee7c85643679cb3cc3ca44a249b1f"
+        }
+      },
+      {
+        "case": "ignore_existing_long_ids",
+        "ok": true,
+        "returncode": 1,
+        "passed": 0,
+        "failed_tests": [
+          "test_long_fallback_cannot_overwrite_an_existing_entity"
+        ],
+        "errors": 0,
+        "skipped": 0,
+        "expected_failures": [
+          "test_long_fallback_cannot_overwrite_an_existing_entity"
+        ],
+        "expected_assertion": "long fallback ID overwrote an existing entity",
+        "pytest_summary": "1 failed in 0.43s",
+        "source_sha256": {
+          "lingshu/world/world_model.py": "f04d0db190a0125d8c096b505ce2474b7279030a08a5f037f52010b629a95fd0"
+        }
+      },
+      {
+        "case": "ignore_reserved_long_ids",
+        "ok": true,
+        "returncode": 1,
+        "passed": 0,
+        "failed_tests": [
+          "test_long_fallback_cannot_consume_a_later_explicit_id"
+        ],
+        "errors": 0,
+        "skipped": 0,
+        "expected_failures": [
+          "test_long_fallback_cannot_consume_a_later_explicit_id"
+        ],
+        "expected_assertion": "long fallback consumed a reserved explicit ID",
+        "pytest_summary": "1 failed in 0.42s",
+        "source_sha256": {
+          "lingshu/world/world_model.py": "299f6b2895aef7ee442d0ab7f8dee491ac613e0f49dbaf0287491c3582f9ce5e"
+        }
+      }
+    ]
+  }
+}
