@@ -1,0 +1,10 @@
+{
+ "guard":"tests/test_stcnn_write_snapshot.py","total":8,"sources":["lingshu/nn/stcnn.py"],
+ "baseline_failures":["test_returned_event_mutation_is_detected","test_recall_alias_mutation_is_detected","test_lost_event_is_detected_even_when_recall_matches_remaining_events","test_complete_fabricated_event_is_detected","test_reordered_events_are_detected","test_nested_label_is_copied_independently","test_restoring_original_value_restores_consistency"],
+ "mutations":[
+  {"name":"compare_only_lengths","test":"test_returned_event_mutation_is_detected","assertion":"modified returned event passed the write receipt check","changes":[{"file":"lingshu/nn/stcnn.py","class":"SpatiotemporalMemory","method":"verify_consistency","old":"if self.events != self._written:","new":"if len(self.events) != len(self._written):"}]},
+  {"name":"alias_the_event_receipt","test":"test_returned_event_mutation_is_detected","assertion":"modified returned event passed the write receipt check","changes":[{"file":"lingshu/nn/stcnn.py","class":"SpatiotemporalMemory","method":"remember","old":"written = deepcopy(event)","new":"written = event"}]},
+  {"name":"copy_only_top_level","test":"test_nested_label_is_copied_independently","assertion":"nested label alias changed the independent receipt","changes":[{"file":"lingshu/nn/stcnn.py","class":"SpatiotemporalMemory","method":"remember","old":"written = deepcopy(event)","new":"written = dict(event)"}]},
+  {"name":"check_only_surviving_prefix","test":"test_lost_event_is_detected_even_when_recall_matches_remaining_events","assertion":"lost event was accepted as complete memory","changes":[{"file":"lingshu/nn/stcnn.py","class":"SpatiotemporalMemory","method":"verify_consistency","old":"if self.events != self._written:","new":"if any(a != b for a, b in zip(self.events, self._written)):"}]}
+ ]
+}
