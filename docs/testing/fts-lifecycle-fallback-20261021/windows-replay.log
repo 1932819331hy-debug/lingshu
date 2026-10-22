@@ -1,0 +1,89 @@
+CASE fixed
+......                                                                   [100%]
+6 passed in 0.98s
+
+CASE baseline
+FFFF..                                                                   [100%]
+================================== FAILURES ===================================
+________ test_default_client_does_not_hide_old_or_new_memories[queued] ________
+tests\test_fts_lifecycle_fallback.py:38: in test_default_client_does_not_hide_old_or_new_memories
+    assert new.id in {n.id for n, _ in hits}, "detached FTS hid a persisted new memory"
+E   AssertionError: detached FTS hid a persisted new memory
+E   assert 'node_b5209a3a_1792567688818' in set()
+E    +  where 'node_b5209a3a_1792567688818' = STNode(id='node_b5209a3a_1792567688818', content='fresh telescope signal', modality='text', spatial_coordinates={}, te...92567688.8184028, created_at=1792567688.8184028, tags=[], semantic_coordinates={}, state_attributes={}, entity_id=None).id
+_______ test_default_client_does_not_hide_old_or_new_memories[indexed] ________
+tests\test_fts_lifecycle_fallback.py:38: in test_default_client_does_not_hide_old_or_new_memories
+    assert new.id in {n.id for n, _ in hits}, "detached FTS hid a persisted new memory"
+E   AssertionError: detached FTS hid a persisted new memory
+E   assert 'node_bff2895e_1792567689043' in set()
+E    +  where 'node_bff2895e_1792567689043' = STNode(id='node_bff2895e_1792567689043', content='fresh telescope signal', modality='text', spatial_coordinates={}, te...92567689.0430324, created_at=1792567689.0430324, tags=[], semantic_coordinates={}, state_attributes={}, entity_id=None).id
+__________ test_partial_tracking_loss_falls_back_for_updated_content __________
+tests\test_fts_lifecycle_fallback.py:51: in test_partial_tracking_loss_falls_back_for_updated_content
+    assert node.id in {n.id for n, _ in hits}, "partial FTS tracking loss hid corrected content"
+E   AssertionError: partial FTS tracking loss hid corrected content
+E   assert 'node_f5939443_1792567689104' in set()
+E    +  where 'node_f5939443_1792567689104' = STNode(id='node_f5939443_1792567689104', content='初始频谱记录', modality='text', spatial_coordinates={}, temporal_coordinat...92567689.1046257, created_at=1792567689.1046257, tags=[], semantic_coordinates={}, state_attributes={}, entity_id=None).id
+___________ test_lifecycle_change_during_candidate_read_is_rejected ___________
+tests\test_fts_lifecycle_fallback.py:80: in test_lifecycle_change_during_candidate_read_is_rejected
+    assert rejected, "FTS lifecycle change was accepted as a valid index read"
+E   AssertionError: FTS lifecycle change was accepted as a valid index read
+E   assert False
+=========================== short test summary info ===========================
+FAILED tests/test_fts_lifecycle_fallback.py::test_default_client_does_not_hide_old_or_new_memories[queued]
+FAILED tests/test_fts_lifecycle_fallback.py::test_default_client_does_not_hide_old_or_new_memories[indexed]
+FAILED tests/test_fts_lifecycle_fallback.py::test_partial_tracking_loss_falls_back_for_updated_content
+FAILED tests/test_fts_lifecycle_fallback.py::test_lifecycle_change_during_candidate_read_is_rejected
+4 failed, 2 passed in 1.02s
+
+CASE trust_detached_index
+F                                                                        [100%]
+================================== FAILURES ===================================
+_______ test_default_client_does_not_hide_old_or_new_memories[indexed] ________
+tests\test_fts_lifecycle_fallback.py:38: in test_default_client_does_not_hide_old_or_new_memories
+    assert new.id in {n.id for n, _ in hits}, "detached FTS hid a persisted new memory"
+E   AssertionError: detached FTS hid a persisted new memory
+E   assert 'node_5e1498aa_1792567690422' in set()
+E    +  where 'node_5e1498aa_1792567690422' = STNode(id='node_5e1498aa_1792567690422', content='fresh telescope signal', modality='text', spatial_coordinates={}, te...92567690.4227898, created_at=1792567690.4227898, tags=[], semantic_coordinates={}, state_attributes={}, entity_id=None).id
+=========================== short test summary info ===========================
+FAILED tests/test_fts_lifecycle_fallback.py::test_default_client_does_not_hide_old_or_new_memories[indexed]
+1 failed in 0.56s
+
+CASE accept_partial_tracking
+F                                                                        [100%]
+================================== FAILURES ===================================
+__________ test_partial_tracking_loss_falls_back_for_updated_content __________
+tests\test_fts_lifecycle_fallback.py:51: in test_partial_tracking_loss_falls_back_for_updated_content
+    assert node.id in {n.id for n, _ in hits}, "partial FTS tracking loss hid corrected content"
+E   AssertionError: partial FTS tracking loss hid corrected content
+E   assert 'node_37c6094e_1792567691465' in set()
+E    +  where 'node_37c6094e_1792567691465' = STNode(id='node_37c6094e_1792567691465', content='初始频谱记录', modality='text', spatial_coordinates={}, temporal_coordinat...92567691.4650483, created_at=1792567691.4650483, tags=[], semantic_coordinates={}, state_attributes={}, entity_id=None).id
+=========================== short test summary info ===========================
+FAILED tests/test_fts_lifecycle_fallback.py::test_partial_tracking_loss_falls_back_for_updated_content
+1 failed in 0.51s
+
+CASE ignore_lifecycle_epoch
+F                                                                        [100%]
+================================== FAILURES ===================================
+___________ test_lifecycle_change_during_candidate_read_is_rejected ___________
+tests\test_fts_lifecycle_fallback.py:80: in test_lifecycle_change_during_candidate_read_is_rejected
+    assert rejected, "FTS lifecycle change was accepted as a valid index read"
+E   AssertionError: FTS lifecycle change was accepted as a valid index read
+E   assert False
+=========================== short test summary info ===========================
+FAILED tests/test_fts_lifecycle_fallback.py::test_lifecycle_change_during_candidate_read_is_rejected
+1 failed in 0.58s
+
+CASE commit_caller_before_sync
+F                                                                        [100%]
+================================== FAILURES ===================================
+________________ test_index_read_preserves_caller_transaction _________________
+tests\test_fts_lifecycle_fallback.py:99: in test_index_read_preserves_caller_transaction
+    assert engine.store.conn.in_transaction, "FTS read committed its caller"
+E   AssertionError: FTS read committed its caller
+E   assert False
+E    +  where False = <sqlite3.Connection object at 0x000001968277DC60>.in_transaction
+E    +    where <sqlite3.Connection object at 0x000001968277DC60> = <lingshu.core.core.LayeredStore object at 0x00000196824AB8C0>.conn
+E    +      where <lingshu.core.core.LayeredStore object at 0x00000196824AB8C0> = <lingshu.core.core.SpacetimeMemoryEngine object at 0x00000196824ABAA0>.store
+=========================== short test summary info ===========================
+FAILED tests/test_fts_lifecycle_fallback.py::test_index_read_preserves_caller_transaction
+1 failed in 0.54s

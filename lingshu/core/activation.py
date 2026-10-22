@@ -176,7 +176,8 @@ class ActivationEngine:
           · 只给 `db_path=":memory:"` → 显式 `ValueError`（不再静默拿空库）；
           · 文件路径 → 父目录不存在时自动创建（旧实现在干净目录下构造即
             `unable to open database file`）。
-        默认 `db_path` 仍相对 cwd（是否改为包内/用户目录属设计者裁，本件不动）。
+        相对 `db_path` 仍以构造时 cwd 选择原位置，实例随后固定该文件；进程 chdir
+        不得让同一实例的后续重连改写另一同名库。不改默认数据根的选择。
         判据来源：本件 #293（分诊表 `triage_lingshu_ALL.md` 行 293 判定成立）。
         """
         if store is not None:
@@ -190,7 +191,7 @@ class ActivationEngine:
                 "ActivationEngine: ':memory:' 每次连接都是新空库,请传 conn= 或 "
                 "store=(如 engine.store) 共享同一连接")
         else:
-            self.db_path = db_path
+            self.db_path = os.path.abspath(db_path)
             self._conn = None
             parent = os.path.dirname(os.path.abspath(db_path))
             if parent:

@@ -1,0 +1,15 @@
+{
+  "guard": "tests/test_activation_bound_path.py", "total": 5,
+  "sources": ["lingshu/core/activation.py"],
+  "baseline_failures": ["test_import_after_chdir_does_not_overwrite_the_other_database", "test_all_workset_readers_stay_on_the_original_database", "test_activate_reads_and_replaces_only_its_original_workset"],
+  "mutations": [
+    {"name": "retain_relative_database_path", "test": "test_import_after_chdir_does_not_overwrite_the_other_database",
+      "assertion": "activation write moved to another cwd database",
+      "changes": [{"file": "lingshu/core/activation.py", "class": "ActivationEngine", "method": "__init__",
+        "old": "            self.db_path = os.path.abspath(db_path)", "new": "            self.db_path = db_path"}]},
+    {"name": "reconnect_by_basename", "test": "test_all_workset_readers_stay_on_the_original_database",
+      "assertion": "activation read moved to another cwd database",
+      "changes": [{"file": "lingshu/core/activation.py", "class": "ActivationEngine", "method": "_con",
+        "old": "        return sqlite3.connect(self.db_path, timeout=30)", "new": "        return sqlite3.connect(os.path.basename(self.db_path), timeout=30)"}]}
+  ]
+}

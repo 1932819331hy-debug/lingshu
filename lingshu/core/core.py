@@ -2198,6 +2198,28 @@ class LayeredStore:
                              "protections_row": node.id in set(self.get_protected_nodes()),
                              "old_tags": list(overwrite_protected.tags or [])})
             self._commit_locked()
+        # #797：FTS 索引同步写入——`LINGSHU_FTS=1` 时节点写路径不再把索引更新
+        # 拖到「下一次检索」（旧实现在 add_node 落库后只靠触发器入脏队列，由
+        # `candidates()` 检索前排空 ⇒ 写入与检索之间 `nodes_fts` 恒 0 行，外部
+        # 连接读到的派生索引始终为空，`LINGSHU_FTS=1` 形同虚设）。修法（与 issue
+        # 建议同向，挂在**唯一写入汇聚点**——add_perception / add_context /
+        # set_anchor / add_structure_node / 自我快照全部经此）：本方法提交后立即
+        # `sync()` 排空脏队列，索引行与节点行同连接同事务可见（嵌套事务下 sync
+        # 走 SAVEPOINT，随外层一并提交/回滚，不会产生孤儿 FTS 行）。
+        # `import_all` 的裸 INSERT 路径不在本闸内——其脏队列仍由检索前的 lazy
+        # sync 增量补齐（既有机制，非本件收口面）。
+        # 失败面：FTS 是派生索引，sync 的 sqlite 失败不应炸掉已提交的节点写——
+        # 降级为 warn 并保留脏队列（lazy sync 下次检索重试）；按仓内纪律宽 except
+        # 必须带 warn，此处收窄到 `sqlite3.Error`（`sync` 自身不吞错）。
+        fts = getattr(self, "_fts", None)
+        if fts is not None:
+            try:
+                fts.sync()
+            except sqlite3.Error as exc:
+                warnings.warn(
+                    "#797 FTS 写路径同步失败（已提交的节点不受影响，索引留待下次"
+                    "检索前增量补齐）：%s: %s" % (type(exc).__name__, exc),
+                    RuntimeWarning, stacklevel=2)
         return node.id
 
     # ---- 引擎元数据（engine_meta key-value，跨进程持久化） ----
@@ -6524,6 +6546,21 @@ class LayeredStore:
         self._anchor = None
 
 
+def _filter_min_score(scored, min_score):
+    """#795：按 `min_score` 截断**返回面**（不截断候选池、不改打分/排序）。
+
+    `min_score` 缺省 0.0 / None / 负数 ⇒ 原样返回（既有调用逐位不变）；非有限
+    （NaN/±Inf）⇒ `ValueError`（fail-closed，同 #185/#196 口径：不可判的阈值不得
+    被译成「不过滤」）。阈值由调用方按自己的语料标定，本函数不内置推荐值。
+    """
+    if min_score is None or min_score == 0:
+        return scored
+    ms = _require_finite("min_score", min_score)
+    if ms <= 0.0:
+        return scored
+    return [(n, s) for n, s in scored if s >= ms]
+
+
 # =============================================================================
 # 时空记忆引擎（SpacetimeMemoryEngine）
 # =============================================================================
@@ -7483,8 +7520,51 @@ class SpacetimeMemoryEngine:
                  relation_type: EdgeType = EdgeType.CAUSAL,
                  confidence: float = 0.5,
                  condition_space: ConditionSpace = None,
-                 source_evidence: str = "extracted") -> STEdge:
-        """添加边（默认未验证）。source_evidence（P1-1）：extracted/inferred/ambiguous"""
+                 source_evidence: str = "extracted",
+                 dedup: bool = True) -> STEdge:
+        """添加边（默认未验证）。source_evidence（P1-1）：extracted/inferred/ambiguous
+
+        #801：写入前查同 (source_id, target_id, relation_type) 的既有边——存在则
+        **返回已有边**（带 `merged=True` 属性标记），不再插入平行副本（旧实现同参数
+        调 5 次产出 5 条独立边：`find_cycles`/`shortest_path`/`infer_causal_paths`
+        把同一事实计多次，存储无界增长——节点侧自 v1.26c 有 M5 去重，边侧零去重）。
+        判据来源：公开 issue #801 复现读数（5 次 add_edge → 5 个 edge_id）＋ 其
+        「修复建议 1/2」。命中口径取**返回已有边**而非 raise——与节点侧 M5 去重
+        先例（#223：命中返回原节点并带 `merged=True`）一致；`merged` 以返回对象
+        属性承载（STEdge 非 slotted dataclass，同 STNode 的 #223 先例），新建路径
+        恒 `merged=False`，既有调用方按 STEdge 使用不受影响。同 (source, target)
+        **不同 relation_type** 仍各自成边（语义不同的关系不是重复）。
+        `dedup=False`（issue 建议 2 的逃生口）：显式要求多条平行边时跳过查重照旧
+        插入（#327 守卫的平行边构图、需要 k 条平行边的枚举压测走此参数）。
+        边界（削掉的判别力/未覆盖面，如实标注）：①只挡**新增**面——库内既有平行边
+        不做存量迁移合并（#327 当年裁「合并+迁移会改既有边 id，波及衰减/验证/同步
+        面」，本件同样不动存量）；②命中后既有边的 confidence/verified/source_evidence
+        **不与新参数合并**（与 M5「只计复用不增信」#29① 同向：重复添加不增置信度）；
+        ③`LayeredStore.add_edge(STEdge)` 直写面不去重（同步/导入路径须保真，非本件
+        收口面）；④查重是 check-then-act，与 `add_node` 的旧行检查同款并发口径。"""
+        rt = relation_type if isinstance(relation_type, EdgeType) else EdgeType(relation_type)
+        if dedup:
+            row = self.store.conn.execute(
+                "SELECT * FROM edges WHERE source_id=? AND target_id=? AND relation_type=? "
+                "ORDER BY created_at, id LIMIT 1",
+                (source_id, target_id, rt.value)).fetchone()
+            if row is not None:
+                existing, _ = self.store._tolerant_edges([row])
+                if existing:
+                    hit = existing[0]
+                    # 写权限闸先行（#234/#769/#780，单一真源 `_assert_edge_endpoints_role`，
+                    # 与 store.add_edge 同判据）：去重命中虽不写入，但写 API 的 fail-closed
+                    # 契约不得被早退绕过——只读/越层角色即便命中既有边也必须 PermissionError
+                    # （CI 红：test_issue769_780 g9 的 sub.add_edge 既有边未拦）。
+                    self.store._assert_edge_endpoints_role(source_id, target_id)
+                    hit.merged = True  # 与 M5 命中的 #223 标记同款（可区分「已存在」与「新建」）
+                    self._note_action("relation",
+                                      f"{source_id}→{target_id}",
+                                      [source_id, target_id],
+                                      {"relation": rt.value,
+                                       "evidence": source_evidence,
+                                       "dedup_hit": hit.id})
+                    return hit
         cs = condition_space or ConditionSpace(
             observation_position="关系建立",
             observation_tool="语义分析",
@@ -7506,12 +7586,13 @@ class SpacetimeMemoryEngine:
             id=f"edge_{uuid.uuid4().hex[:8]}_{int(time.time()*1000)}",
             source_id=source_id,
             target_id=target_id,
-            relation_type=relation_type,
+            relation_type=rt,
             condition_space=cs,
             confidence=confidence,
             verified=False,
             source_evidence=source_evidence
         )
+        edge.merged = False  # 新建路径恒 False（与 M5 新建节点同款，见 #223）
         self.store.add_edge(edge)
         self._note_action("relation",
                           f"{source_id}→{target_id}",
@@ -7937,13 +8018,41 @@ class SpacetimeMemoryEngine:
     # ==================== 检索层（M1） ====================
 
     def search_content(self, query: str, layers: List[MemoryLayer] = None,
-                       limit: int = 20) -> List[Tuple[STNode, float]]:
+                       limit: int = 20,
+                       min_score: float = 0.0) -> List[Tuple[STNode, float]]:
+        """内容检索（引擎面）：委托 `LayeredStore.search_content`（LIKE 预筛 +
+        二元组 Jaccard 排序），再走复用/模式加权记账。
+
+        #795：`min_score` 只截断**返回面**（`score < min_score` 不返回），不截断
+        候选池、不改打分与排序；缺省 0.0 ⇒ 既有调用逐位不变。分数语义是内部
+        相似度×加权的混合值，推荐阈值须由调用方用自身语料标定（本仓不内置）。
+        边界：与 `_self_cognition` 的模式加权同时启用时，先加权再过滤（阈值对
+        最终返回分生效）。
+
+        #804（契约声明 · 守卫 `tests/test_issue804_search_like_wildcard_guard.py`）：
+        查询里的 `%` / `_` / `\\` 一律按**字面**匹配——store 层预筛经
+        `_escape_like`（`%`→`\\%`、`_`→`\\_`、`\\`→`\\\\`）转义并挂
+        `ESCAPE '\\'` 子句、模式经 `?` 参数绑定（#183 落地）。issue #804 报称
+        「含 % 查询抛 `ValueError: unsupported format character`」——**基线
+        40fceb6 复现不成立**：检索链（本方法 → store `search_content` →
+        `_like_fragments`/`_escape_like`/FTS `candidates`）全程无一处对查询做
+        Python `%` 格式化，含 `%`/`_` 查询不抛异常且只命中字面含该字符的内容
+        （读数见 #804 守卫件 docstring）。本件据此只钉契约＋补引擎面文档，
+        不改行为。边界（如实标注）：①`LINGSHU_FTS=1`（默认关）时候选生成走
+        二元组倒排，纯标点邻接的单字 gram（如 `%s` 的 `s`）会在索引侧并入
+        邻段 ⇒ 该形态查询 FTS 路径可能 0 命中（LIKE 路径不受影响）——属 FTS
+        分词粒度边界（#35/#797 族），不属本件；②预筛落空时的全表二元组
+        兜底会对**任何**未命中查询返回低/零分相似候选（#183 已裁定仅纯
+        通配符查询跳过兜底，其余口径逐字不变），非 `_` 通配语义。
+        """
         results = self.store.search_content(query, layers, limit)
-        self._note_reuse([n.id for n, _ in results])
         # v1.12 P0-5a：模式成员检索加权（使用模式，不修改蒸馏产物）
         if self._self_cognition is not None:
             results = self._self_cognition.apply_pattern_boost(results)
             self._self_cognition.note_search(query, results)
+        # #795：返回面截断在加权之后（阈值对最终分数生效）；缺省 0.0 无操作。
+        results = _filter_min_score(results, min_score)
+        self._note_reuse([n.id for n, _ in results])
         self._note_action("search", query, [n.id for n, _ in results],
                           {"hits": len(results)})
         return results
@@ -8003,7 +8112,8 @@ class SpacetimeMemoryEngine:
                 break
         return out
 
-    def recall(self, context_content: str, limit: int = 10) -> List[Tuple[STNode, float]]:
+    def recall(self, context_content: str, limit: int = 10,
+               min_score: float = 0.0) -> List[Tuple[STNode, float]]:
         """组合联想（内容相似 0.5 + 重要性 0.3 + 近因 0.2）——记忆参与推理（1.1.1）
 
         #29④：终排与 search_content 同口径，同分再按置信度降序（confidence 与
@@ -8020,7 +8130,14 @@ class SpacetimeMemoryEngine:
         使用 ≠ 强化」同则；`LINGSHU_RETRIEVAL_NO_TOUCH` 开关仍只管直接检索路径）。
         access_count 仍在 recall 命中时计数（统计语义不变）。
         分数随 wall-clock 仍会**整体**微降（recency 对固定 la 单调衰减），但组内
-        两两差值的符号不变 ⇒ 次序跨调用逐位稳定。"""
+        两两差值的符号不变 ⇒ 次序跨调用逐位稳定。
+
+        #795：`min_score` 只截断**返回面**（`score < min_score` 不返回），不截断
+        候选池、不改打分与排序；缺省 0.0 ⇒ 既有调用逐位不变。分数是
+        「相似度 0.5 + 重要性 0.3 + 近因 0.2」的混合值，推荐阈值须由调用方按
+        自身语料标定（本仓不内置）。边界：矛盾配对（`LINGSHU_CONTRADICTION=1`）
+        与阈值同时启用时，低于阈值的对侧仍会被截掉（配对可能被拆开）——阈值
+        优先生效，调用方需自行评估该组合。"""
         # #787：touch=False——recall 的打分输入（last_access）不得被自己的检索腿
         # 写回（根修「分数漂移」）；候选池/排序其余口径逐位不变。
         results = self.store.search_content(context_content, limit=50, touch=False)
@@ -8041,10 +8158,12 @@ class SpacetimeMemoryEngine:
         if _contradiction.enabled():
             scored = self._with_opposites(scored, limit)
             limit = max(limit, len(scored))  # 矛盾对不拆开（见 _with_opposites）
-        self._note_reuse([n.id for n, _ in scored[:limit]])
         # v1.12 P0-5a：模式成员召回加权
         if self._self_cognition is not None:
             scored = self._self_cognition.apply_pattern_boost(scored[:limit])
+        # #795：返回面截断在加权之后（阈值对最终分数生效）；缺省 0.0 无操作。
+        scored = _filter_min_score(scored, min_score)
+        self._note_reuse([n.id for n, _ in scored[:limit]])
         self._note_action("recall", context_content,
                           [n.id for n, _ in scored[:limit]],
                           {"hits": len(scored[:limit])})

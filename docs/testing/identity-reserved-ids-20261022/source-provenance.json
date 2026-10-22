@@ -1,0 +1,78 @@
+{
+  "baseline": "1eafb3f57a3f9a83d067c0a39568aca4588cfdff",
+  "sha256_lf": {
+    "lingshu/world/world_model.py": "418e0faad8dde9d1dcd2a1cec6397f260987a3513215db2c599d05beb1ab4573",
+    "tests/test_identity_reserved_ids.py": "a12e0e877f02d2f7133f3d0f740c8ce2d121d51d0390066b0b473172eb2e3ff7",
+    "tests/fixtures/identity_reserved_ids_mutations.json": "486899c66f5ea5313afb33594bd529f219a990003abc464044617705adb4ba2c"
+  },
+  "runs": {
+    "windows": {
+      "platform": "Windows",
+      "python": "3.12.10",
+      "sqlite": "3.49.1",
+      "baseline": "1eafb3f57a3f9a83d067c0a39568aca4588cfdff",
+      "validated_commit": "c3dfa73ef2c496c0afa03f2a9e24a82682a2cac4",
+      "sha256_lf": {
+        "lingshu/world/world_model.py": "418e0faad8dde9d1dcd2a1cec6397f260987a3513215db2c599d05beb1ab4573",
+        "tests/test_identity_reserved_ids.py": "a12e0e877f02d2f7133f3d0f740c8ce2d121d51d0390066b0b473172eb2e3ff7",
+        "tests/fixtures/identity_reserved_ids_mutations.json": "486899c66f5ea5313afb33594bd529f219a990003abc464044617705adb4ba2c"
+      },
+      "commands": [
+        {
+          "name": "replay",
+          "returncode": 0
+        },
+        {
+          "name": "related",
+          "returncode": 0
+        },
+        {
+          "name": "manifest",
+          "returncode": 0
+        },
+        {
+          "name": "time-core",
+          "returncode": 0
+        }
+      ],
+      "related_total": 35,
+      "related_failures": [],
+      "related_errors": [],
+      "related_skips": []
+    },
+    "linux": {
+      "platform": "Linux",
+      "python": "3.13.12",
+      "sqlite": "3.46.1",
+      "baseline": "1eafb3f57a3f9a83d067c0a39568aca4588cfdff",
+      "validated_commit": "c3dfa73ef2c496c0afa03f2a9e24a82682a2cac4",
+      "sha256_lf": {
+        "lingshu/world/world_model.py": "418e0faad8dde9d1dcd2a1cec6397f260987a3513215db2c599d05beb1ab4573",
+        "tests/test_identity_reserved_ids.py": "a12e0e877f02d2f7133f3d0f740c8ce2d121d51d0390066b0b473172eb2e3ff7",
+        "tests/fixtures/identity_reserved_ids_mutations.json": "486899c66f5ea5313afb33594bd529f219a990003abc464044617705adb4ba2c"
+      },
+      "commands": [
+        {
+          "name": "replay",
+          "returncode": 0
+        },
+        {
+          "name": "related",
+          "returncode": 0
+        },
+        {
+          "name": "manifest",
+          "returncode": 0
+        },
+        {
+          "name": "time-core",
+          "returncode": 0
+        }
+      ],
+      "related_total": 35,
+      "related_failures": [],
+      "related_errors": [],
+      "related_skips": []
+    }
+  }
+}
