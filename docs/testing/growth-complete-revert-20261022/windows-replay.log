@@ -1,0 +1,82 @@
+CASE fixed
+......                                                                   [100%]
+6 passed in 0.39s
+
+CASE baseline
+FFF..F                                                                   [100%]
+================================== FAILURES ===================================
+_________________ test_revert_restores_the_output_parameters __________________
+tests\test_growth_complete_revert.py:28: in test_revert_restores_the_output_parameters
+    assert np.array_equal(net.fc, snapshots[-1]["fc"]), "rejected growth left output parameter drift"
+E   AssertionError: rejected growth left output parameter drift
+E   assert False
+E    +  where False = <function array_equal at 0x000001D54B92F870>(array([[-0.23640124, -0.19749397],\n       [ 0.11804308,  0.30206457],\n       [-0.24766196, -0.28614247]]), array([[-0.18640124, -0.24749397],\n       [ 0.06804308,  0.35206457],\n       [-0.19766196, -0.23614247]]))
+E    +    where <function array_equal at 0x000001D54B92F870> = np.array_equal
+E    +    and   array([[-0.23640124, -0.19749397],\n       [ 0.11804308,  0.30206457],\n       [-0.24766196, -0.28614247]]) = <lingshu.nn.hex_train.HexNet object at 0x000001D54BAB9A60>.fc
+_________ test_revert_restores_the_predictions_at_the_growth_boundary _________
+tests\test_growth_complete_revert.py:36: in test_revert_restores_the_predictions_at_the_growth_boundary
+    assert np.array_equal(net.forward(x)[0], snapshots[-1]["logits"]), "rejected growth changed restored predictions"
+E   AssertionError: rejected growth changed restored predictions
+E   assert False
+E    +  where False = <function array_equal at 0x000001D54B92F870>(array([[-0.01998261,  0.01324058, -0.0222052 ],\n       [-0.06473676,  0.03687087, -0.0695909 ],\n       [-0.05087164,  0.02881549, -0.05462441],\n       [-0.02512549,  0.01563761, -0.02752646]]), array([[-0.01722786,  0.01048583, -0.01784682],\n       [-0.05309504,  0.02522916, -0.0557149 ],\n       [-0.04165182,  0.01959567, -0.04372674],\n       [-0.02120587,  0.01171799, -0.02208725]]))
+E    +    where <function array_equal at 0x000001D54B92F870> = np.array_equal
+____ test_revert_reports_the_restored_loss_and_keeps_the_rejected_reading _____
+tests\test_growth_complete_revert.py:42: in test_revert_reports_the_restored_loss_and_keeps_the_rejected_reading
+    assert report["final_D"] == expected, "REVERT reported the rejected candidate loss"
+E   AssertionError: REVERT reported the rejected candidate loss
+E   assert 1.091 == 1.09606
+__ test_repeated_reverts_preserve_each_final_boundary_and_the_growth_budget ___
+tests\test_growth_complete_revert.py:66: in test_repeated_reverts_preserve_each_final_boundary_and_the_growth_budget
+    assert np.array_equal(net.fc, snapshots[-1]["fc"]), "repeated reverts left output parameter drift"
+E   AssertionError: repeated reverts left output parameter drift
+E   assert False
+E    +  where False = <function array_equal at 0x000001D54B92F870>(array([[-0.43640124,  0.00250603],\n       [ 0.31804308,  0.10206457],\n       [-0.04766196, -0.48614247]]), array([[-0.38640124, -0.04749397],\n       [ 0.26804308,  0.15206457],\n       [-0.09766196, -0.43614247]]))
+E    +    where <function array_equal at 0x000001D54B92F870> = np.array_equal
+E    +    and   array([[-0.43640124,  0.00250603],\n       [ 0.31804308,  0.10206457],\n       [-0.04766196, -0.48614247]]) = <lingshu.nn.hex_train.HexNet object at 0x000001D54BAEAF00>.fc
+=========================== short test summary info ===========================
+FAILED tests/test_growth_complete_revert.py::test_revert_restores_the_output_parameters
+FAILED tests/test_growth_complete_revert.py::test_revert_restores_the_predictions_at_the_growth_boundary
+FAILED tests/test_growth_complete_revert.py::test_revert_reports_the_restored_loss_and_keeps_the_rejected_reading
+FAILED tests/test_growth_complete_revert.py::test_repeated_reverts_preserve_each_final_boundary_and_the_growth_budget
+4 failed, 2 passed in 0.50s
+
+CASE leave_output_updates_after_revert
+F                                                                        [100%]
+================================== FAILURES ===================================
+_________________ test_revert_restores_the_output_parameters __________________
+tests\test_growth_complete_revert.py:28: in test_revert_restores_the_output_parameters
+    assert np.array_equal(net.fc, snapshots[-1]["fc"]), "rejected growth left output parameter drift"
+E   AssertionError: rejected growth left output parameter drift
+E   assert False
+E    +  where False = <function array_equal at 0x0000024B73603A30>(array([[-0.23640124, -0.19749397],\n       [ 0.11804308,  0.30206457],\n       [-0.24766196, -0.28614247]]), array([[-0.18640124, -0.24749397],\n       [ 0.06804308,  0.35206457],\n       [-0.19766196, -0.23614247]]))
+E    +    where <function array_equal at 0x0000024B73603A30> = np.array_equal
+E    +    and   array([[-0.23640124, -0.19749397],\n       [ 0.11804308,  0.30206457],\n       [-0.24766196, -0.28614247]]) = <lingshu.nn.hex_train.HexNet object at 0x0000024B73781A90>.fc
+=========================== short test summary info ===========================
+FAILED tests/test_growth_complete_revert.py::test_revert_restores_the_output_parameters
+1 failed in 0.43s
+
+CASE restore_an_unrelated_output_snapshot
+F                                                                        [100%]
+================================== FAILURES ===================================
+_________ test_revert_restores_the_predictions_at_the_growth_boundary _________
+tests\test_growth_complete_revert.py:36: in test_revert_restores_the_predictions_at_the_growth_boundary
+    assert np.array_equal(net.forward(x)[0], snapshots[-1]["logits"]), "rejected growth changed restored predictions"
+E   AssertionError: rejected growth changed restored predictions
+E   assert False
+E    +  where False = <function array_equal at 0x0000025BE051F730>(array([[0., 0., 0.],\n       [0., 0., 0.],\n       [0., 0., 0.],\n       [0., 0., 0.]]), array([[-0.01722786,  0.01048583, -0.01784682],\n       [-0.05309504,  0.02522916, -0.0557149 ],\n       [-0.04165182,  0.01959567, -0.04372674],\n       [-0.02120587,  0.01171799, -0.02208725]]))
+E    +    where <function array_equal at 0x0000025BE051F730> = np.array_equal
+=========================== short test summary info ===========================
+FAILED tests/test_growth_complete_revert.py::test_revert_restores_the_predictions_at_the_growth_boundary
+1 failed in 0.42s
+
+CASE report_the_rejected_candidate_loss
+F                                                                        [100%]
+================================== FAILURES ===================================
+____ test_revert_reports_the_restored_loss_and_keeps_the_rejected_reading _____
+tests\test_growth_complete_revert.py:42: in test_revert_reports_the_restored_loss_and_keeps_the_rejected_reading
+    assert report["final_D"] == expected, "REVERT reported the rejected candidate loss"
+E   AssertionError: REVERT reported the rejected candidate loss
+E   assert 1.091 == 1.09606
+=========================== short test summary info ===========================
+FAILED tests/test_growth_complete_revert.py::test_revert_reports_the_restored_loss_and_keeps_the_rejected_reading
+1 failed in 0.42s

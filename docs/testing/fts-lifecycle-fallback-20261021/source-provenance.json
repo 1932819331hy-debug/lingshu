@@ -1,0 +1,78 @@
+{
+  "baseline": "f5dcd58165cbf64393d1f2d4dfc61f781485ec29",
+  "sha256_lf": {
+    "lingshu/core/retrieval.py": "c4f67d4b0e5a18623da4fd2f74549db01e20a3792c3af13d70d3f35af6210d1b",
+    "tests/test_fts_lifecycle_fallback.py": "173b3b3454f27f7035459f35be2f4abbc76faa4a1602cf7ee099ca3e3fef8e99",
+    "tests/fixtures/fts_lifecycle_fallback_mutations.json": "d36fab8970da7c7e27ae61b326e08eae6687d813db44f4125ca09d8a587ba70f"
+  },
+  "runs": {
+    "windows": {
+      "platform": "Windows",
+      "python": "3.12.10",
+      "sqlite": "3.49.1",
+      "baseline": "f5dcd58165cbf64393d1f2d4dfc61f781485ec29",
+      "validated_commit": "b049148d628fa0bf9cf1f4e411b62dc202c98507",
+      "sha256_lf": {
+        "lingshu/core/retrieval.py": "c4f67d4b0e5a18623da4fd2f74549db01e20a3792c3af13d70d3f35af6210d1b",
+        "tests/test_fts_lifecycle_fallback.py": "173b3b3454f27f7035459f35be2f4abbc76faa4a1602cf7ee099ca3e3fef8e99",
+        "tests/fixtures/fts_lifecycle_fallback_mutations.json": "d36fab8970da7c7e27ae61b326e08eae6687d813db44f4125ca09d8a587ba70f"
+      },
+      "commands": [
+        {
+          "name": "replay",
+          "returncode": 0
+        },
+        {
+          "name": "related",
+          "returncode": 0
+        },
+        {
+          "name": "manifest",
+          "returncode": 0
+        },
+        {
+          "name": "time-core",
+          "returncode": 0
+        }
+      ],
+      "related_total": 39,
+      "related_failures": [],
+      "related_errors": [],
+      "related_skips": []
+    },
+    "linux": {
+      "platform": "Linux",
+      "python": "3.13.12",
+      "sqlite": "3.46.1",
+      "baseline": "f5dcd58165cbf64393d1f2d4dfc61f781485ec29",
+      "validated_commit": "b049148d628fa0bf9cf1f4e411b62dc202c98507",
+      "sha256_lf": {
+        "lingshu/core/retrieval.py": "c4f67d4b0e5a18623da4fd2f74549db01e20a3792c3af13d70d3f35af6210d1b",
+        "tests/test_fts_lifecycle_fallback.py": "173b3b3454f27f7035459f35be2f4abbc76faa4a1602cf7ee099ca3e3fef8e99",
+        "tests/fixtures/fts_lifecycle_fallback_mutations.json": "d36fab8970da7c7e27ae61b326e08eae6687d813db44f4125ca09d8a587ba70f"
+      },
+      "commands": [
+        {
+          "name": "replay",
+          "returncode": 0
+        },
+        {
+          "name": "related",
+          "returncode": 0
+        },
+        {
+          "name": "manifest",
+          "returncode": 0
+        },
+        {
+          "name": "time-core",
+          "returncode": 0
+        }
+      ],
+      "related_total": 39,
+      "related_failures": [],
+      "related_errors": [],
+      "related_skips": []
+    }
+  }
+}

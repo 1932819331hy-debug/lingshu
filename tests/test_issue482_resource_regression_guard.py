@@ -226,7 +226,9 @@ def _chain(k, steps=STEPS):
     other = e.add_perception("无关事件", skip_dedup=True)
     for a, b in zip(ns, ns[1:]):
         for _ in range(k):
-            e.add_edge(a.id, b.id, EdgeType.CAUSAL, confidence=0.8)
+            # k 条平行边是构图前提（枚举压测要靠它们打满预算）——#801 边去重的
+            # 逃生口 dedup=False（该 PR docstring 点名本类构图走此参数）。
+            e.add_edge(a.id, b.id, EdgeType.CAUSAL, confidence=0.8, dedup=False)
     return e, ns, other
 
 

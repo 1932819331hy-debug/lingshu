@@ -1,0 +1,122 @@
+CASE fixed
+........                                                                 [100%]
+8 passed in 0.34s
+
+CASE baseline
+FFF.FF..                                                                 [100%]
+=================================== FAILURES ===================================
+_________ test_anonymous_real_observations_reach_the_trajectory_buffer _________
+tests/test_trajectory_resolved_observations.py:24: in test_anonymous_real_observations_reach_the_trajectory_buffer
+    assert model._traj_buf == _history_projection(model), "anonymous observations missing from trajectory buffer"
+E   AssertionError: anonymous observations missing from trajectory buffer
+E   assert {} == {'wm_a4c123':..., 1.5, 2.0))]}
+E
+E     Right contains 1 more item:
+E     {'wm_a4c123': [(1, (2.0, 1.5, 2.0)),
+E                    (2, (2.2, 1.5, 2.0)),
+E                    (3, (2.4, 1.5, 2.0))]}
+E     Use -v to get more diff
+_________ test_default_sensor_observations_reach_the_trajectory_buffer _________
+tests/test_trajectory_resolved_observations.py:34: in test_default_sensor_observations_reach_the_trajectory_buffer
+    assert model._traj_buf == _history_projection(model), "default sensor observations missing from trajectory buffer"
+E   AssertionError: default sensor observations missing from trajectory buffer
+E   assert {} == {'scene_80622..., 1.5, 2.0))]}
+E
+E     Right contains 1 more item:
+E     {'scene_806221b3': [(20, (2.0, 1.5, 2.0)),
+E                         (21, (2.2, 1.5, 2.0)),
+E                         (22, (2.4, 1.5, 2.0))]}
+E     Use -v to get more diff
+_____ test_default_sensor_can_support_smooth_motion_after_a_random_prefix ______
+tests/test_trajectory_resolved_observations.py:46: in test_default_sensor_can_support_smooth_motion_after_a_random_prefix
+    assert prediction["mode"] == "smooth", "validated smooth suffix missing from sensor prediction"
+E   AssertionError: validated smooth suffix missing from sensor prediction
+E   assert 'bounded_stochastic' == 'smooth'
+E
+E     - smooth
+E     + bounded_stochastic
+___________ test_anonymous_prediction_errors_reach_the_paired_guard ____________
+tests/test_trajectory_resolved_observations.py:68: in test_anonymous_prediction_errors_reach_the_paired_guard
+    assert prediction["mode"] == "static", "anonymous history never formed a static prediction"
+E   AssertionError: anonymous history never formed a static prediction
+E   assert 'bounded_stochastic' == 'static'
+E
+E     - static
+E     + bounded_stochastic
+_________ test_anonymous_quaternions_reach_the_resolved_rotation_track _________
+tests/test_trajectory_resolved_observations.py:83: in test_anonymous_quaternions_reach_the_resolved_rotation_track
+    assert len(rotations.get(eid, [])) == 3, "resolved observation missing from rotation buffer"
+E   AssertionError: resolved observation missing from rotation buffer
+E   assert 0 == 3
+E    +  where 0 = len([])
+E    +    where [] = <built-in method get of dict object at 0x796faac8b9c0>('wm_308774', [])
+E    +      where <built-in method get of dict object at 0x796faac8b9c0> = {}.get
+=========================== short test summary info ============================
+FAILED tests/test_trajectory_resolved_observations.py::test_anonymous_real_observations_reach_the_trajectory_buffer
+FAILED tests/test_trajectory_resolved_observations.py::test_default_sensor_observations_reach_the_trajectory_buffer
+FAILED tests/test_trajectory_resolved_observations.py::test_default_sensor_can_support_smooth_motion_after_a_random_prefix
+FAILED tests/test_trajectory_resolved_observations.py::test_anonymous_prediction_errors_reach_the_paired_guard
+FAILED tests/test_trajectory_resolved_observations.py::test_anonymous_quaternions_reach_the_resolved_rotation_track
+5 failed, 3 passed in 0.50s
+
+CASE ignore_stochastic_backtest
+F                                                                        [100%]
+=================================== FAILURES ===================================
+_________ test_default_sensor_random_motion_keeps_its_stochastic_bound _________
+tests/test_trajectory_resolved_observations.py:57: in test_default_sensor_random_motion_keeps_its_stochastic_bound
+    assert prediction["mode"] == "bounded_stochastic", "random sensor motion was promoted to smooth"
+E   AssertionError: random sensor motion was promoted to smooth
+E   assert 'smooth' == 'bounded_stochastic'
+E
+E     - bounded_stochastic
+E     + smooth
+=========================== short test summary info ============================
+FAILED tests/test_trajectory_resolved_observations.py::test_default_sensor_random_motion_keeps_its_stochastic_bound
+1 failed in 0.42s
+
+CASE use_unresolved_trajectory_input
+F                                                                        [100%]
+=================================== FAILURES ===================================
+_________ test_anonymous_real_observations_reach_the_trajectory_buffer _________
+tests/test_trajectory_resolved_observations.py:24: in test_anonymous_real_observations_reach_the_trajectory_buffer
+    assert model._traj_buf == _history_projection(model), "anonymous observations missing from trajectory buffer"
+E   AssertionError: anonymous observations missing from trajectory buffer
+E   assert {} == {'wm_a4c123':..., 1.5, 2.0))]}
+E
+E     Right contains 1 more item:
+E     {'wm_a4c123': [(1, (2.0, 1.5, 2.0)),
+E                    (2, (2.2, 1.5, 2.0)),
+E                    (3, (2.4, 1.5, 2.0))]}
+E     Use -v to get more diff
+=========================== short test summary info ============================
+FAILED tests/test_trajectory_resolved_observations.py::test_anonymous_real_observations_reach_the_trajectory_buffer
+1 failed in 0.42s
+
+CASE use_unresolved_paired_guard_input
+F                                                                        [100%]
+=================================== FAILURES ===================================
+___________ test_anonymous_prediction_errors_reach_the_paired_guard ____________
+tests/test_trajectory_resolved_observations.py:71: in test_anonymous_prediction_errors_reach_the_paired_guard
+    assert pairs.get(eid) == [(0.0, 0.0)], "resolved observation missing from paired guard"
+E   AssertionError: resolved observation missing from paired guard
+E   assert None == [(0.0, 0.0)]
+E    +  where None = <built-in method get of dict object at 0x77280814ba80>('wm_308774')
+E    +    where <built-in method get of dict object at 0x77280814ba80> = {}.get
+=========================== short test summary info ============================
+FAILED tests/test_trajectory_resolved_observations.py::test_anonymous_prediction_errors_reach_the_paired_guard
+1 failed in 0.43s
+
+CASE use_unresolved_rotation_input
+F                                                                        [100%]
+=================================== FAILURES ===================================
+_________ test_anonymous_quaternions_reach_the_resolved_rotation_track _________
+tests/test_trajectory_resolved_observations.py:83: in test_anonymous_quaternions_reach_the_resolved_rotation_track
+    assert len(rotations.get(eid, [])) == 3, "resolved observation missing from rotation buffer"
+E   AssertionError: resolved observation missing from rotation buffer
+E   assert 0 == 3
+E    +  where 0 = len([])
+E    +    where [] = <built-in method get of dict object at 0x7f864614ab80>('wm_308774', [])
+E    +      where <built-in method get of dict object at 0x7f864614ab80> = {}.get
+=========================== short test summary info ============================
+FAILED tests/test_trajectory_resolved_observations.py::test_anonymous_quaternions_reach_the_resolved_rotation_track
+1 failed in 0.43s

@@ -1,0 +1,23 @@
+{
+  "guard": "tests/test_trajectory_resolved_observations.py", "total": 8,
+  "sources": ["lingshu/world/world_model.py"],
+  "baseline_failures": ["test_anonymous_real_observations_reach_the_trajectory_buffer", "test_default_sensor_observations_reach_the_trajectory_buffer", "test_default_sensor_can_support_smooth_motion_after_a_random_prefix", "test_anonymous_prediction_errors_reach_the_paired_guard", "test_anonymous_quaternions_reach_the_resolved_rotation_track"],
+  "mutations": [
+    {"name": "ignore_stochastic_backtest", "test": "test_default_sensor_random_motion_keeps_its_stochastic_bound",
+      "assertion": "random sensor motion was promoted to smooth",
+      "changes": [{"file": "lingshu/world/world_model.py", "method": "_wm_smooth_check",
+        "old": "        if error > persist_error:", "new": "        if False and error > persist_error:"}]},
+    {"name": "use_unresolved_trajectory_input", "test": "test_anonymous_real_observations_reach_the_trajectory_buffer",
+      "assertion": "anonymous observations missing from trajectory buffer",
+      "changes": [{"file": "lingshu/world/world_model.py", "method": "_perceive_with_traj",
+        "old": "    observations = out.get(\"observations\", observations or [])", "new": "    observations = observations or []"}]},
+    {"name": "use_unresolved_paired_guard_input", "test": "test_anonymous_prediction_errors_reach_the_paired_guard",
+      "assertion": "resolved observation missing from paired guard",
+      "changes": [{"file": "lingshu/world/world_model.py", "method": "_perceive_with_guard_pairs",
+        "old": "    observations = out.get(\"observations\", observations or [])", "new": "    observations = observations or []"}]},
+    {"name": "use_unresolved_rotation_input", "test": "test_anonymous_quaternions_reach_the_resolved_rotation_track",
+      "assertion": "resolved observation missing from rotation buffer",
+      "changes": [{"file": "lingshu/world/world_model.py", "method": "_perceive_with_rot",
+        "old": "    observations = out.get(\"observations\", observations or [])", "new": "    observations = observations or []"}]}
+  ]
+}

@@ -1,0 +1,214 @@
+{
+  "windows": {
+    "python": "3.12.10",
+    "platform": "Windows",
+    "sqlite": "3.49.1",
+    "baseline": "ef6f413dd5ffaa91b419b359dc6edcfc872bffed",
+    "guard_sha256": "d52e3da59247205cf7da26f3e23816ee7ec9c9097fb250712339758beab210e0",
+    "records": [
+      {
+        "case": "fixed",
+        "ok": true,
+        "returncode": 0,
+        "passed": 6,
+        "failed_tests": [],
+        "errors": 0,
+        "skipped": 0,
+        "expected_failures": [],
+        "expected_assertion": "",
+        "pytest_summary": "6 passed in 0.37s",
+        "source_sha256": {
+          "lingshu/nn/hex_unit.py": "39aa28bade875edf51ef4f32b6cb1afcff0429a244bb0f020c3eea03550d325c"
+        }
+      },
+      {
+        "case": "baseline",
+        "ok": true,
+        "returncode": 1,
+        "passed": 2,
+        "failed_tests": [
+          "test_finite_difference_training_preserves_the_frozen_connection_directions",
+          "test_inhibitory_feature_lowers_its_card_logit",
+          "test_initial_connection_directions_match_the_real_base_network",
+          "test_loading_negative_gain_cannot_flip_a_declared_direction"
+        ],
+        "errors": 0,
+        "skipped": 0,
+        "expected_failures": [
+          "test_initial_connection_directions_match_the_real_base_network",
+          "test_inhibitory_feature_lowers_its_card_logit",
+          "test_loading_negative_gain_cannot_flip_a_declared_direction",
+          "test_finite_difference_training_preserves_the_frozen_connection_directions"
+        ],
+        "expected_assertion": "",
+        "pytest_summary": "4 failed, 2 passed in 0.50s",
+        "source_sha256": {
+          "lingshu/nn/hex_unit.py": "36594de8726159b64b38f788f742718c3fda6f6f32b3876b93dfe056d86781fb"
+        }
+      },
+      {
+        "case": "restore_signed_initial_gain",
+        "ok": true,
+        "returncode": 1,
+        "passed": 0,
+        "failed_tests": [
+          "test_initial_connection_directions_match_the_real_base_network"
+        ],
+        "errors": 0,
+        "skipped": 0,
+        "expected_failures": [
+          "test_initial_connection_directions_match_the_real_base_network"
+        ],
+        "expected_assertion": "initial inhibitory connections changed direction",
+        "pytest_summary": "1 failed in 0.42s",
+        "source_sha256": {
+          "lingshu/nn/hex_unit.py": "9f14c9681600fa4b13c3732225512a68a44e9b4c1befb99889d22730886f3171"
+        }
+      },
+      {
+        "case": "allow_negative_loaded_gain",
+        "ok": true,
+        "returncode": 1,
+        "passed": 0,
+        "failed_tests": [
+          "test_loading_negative_gain_cannot_flip_a_declared_direction"
+        ],
+        "errors": 0,
+        "skipped": 0,
+        "expected_failures": [
+          "test_loading_negative_gain_cannot_flip_a_declared_direction"
+        ],
+        "expected_assertion": "negative loaded gain reversed a declared connection",
+        "pytest_summary": "1 failed in 0.42s",
+        "source_sha256": {
+          "lingshu/nn/hex_unit.py": "c0bf58877a26a4109db3e45a61cca97fb2ffed36345de69180778563d8ff0f0f"
+        }
+      },
+      {
+        "case": "discard_declared_direction_in_forward",
+        "ok": true,
+        "returncode": 1,
+        "passed": 0,
+        "failed_tests": [
+          "test_inhibitory_feature_lowers_its_card_logit"
+        ],
+        "errors": 0,
+        "skipped": 0,
+        "expected_failures": [
+          "test_inhibitory_feature_lowers_its_card_logit"
+        ],
+        "expected_assertion": "declared inhibitory feature raised its card logit",
+        "pytest_summary": "1 failed in 0.43s",
+        "source_sha256": {
+          "lingshu/nn/hex_unit.py": "f9a3ddfb37b64135db6a1fb576e4faa7bc0c6c3b74373cec1c43d149775b81c1"
+        }
+      }
+    ]
+  },
+  "linux": {
+    "python": "3.13.12",
+    "platform": "Linux",
+    "sqlite": "3.46.1",
+    "baseline": "ef6f413dd5ffaa91b419b359dc6edcfc872bffed",
+    "guard_sha256": "d52e3da59247205cf7da26f3e23816ee7ec9c9097fb250712339758beab210e0",
+    "records": [
+      {
+        "case": "fixed",
+        "ok": true,
+        "returncode": 0,
+        "passed": 6,
+        "failed_tests": [],
+        "errors": 0,
+        "skipped": 0,
+        "expected_failures": [],
+        "expected_assertion": "",
+        "pytest_summary": "6 passed in 0.43s",
+        "source_sha256": {
+          "lingshu/nn/hex_unit.py": "39aa28bade875edf51ef4f32b6cb1afcff0429a244bb0f020c3eea03550d325c"
+        }
+      },
+      {
+        "case": "baseline",
+        "ok": true,
+        "returncode": 1,
+        "passed": 2,
+        "failed_tests": [
+          "test_finite_difference_training_preserves_the_frozen_connection_directions",
+          "test_inhibitory_feature_lowers_its_card_logit",
+          "test_initial_connection_directions_match_the_real_base_network",
+          "test_loading_negative_gain_cannot_flip_a_declared_direction"
+        ],
+        "errors": 0,
+        "skipped": 0,
+        "expected_failures": [
+          "test_initial_connection_directions_match_the_real_base_network",
+          "test_inhibitory_feature_lowers_its_card_logit",
+          "test_loading_negative_gain_cannot_flip_a_declared_direction",
+          "test_finite_difference_training_preserves_the_frozen_connection_directions"
+        ],
+        "expected_assertion": "",
+        "pytest_summary": "4 failed, 2 passed in 0.52s",
+        "source_sha256": {
+          "lingshu/nn/hex_unit.py": "36594de8726159b64b38f788f742718c3fda6f6f32b3876b93dfe056d86781fb"
+        }
+      },
+      {
+        "case": "restore_signed_initial_gain",
+        "ok": true,
+        "returncode": 1,
+        "passed": 0,
+        "failed_tests": [
+          "test_initial_connection_directions_match_the_real_base_network"
+        ],
+        "errors": 0,
+        "skipped": 0,
+        "expected_failures": [
+          "test_initial_connection_directions_match_the_real_base_network"
+        ],
+        "expected_assertion": "initial inhibitory connections changed direction",
+        "pytest_summary": "1 failed in 0.46s",
+        "source_sha256": {
+          "lingshu/nn/hex_unit.py": "9f14c9681600fa4b13c3732225512a68a44e9b4c1befb99889d22730886f3171"
+        }
+      },
+      {
+        "case": "allow_negative_loaded_gain",
+        "ok": true,
+        "returncode": 1,
+        "passed": 0,
+        "failed_tests": [
+          "test_loading_negative_gain_cannot_flip_a_declared_direction"
+        ],
+        "errors": 0,
+        "skipped": 0,
+        "expected_failures": [
+          "test_loading_negative_gain_cannot_flip_a_declared_direction"
+        ],
+        "expected_assertion": "negative loaded gain reversed a declared connection",
+        "pytest_summary": "1 failed in 0.50s",
+        "source_sha256": {
+          "lingshu/nn/hex_unit.py": "c0bf58877a26a4109db3e45a61cca97fb2ffed36345de69180778563d8ff0f0f"
+        }
+      },
+      {
+        "case": "discard_declared_direction_in_forward",
+        "ok": true,
+        "returncode": 1,
+        "passed": 0,
+        "failed_tests": [
+          "test_inhibitory_feature_lowers_its_card_logit"
+        ],
+        "errors": 0,
+        "skipped": 0,
+        "expected_failures": [
+          "test_inhibitory_feature_lowers_its_card_logit"
+        ],
+        "expected_assertion": "declared inhibitory feature raised its card logit",
+        "pytest_summary": "1 failed in 0.47s",
+        "source_sha256": {
+          "lingshu/nn/hex_unit.py": "f9a3ddfb37b64135db6a1fb576e4faa7bc0c6c3b74373cec1c43d149775b81c1"
+        }
+      }
+    ]
+  }
+}

@@ -89,6 +89,8 @@ STDLIB_ALLOWED = frozenset({
     "json", "base64", "hashlib", "hmac",
     # 容器 / 迭代 / 类型 / 数据类 / 枚举
     "collections", "itertools", "typing", "dataclasses", "enum",
+    # 世界经验恢复的候选状态使用浅复制；只登记标准库分类，未知名判据不变。
+    "copy",
     # 运行时 / 导入 / 告警（weakref/functools/contextlib：2026-10-09 连接槽生命周期
     # 修复时 core.py 引入——标准库；守卫按设计判红「未知裸名」，此处补分类而非放宽判据）
     "sys", "os", "importlib", "warnings", "pathlib",
@@ -167,6 +169,7 @@ WHITELIST_EXPECTED = frozenset(
 STDLIB_HIJACK_NAMES = [
     "json", "hashlib", "hmac", "sqlite3", "threading", "uuid", "dataclasses",
     "typing", "inspect", "ast", "contextlib", "datetime", "enum", "collections",
+    "copy",
 ]
 # #273 裁定「守卫」节第 2 条要求「逐名覆盖（含非标准库裸名）」：下列名字**不在**
 # `sys.stdlib_module_names` 里、也不在组件白名单里，而 `lingshu/` 下 `import numpy`
