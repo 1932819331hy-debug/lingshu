@@ -155,6 +155,11 @@ class TruthMaintenance:
             if not nodes:
                 return {}
             own = {n: self.ledger.assess(n) for n in nodes}
+            # 审计记录可在节点删除后保留；它不能给不存在的命题恢复信念。
+            # 与闭包外 _external_belief 的缺失节点口径一致。
+            for n in nodes:
+                if self.store.get_node(n) is None:
+                    own[n] = {**own[n], "confidence": 0.0}
             self._just_cache = {n: self.justifications_of(n) for n in nodes}
             try:
                 belief = {n: own[n]["confidence"] for n in nodes}
