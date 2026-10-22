@@ -203,7 +203,9 @@ class ActivationEngine:
         self._adj_inh = None        # 本轮抑制邻接(仅 opposite 边,存 |decay|)
         self._node_index = None     # node_id → idx
         self._edge_meta = None      # (src_idx, dst_idx, decay) 兴奋边列表
-        self._inh_meta = None       # (src_idx, dst_idx, |decay|) 抑制边列表
+        self._inh_meta = None       # (src_idx, dst_idx, |decay|) 抑制边列表（单向）
+        self._adj_inh_unv = None    # 低置信(<0.5)抑制邻接（双向补充，issue #521）
+        self._inh_unv_meta = None   # (src_idx, dst_idx, |decay|×confidence) 低置信边列表
 
     # ---------------- 表结构(独立激活表,与内容记忆分离) ----------------
     def _ensure_tables(self):
@@ -300,8 +302,17 @@ class ActivationEngine:
         except sqlite3.OperationalError:  # #714:无内容表 ⇒ 空图
             node_rows = []
         node_ids = [r[0] for r in node_rows]
+        # issue #521：抑制幅度要按边的 confidence 缩放（未复核 0.3 的 opposite
+        # 边不得满额否决）。旧 schema 可能没有 confidence 列——用 PRAGMA 探测，
+        # 缺列时按 0.3 兜底，避免把「列不存在」误判成「无内容表」而清空整图。
         try:
-            cur.execute("SELECT source_id, target_id, relation_type, condition_space FROM edges")
+            _edge_cols = {r[1] for r in cur.execute("PRAGMA table_info(edges)")}
+        except sqlite3.OperationalError:
+            _edge_cols = set()
+        _conf_expr = "confidence" if "confidence" in _edge_cols else "0.3 AS confidence"
+        try:
+            cur.execute("SELECT source_id, target_id, relation_type, condition_space, "
+                        + _conf_expr + " FROM edges")
             edges = cur.fetchall()
         except sqlite3.OperationalError:  # #714:无内容表 ⇒ 空图
             edges = []
@@ -316,7 +327,8 @@ class ActivationEngine:
                 cur_cs[nid] = {}
         rows, cols, decays = [], [], []
         inh_rows, inh_cols, inh_mags = [], [], []
-        for src, dst, rtype, cs_json in edges:
+        unv_rows, unv_cols, unv_mags = [], [], []
+        for src, dst, rtype, cs_json, edge_conf in edges:
             si, di = idx.get(src), idx.get(dst)
             if si is None or di is None:
                 continue
@@ -337,7 +349,21 @@ class ActivationEngine:
             except (TypeError, ValueError):
                 d = d * COND_MATCH_NEUTRAL
             if d < 0:  # 负记忆同价(第五篇):相反边走独立抑制通路,不进兴奋邻接(issue #229)
-                inh_rows.append(si); inh_cols.append(di); inh_mags.append(-d)
+                # issue #521：**低置信**（< 默认 0.5，含 register_conflict 的 0.3）
+                # 的 opposite 边按置信缩放、并进双向补充面（contested）；默认 0.5
+                # 及以上的边保持既有「满额单向」语义（#229 的既有契约，勿回归）。
+                try:
+                    _c = float(edge_conf) if edge_conf is not None else 0.5
+                except (TypeError, ValueError):
+                    _c = 0.5
+                if _c != _c:  # NaN
+                    _c = 0.5
+                _c = min(1.0, max(0.0, _c))
+                if _c < 0.5:
+                    inh_rows.append(si); inh_cols.append(di); inh_mags.append(-d * _c)
+                    unv_rows.append(si); unv_cols.append(di); unv_mags.append(-d * _c)
+                else:
+                    inh_rows.append(si); inh_cols.append(di); inh_mags.append(-d)
             else:
                 rows.append(si); cols.append(di); decays.append(d)
         if csr_matrix is not None and rows:
@@ -350,11 +376,18 @@ class ActivationEngine:
                                  shape=(n, n))
         else:
             adj_inh = None  # 降级:edge-list 抑制
+        if csr_matrix is not None and unv_rows:
+            adj_inh_unv = csr_matrix((np.array(unv_mags, dtype=np.float32),
+                                      (unv_rows, unv_cols)), shape=(n, n))
+        else:
+            adj_inh_unv = None
         self._adj = adj
         self._adj_inh = adj_inh
+        self._adj_inh_unv = adj_inh_unv
         self._node_index = idx
         self._edge_meta = (rows, cols, decays)
         self._inh_meta = (inh_rows, inh_cols, inh_mags)
+        self._inh_unv_meta = (unv_rows, unv_cols, unv_mags)
         self._node_ids = node_ids
         # 节点条件空间(节点级 cond_match 用;装载期已消费,留作审计/调试)
         self._node_cond = cur_cs
@@ -502,11 +535,20 @@ class ActivationEngine:
             supp = np.zeros(n, dtype=np.float32)
             if self._adj_inh is not None:
                 supp = self._max_plus(self._adj_inh, act)
-            else:  # edge-list 降级
+                # issue #521：**低置信**边（<0.5）额外做反向抑制（双向），
+                # 未复核 0.3 边不得只按存储方向让后写者单方面否决先写者；
+                # 默认 0.5+ 的边保持既有单向（#229）。
+                if self._adj_inh_unv is not None:
+                    supp = np.maximum(supp, self._max_plus(self._adj_inh_unv.T, act))
+            else:  # edge-list 降级（低置信边双向同口径）
                 inh_rows, inh_cols, inh_mags = self._inh_meta
                 for si, di, m in zip(inh_rows, inh_cols, inh_mags):
                     if act[si] > 0:
                         supp[di] = max(supp[di], act[si] * m)
+                unv_rows, unv_cols, unv_mags = self._inh_unv_meta
+                for si, di, m in zip(unv_rows, unv_cols, unv_mags):
+                    if act[di] > 0:
+                        supp[si] = max(supp[si], act[di] * m)
             if supp.any():
                 act = np.maximum(act - supp, 0.0)
             for i in np.nonzero(act >= act_floor)[0]:

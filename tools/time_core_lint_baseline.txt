@@ -1,6 +1,8 @@
 
 # ── 已登记的既有违规（本笔重编号）──────────────────────────────
-lingshu/core/activation.py:336:R3      # 形状级命中（**非**时间衰减）：issue #53 的节点对级条件衰减修正
+# ── 2026-10-22（#830 合并）后重编号：activation.py 336 → 348（激活侧插入 12 行）──
+# 同上处置：条目数与性质未变（23 条 → 23 条），不是新增豁免、不是放宽判据。
+lingshu/core/activation.py:348:R3      # 形状级命中（**非**时间衰减）：issue #53 的节点对级条件衰减修正
 lingshu/world/physics.py:359:R1      # 物理阻尼：`fit_damped` 代价函数的基函数 exp(-k·x)（线性阻尼振子闭式解），非时间核
 lingshu/world/physics.py:387:R1      # 物理阻尼：`fit_damped` 代价函数的基函数 exp(-k·x)（线性阻尼振子闭式解），非时间核
 lingshu/world/physics.py:504:R3      # 运动学外推：匀加速/抛体/沿坡闭式 p=p0+v0·τ+½a·τ²，tau=流逝时间非保持率
