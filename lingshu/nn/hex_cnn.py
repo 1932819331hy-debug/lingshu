@@ -277,7 +277,12 @@ def selfsup_finetune(img_arr: np.ndarray, kernel_name: str = "center_surround",
     gray = (0.299 * img_arr[..., 0] + 0.587 * img_arr[..., 1]
             + 0.114 * img_arr[..., 2]).astype(np.float32) if img_arr.ndim == 3 else img_arr.astype(np.float32)
     feat, grid = image_to_grid(gray[..., None].repeat(3, axis=2), cells_across)
-    lum = feat[..., :1]                                  # 亮度通道 (rows,cols,1)
+    # #351：亮度归一到 0..1（与 `hex_train.images_to_lattices` / 其余训练面同口径）。
+    # 旧实现保留 0..255 量纲 ⇒ 重建残差 ~1e4、数值梯度 ~1e4..1e6，而核元素 |w|~O(1)；
+    # `w -= lr*grad` 后 `lr*grad ≫ |w|`，紧接着的 L1 归一化把旧核整段抹掉 ⇒ 每步核
+    # 只由上一步的 `-grad/‖grad‖₁` 决定、与 lr 无关（lr 跨 5000 倍核几乎不动）。
+    # 归一化后梯度 ~O(1)，lr 恢复为真实的步长量纲。
+    lum = feat[..., :1] / 255.0                          # 亮度通道 (rows,cols,1)，0..1
     rng = np.random.default_rng(seed)
     # #593：评估掩码——训练前抽一次、全程固定，`init_loss` / `final_loss` 都在它下面
     # 取值 ⇒ 同口径可比。此处正是 #593 之前 `init_loss` 抽的那一次 ⇒ `rng` 的抽样

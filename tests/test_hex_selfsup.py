@@ -25,7 +25,10 @@ import numpy as np
 from lingshu.nn.hex_cnn import (DEFAULT_KERNELS, hex_conv, image_to_grid,
                                 selfsup_finetune)
 
-_KNAME, _CELLS, _RATIO, _EPOCHS, _LR = "center_surround", 48, 0.25, 30, 0.05
+_KNAME, _CELLS, _RATIO, _EPOCHS, _LR = "center_surround", 48, 0.25, 30, 0.1
+# #351：修前 `lr` 实际无效（亮度 0..255 ⇒ lr·grad 恒远大于 |w|，每步被 L1 归一化
+# 抹成方向步）。亮度归一到 0..1 后 lr 恢复为真实步长 ⇒ 本文件的收敛判据按真实步长
+# 重标定到 0.1（阈值 90% 未动；旧 0.05 在无声明的方向上等价于「单位方向步」）。
 
 
 def _fixture():
