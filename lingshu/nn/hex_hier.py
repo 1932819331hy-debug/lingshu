@@ -313,7 +313,11 @@ def train_hier(net: HexHierNet, lat: np.ndarray, labels: Dict[str, np.ndarray],
         curve.append(round(d, 4))
         if verbose and step % 20 == 0:
             print(f"  [step {step}] D_L2+3={d:.4f}")
-    return {"init_D": round(d0, 4), "final_D": curve[-1], "curve": curve,
+    # #335：final_D 取**最终模型**的损失（循环内 d 是该步更新前测的）；steps==0
+    # ⇒ 无更新，回落 d0。`curve`（训练过程曲线）语义不动。
+    final_D = round(joint_loss(lat[:batch], labels["shape"][:batch],
+                               labels["obj"][:batch]), 4) if steps > 0 else round(d0, 4)
+    return {"init_D": round(d0, 4), "final_D": final_D, "curve": curve,
             "steps": steps}
 
 
