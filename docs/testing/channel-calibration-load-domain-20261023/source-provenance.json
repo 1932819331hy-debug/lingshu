@@ -76,5 +76,61 @@
       "related_skips": [],
       "owned_test_temp_cleaned": true
     }
+  },
+  "upstream_query_fixture_ownership": {
+    "windows": {
+      "platform": "Windows",
+      "python": "3.12.10",
+      "commit": "5d429a1da1e671a82178565bfa4243c69e880938",
+      "guard": "tests/test_issue505_workset_query_guard.py",
+      "guard_sha256_lf": "d7f7d7cde050e00f57e5e6ec62fe0d2c5e0d1ec27825896c48326323a2714d87",
+      "records": [
+        {
+          "case": "fixed",
+          "passed": 7,
+          "expected_failures": [],
+          "skipped": 0,
+          "errors": 0
+        },
+        {
+          "case": "owner_not_retained",
+          "passed": 0,
+          "expected_failures": [
+            "test_borrowed_fixture_owner_survives_collection"
+          ],
+          "skipped": 0,
+          "errors": 0
+        }
+      ],
+      "temporary_sandboxes_cleaned": true,
+      "raw_log_sha256_lf": "1527a7995c6378518a7bdb65fc6b78def4e937358bb051c73bbaebe62d7c887d"
+    },
+    "linux": {
+      "platform": "Linux",
+      "python": "3.13.12",
+      "commit": "5d429a1da1e671a82178565bfa4243c69e880938",
+      "guard": "tests/test_issue505_workset_query_guard.py",
+      "guard_sha256_lf": "d7f7d7cde050e00f57e5e6ec62fe0d2c5e0d1ec27825896c48326323a2714d87",
+      "records": [
+        {
+          "case": "fixed",
+          "passed": 7,
+          "expected_failures": [],
+          "skipped": 0,
+          "errors": 0
+        },
+        {
+          "case": "owner_not_retained",
+          "passed": 0,
+          "expected_failures": [
+            "test_borrowed_fixture_owner_survives_collection"
+          ],
+          "skipped": 0,
+          "errors": 0
+        }
+      ],
+      "temporary_sandboxes_cleaned": true,
+      "raw_log_sha256_lf": "e0a43bbd592fd0f3a6a6aea93e0159e92241092050f58fccf2abf37dfecdf0c2"
+    }
   }
 }

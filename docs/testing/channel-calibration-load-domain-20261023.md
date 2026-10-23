@@ -47,3 +47,13 @@ python -X utf8 tools/time_core_lint.py --json
 保留 [PR #554](https://github.com/FuRongJun-1999/lingshu/pull/554) 查询分母防护、[PR #622](https://github.com/FuRongJun-1999/lingshu/pull/622) 对 #601 的逐通道转换防护，以及 #651 通道名白名单。本件只补这些既有校准恢复契约的形状/值域漏网，不引入遗忘机制、阈值或反证算法设计。
 
 仅覆盖载入恢复，不修公开 #119 的裸文件名保存问题、文件原子写入或任意进程内直改 _state；无效通道的原校准无法恢复，只能回落先验。未验证生产文件损坏频率或 DSH 宿主。 未修改 dsh-memory 大脑区；未验证 DSH 宿主、生产记忆、线上发生频率、吞吐、断电/磁盘满或所有其它锁。维护者人审待完成。
+
+首次完整 CI 在上游 #873 新增的查询守卫失败：借用连接的测试夹具丢失数据库所有者，GC 回收时关闭连接，报 Cannot operate on a closed database；不是通道校准守卫失败。[原失败 job](https://github.com/FuRongJun-1999/lingshu/actions/runs/39890169441/job/120207753160)。
+
+对齐 main `a3ae57e3830ee2b9506d5d3f5f25e986c4429c67` 后，仅将该测试改为 pytest 工厂夹具，在整条测试期间保留借用连接的所有者，并在结束时显式关闭；原六条查询断言和阈值逐条保留。新增强制 gc.collect 的守卫：不保留所有者时恰好命中该断言；不改变 ActivationEngine 的生产语义。
+
+夹具修正提交 `5d429a1da1e671a82178565bfa4243c69e880938`：两平台各 7 passed、0 skipped；owner_not_retained 定点反证各恰红 1 条，并命中 borrowed query fixture lost its database owner。合入 main 后的清单严格检查仍为 64/64 MATCH，时间核无新增违规。通道校准源码、新增业务守卫及其变异规格逐字节不变，复用既有双平台 12 守卫、4 变异、36 相关回归和 37 条组合读数，仅补跑这份受影响夹具；不是新的独立 P1 或额外悬赏。当前 head 的远端完整 CI 重新验收。
+
+```text
+python -X utf8 -m pytest tests/test_issue505_workset_query_guard.py -q
+```
