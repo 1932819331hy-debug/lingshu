@@ -1,0 +1,80 @@
+{
+  "baseline": "ea7a13c87a4673a402c991430707809c500c8ec0",
+  "sha256_lf": {
+    "lingshu/gen/hexgen_self_source.py": "9f5a8fa806e7ecf388d0ef1e364105fbf84e284ab4a95712fe2d7717970992f9",
+    "tests/test_self_source_enum_identity.py": "f56bbcaa5c96332a09b587d441fd793cb6c75807655e16615ab9904c6798e060",
+    "tests/fixtures/self_source_enum_identity_mutations.json": "3c7139b35810ab2508ec072ffe9e8084cd26e4c609a0129ae1940722ca816a86"
+  },
+  "runs": {
+    "windows": {
+      "platform": "Windows",
+      "python": "3.12.10",
+      "sqlite": "3.49.1",
+      "baseline": "ea7a13c87a4673a402c991430707809c500c8ec0",
+      "validated_commit": "604aca715c921fca332f0771690ca33134f8bff1",
+      "sha256_lf": {
+        "lingshu/gen/hexgen_self_source.py": "9f5a8fa806e7ecf388d0ef1e364105fbf84e284ab4a95712fe2d7717970992f9",
+        "tests/test_self_source_enum_identity.py": "f56bbcaa5c96332a09b587d441fd793cb6c75807655e16615ab9904c6798e060",
+        "tests/fixtures/self_source_enum_identity_mutations.json": "3c7139b35810ab2508ec072ffe9e8084cd26e4c609a0129ae1940722ca816a86"
+      },
+      "commands": [
+        {
+          "name": "replay",
+          "returncode": 0
+        },
+        {
+          "name": "related",
+          "returncode": 0
+        },
+        {
+          "name": "manifest",
+          "returncode": 0
+        },
+        {
+          "name": "time-core",
+          "returncode": 0
+        }
+      ],
+      "related_total": 8,
+      "related_failures": [],
+      "related_errors": [],
+      "related_skips": [],
+      "owned_test_temp_cleaned": true
+    },
+    "linux": {
+      "platform": "Linux",
+      "python": "3.13.12",
+      "sqlite": "3.46.1",
+      "baseline": "ea7a13c87a4673a402c991430707809c500c8ec0",
+      "validated_commit": "604aca715c921fca332f0771690ca33134f8bff1",
+      "sha256_lf": {
+        "lingshu/gen/hexgen_self_source.py": "9f5a8fa806e7ecf388d0ef1e364105fbf84e284ab4a95712fe2d7717970992f9",
+        "tests/test_self_source_enum_identity.py": "f56bbcaa5c96332a09b587d441fd793cb6c75807655e16615ab9904c6798e060",
+        "tests/fixtures/self_source_enum_identity_mutations.json": "3c7139b35810ab2508ec072ffe9e8084cd26e4c609a0129ae1940722ca816a86"
+      },
+      "commands": [
+        {
+          "name": "replay",
+          "returncode": 0
+        },
+        {
+          "name": "related",
+          "returncode": 0
+        },
+        {
+          "name": "manifest",
+          "returncode": 0
+        },
+        {
+          "name": "time-core",
+          "returncode": 0
+        }
+      ],
+      "related_total": 8,
+      "related_failures": [],
+      "related_errors": [],
+      "related_skips": [],
+      "owned_test_temp_cleaned": true
+    }
+  }
+}
