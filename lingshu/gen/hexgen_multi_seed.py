@@ -66,7 +66,13 @@ def pick_prompts(n, lib_path=LIB):
 
     ⚠ 实现事故（R293 首跑）：初版只按 `name` 排序去重取前 n ⇒ 排在前面的 `ls_*`（**风景域**）
     记录被选中，29 张 meadow/waterfall/forest 渲染全部作废（已移出语料）。**故判据必须是
-    「能通过受控模板解析」而不是「名字排序靠前」**——这正是本模块守门测试钉的那一条。"""
+    「能通过受控模板解析」而不是「名字排序靠前」**——这正是本模块守门测试钉的那一条。
+
+    #355 残余：`n <= 0` 必须在**进入循环前**返回空集——旧实现先 append 再判
+    `len(out) >= n`，于是 `pick_prompts(0)` / `pick_prompts(-3)` 都静默返回 1 条
+    （CLI 层的 `_positive_int` 已挡越界，但库函数被直接调用时无此闸）。"""
+    if n <= 0:
+        return []
     with io.open(lib_path, encoding="utf-8") as f:
         lib = json.load(f)
     seen, out = set(), []

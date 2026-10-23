@@ -601,7 +601,7 @@
     {
      "file": "hexgen_multi_seed.py",
      "src": "experiments.hexgen_multi_seed",
-     "sha256": "d78b2cb5bfb05f56",
+     "sha256": "7f275718a603748d",
      "rewrites": 1,
      "sanitized": 1,
      "patches": 0,
