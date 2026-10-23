@@ -625,7 +625,7 @@
     {
      "file": "hexgen_self_source.py",
      "src": "experiments.hexgen_self_source",
-     "sha256": "118c2021550c1dbb",
+     "sha256": "9f5a8fa806e7ecf3",
      "rewrites": 4,
      "sanitized": 0,
      "patches": 0,
