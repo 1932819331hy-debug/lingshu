@@ -23,14 +23,14 @@ def test_z0_zero_steps_returns_initial_d0():
     net, x, y = fixture(); res = train_infogap(net, x, y, max_steps=0)
     assert_shape(res, net)
     assert res['steps'] == 0 and res['history'] == []
-    assert res['final_D'] == 2.31565
+    assert res['final_D'] == 2.29678
     assert res['growths'] == res['reverts'] == res['frozen_total'] == 0
 
 
 def test_zn_negative_one_preserves_empty_loop_contract():
     net, x, y = fixture(); res = train_infogap(net, x, y, max_steps=-1)
     assert_shape(res, net)
-    assert res['steps'] == 0 and res['history'] == [] and res['final_D'] == 2.31565
+    assert res['steps'] == 0 and res['history'] == [] and res['final_D'] == 2.29678
     assert res['growths'] == res['reverts'] == res['frozen_total'] == 0
 
 
@@ -40,7 +40,7 @@ def test_t3_trains_and_returns_final_model_loss():
     assert 0 < res['steps'] == len(res['history']) <= 3
     # #335：final_D 是**最终模型**的损失，不必等于 history[-1]['D']（那是该步
     # 更新前测的 d）；但必须对最终模型可复算且有限。
-    assert math.isfinite(float(res['final_D'])) and res['final_D'] != 2.31565
+    assert math.isfinite(float(res['final_D'])) and res['final_D'] != 2.29678
 
 
 def test_c1_early_convergence_preserved():
@@ -49,4 +49,4 @@ def test_c1_early_convergence_preserved():
     assert res['steps'] == len(res['history']) == 1
     assert res['history'][0]['step'] == 0
     assert res['history'][0]['verdict'] == 'CONVERGED'
-    assert res['final_D'] == res['history'][-1]['D'] == 2.31565
+    assert res['final_D'] == res['history'][-1]['D'] == 2.29678

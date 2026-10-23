@@ -141,18 +141,33 @@ def test_mutation_reverting_each_fix_is_flagged_by_name():
 # ==================== 行为钉（修复面的语义不被删参破坏） ====================
 
 def test_grow_kernel_cycles_family_deterministically():
-    """grow_kernel：+1 核按 K 轮转取手写核族、mix 对应列置零、同起点同生长。"""
-    names = list(hex_train.DEFAULT_KERNELS)
+    """grow_kernel：+1 核按 K 轮转取互异白箱先验族、mix 对应列置零、同起点同生长。
+
+    #351 同族（#339）：核源由 DEFAULT_KERNELS（5 项）扩为 extended_prior_family(37)
+    ⇒ K 超过 5 不再回绕取重复核。确定性（同起点同生长）与 mix 置零语义不变。
+    """
+    family = hex_train.extended_prior_family(len(hex_train.DEFAULT_KERNELS) + 32)
     net = hex_train.HexNet(n_class=2, seed=7)
     K0 = net.K
     net.grow_kernel()
     assert net.K == K0 + 1, f"生长后 K 应 +1: {net.K}"
-    np.testing.assert_array_equal(
-        net.conv[K0], hex_train.DEFAULT_KERNELS[names[K0 % len(names)]])
+    np.testing.assert_array_equal(net.conv[K0], family[K0 % len(family)])
     assert not net.mix[:, K0:].any(), "生长核的 mix 列应为零（初始不影响输出）"
     net2 = hex_train.HexNet(n_class=2, seed=7)
     net2.grow_kernel()
     np.testing.assert_array_equal(net.conv[K0], net2.conv[K0])
+
+
+def test_grow_kernel_family_never_repeats_within_extended_family():
+    """#339：从默认 n_kernels=4 连续生长 6 次（K 到 10，越过旧 5 项回绕点），
+    新核不得与任何已有核逐元素相同（旧实现第 2 次起即重复）。"""
+    net = hex_train.HexNet(n_class=2, seed=7)
+    for _ in range(6):
+        before = net.conv.copy()
+        net.grow_kernel()
+        newk = net.conv[-1]
+        assert not any(np.array_equal(before[i], newk) for i in range(before.shape[0])), (
+            "K=%d 生长出的核与已有核重复（核族回绕未修）" % net.K)
 
 
 def test_four_state_classify_zero_input_blindspot_without_net():
