@@ -348,9 +348,15 @@ def save_consolidated(kernels: Dict[str, np.ndarray], meta: Dict, path: str) -> 
     """
     import uuid
 
+    # #349：`kernels` / `consolidated` 是本档的结构字段，meta 里的同名键不得覆盖
+    # （旧实现 `**meta` 后置展开 ⇒ meta 带 `kernels` 时落盘 kernels={}、学习核全丢）。
     payload = {"algo": ALGO, "consolidated": True,
-               "kernels": {k: [round(float(x), 6) for x in v] for k, v in kernels.items()},
-               **meta}
+               "kernels": {k: [round(float(x), 6) for x in v] for k, v in kernels.items()}}
+    for mk, mv in meta.items():
+        if mk in ("kernels", "consolidated"):
+            payload.setdefault("_meta_%s" % mk, mv)   # 保留信息但不冒充结构字段
+        else:
+            payload[mk] = mv
     target = os.path.realpath(path)
     os.makedirs(os.path.dirname(target) or ".", exist_ok=True)
     tmp = os.path.join(os.path.dirname(target), f".lingshu-save.tmp-{os.getpid()}-{uuid.uuid4().hex}")
@@ -386,10 +392,31 @@ def save_consolidated(kernels: Dict[str, np.ndarray], meta: Dict, path: str) -> 
 
 
 def load_consolidated(path: str) -> Dict[str, np.ndarray]:
-    """加载固化核（确定性模块——零训练依赖运行）。"""
+    """加载固化核（确定性模块——零训练依赖运行）。
+
+    #349：加载即校验「固化档契约」，坏档当场 ValueError（fail-closed）——
+    旧实现来者不拒：8 参数核被下游 hex_conv 静默截断成前 7 个、6 参数核在卷积
+    深处 IndexError、`consolidated` 非 True 的非固化档也照收。校验三件：
+      ① payload 是对象且 `consolidated is True`（非固化档不冒充）；
+      ② `kernels` 是非空对象；
+      ③ 每个核是一维 7 参数（与 `DEFAULT_KERNELS` / `hex_conv` 契约一致）。
+    """
     with open(path, encoding="utf-8") as f:
         payload = json.load(f)
-    return {k: np.array(v, dtype=np.float32) for k, v in payload["kernels"].items()}
+    if not isinstance(payload, dict) or payload.get("consolidated") is not True:
+        raise ValueError("固化核档 %s 缺少 consolidated=true 标记，不是固化档" % path)
+    kernels = payload.get("kernels")
+    if not isinstance(kernels, dict) or not kernels:
+        raise ValueError("固化核档 %s 的 kernels 缺失或为空" % path)
+    out: Dict[str, np.ndarray] = {}
+    for k, v in kernels.items():
+        arr = np.array(v, dtype=np.float32)
+        if arr.ndim != 1 or arr.shape[0] != 7:
+            raise ValueError(
+                "固化核 %r 需为一维 7 参数（hex_conv 契约），实得 shape=%r（%s）"
+                % (k, arr.shape, path))
+        out[k] = arr
+    return out
 
 
 # ==================== 并行条件路由 NN 层 ====================
