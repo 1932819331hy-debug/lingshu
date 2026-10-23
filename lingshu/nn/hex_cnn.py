@@ -144,6 +144,8 @@ def hex_conv(feature: np.ndarray, kernel7: np.ndarray,
     边界：出界邻取自身值（edge-replicate 的蜂窝版，保结构）。"""
     rows, cols, C = feature.shape
     k = np.asarray(kernel7, dtype=np.float32)
+    if k.shape not in ((7,), (C, 7)):
+        raise ValueError("kernel7 must have shape (7,) or (C, 7)")
     if k.ndim == 1:
         k = np.tile(k, (C, 1))          # (C,7) 共享核
     out = np.zeros_like(feature, dtype=np.float32)
@@ -329,6 +331,21 @@ def selfsup_finetune(img_arr: np.ndarray, kernel_name: str = "center_surround",
             "loss_curve": loss_curve, "algo": ALGO, "epochs": epochs, "lr": lr}
 
 
+def _consolidated_kernel(name: str, values) -> np.ndarray:
+    """固化格式只保存一维共享核；保留六位小数写入前的原始精度。"""
+    message = f"kernel {name!r} must contain seven finite float32 weights"
+    try:
+        k = np.asarray(values, dtype=np.float64)
+    except (TypeError, ValueError, OverflowError) as exc:
+        raise ValueError(message) from exc
+    with np.errstate(over="ignore", invalid="ignore"):
+        valid = (k.shape == (7,) and np.isfinite(k).all()
+                 and np.isfinite(k.astype(np.float32)).all())
+    if not valid:
+        raise ValueError(message)
+    return k
+
+
 def save_consolidated(kernels: Dict[str, np.ndarray], meta: Dict, path: str) -> str:
     """白箱固化：学完的核参数 + 训练元数据落盘（JSON——可直读可审计）。
 
@@ -348,9 +365,10 @@ def save_consolidated(kernels: Dict[str, np.ndarray], meta: Dict, path: str) -> 
     """
     import uuid
 
-    payload = {"algo": ALGO, "consolidated": True,
-               "kernels": {k: [round(float(x), 6) for x in v] for k, v in kernels.items()},
-               **meta}
+    # #349：先验核契约在落盘前核对；元数据不能覆盖真实参数/固化标记。
+    payload = {**meta, "algo": ALGO, "consolidated": True,
+               "kernels": {k: [round(float(x), 6) for x in _consolidated_kernel(k, v)]
+                           for k, v in kernels.items()}}
     target = os.path.realpath(path)
     os.makedirs(os.path.dirname(target) or ".", exist_ok=True)
     tmp = os.path.join(os.path.dirname(target), f".lingshu-save.tmp-{os.getpid()}-{uuid.uuid4().hex}")
@@ -389,7 +407,11 @@ def load_consolidated(path: str) -> Dict[str, np.ndarray]:
     """加载固化核（确定性模块——零训练依赖运行）。"""
     with open(path, encoding="utf-8") as f:
         payload = json.load(f)
-    return {k: np.array(v, dtype=np.float32) for k, v in payload["kernels"].items()}
+    if (not isinstance(payload, dict) or payload.get("consolidated") is not True
+            or not isinstance(payload.get("kernels"), dict)):
+        raise ValueError("invalid consolidated kernel payload")
+    return {k: _consolidated_kernel(k, v).astype(np.float32)
+            for k, v in payload["kernels"].items()}
 
 
 # ==================== 并行条件路由 NN 层 ====================
