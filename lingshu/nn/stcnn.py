@@ -20,10 +20,19 @@ def frames_to_voxel(frames, width=None, height=None):
     if width is not None or height is not None:
         h, w = arr.shape[1], arr.shape[2]
         arr = arr[:, : (height or h), : (width or w)]
-    # 归一化 0~1
-    amin, amax = arr.min(), arr.max()
-    if amax > amin:
-        arr = (arr - amin) / (amax - amin)
+    # 归一化 0~1。#352：旧实现按**整段** min/max 归一 ⇒ 任意小噪声被拉到满量程
+    # （静止画面 + σ=1e-6 噪声的 motion_magnitude=236.9 > 真实滚动小球 90.0——
+    # 运动检测与真实运动幅度无关）。现锚定**绝对量纲**：输入在 [0,1] 或 [0,255]
+    # （帧来自 uint8 图像/本仓合成器，量纲有定义）时按已知量纲缩放（已 0..1 则
+    # 原样、0..255 则 /255）——微小噪声保持微小；仅当输入明显超出两个已知域
+    # （自造浮点域、无先验量纲）才退回整段 min-max（该分支仍带 #352 界，如实注明）。
+    amin, amax = float(arr.min()), float(arr.max())
+    if 0.0 <= amin and amax <= 1.0:
+        pass                                   # 已是 0..1 量纲
+    elif 0.0 <= amin and 0.0 < amax <= 255.0:
+        arr = arr / 255.0                      # uint8 图像量纲
+    elif amax > amin:
+        arr = (arr - amin) / (amax - amin)     # 自造浮点域：退回 min-max（带 #352 界）
     return arr
 
 
