@@ -1,0 +1,338 @@
+{
+  "windows": {
+    "python": "3.12.10",
+    "platform": "Windows",
+    "sqlite": "3.49.1",
+    "baseline": "ea7a13c87a4673a402c991430707809c500c8ec0",
+    "guard_sha256": "d89faea3513378cd490a82359e7cf83ea170466250e1a84bf0e1eee78d5b06df",
+    "records": [
+      {
+        "case": "fixed",
+        "ok": true,
+        "returncode": 0,
+        "passed": 18,
+        "failed_tests": [],
+        "errors": 0,
+        "skipped": 0,
+        "expected_failures": [],
+        "expected_assertion": "",
+        "pytest_summary": "18 passed in 0.53s",
+        "source_sha256": {
+          "lingshu/nn/hex_cnn.py": "df8cf0e9ba5ac2fcc49de0160b801e94958f03afa1ee7292bb2f296f3d195a5c"
+        }
+      },
+      {
+        "case": "baseline",
+        "ok": true,
+        "returncode": 1,
+        "passed": 2,
+        "failed_tests": [
+          "test_bad_save_preserves_old_bytes_before_any_io[eight]",
+          "test_bad_save_preserves_old_bytes_before_any_io[float32_overflow]",
+          "test_bad_save_preserves_old_bytes_before_any_io[nan]",
+          "test_bad_save_preserves_old_bytes_before_any_io[six]",
+          "test_direct_convolution_rejects_incompatible_shape[eight]",
+          "test_direct_convolution_rejects_incompatible_shape[six]",
+          "test_direct_convolution_rejects_incompatible_shape[wrong_channels]",
+          "test_load_rejects_invalid_checkpoint_envelope[false]",
+          "test_load_rejects_invalid_checkpoint_envelope[kernel_list]",
+          "test_load_rejects_invalid_checkpoint_envelope[missing]",
+          "test_load_rejects_invalid_checkpoint_envelope[root_list]",
+          "test_load_rejects_nonfinite_persisted_weights",
+          "test_load_rejects_wrong_weight_shape[eight]",
+          "test_load_rejects_wrong_weight_shape[matrix]",
+          "test_load_rejects_wrong_weight_shape[six]",
+          "test_metadata_cannot_replace_learned_checkpoint"
+        ],
+        "errors": 0,
+        "skipped": 0,
+        "expected_failures": [
+          "test_metadata_cannot_replace_learned_checkpoint",
+          "test_load_rejects_wrong_weight_shape[six]",
+          "test_load_rejects_wrong_weight_shape[eight]",
+          "test_load_rejects_wrong_weight_shape[matrix]",
+          "test_load_rejects_invalid_checkpoint_envelope[false]",
+          "test_load_rejects_invalid_checkpoint_envelope[missing]",
+          "test_load_rejects_invalid_checkpoint_envelope[kernel_list]",
+          "test_load_rejects_invalid_checkpoint_envelope[root_list]",
+          "test_bad_save_preserves_old_bytes_before_any_io[six]",
+          "test_bad_save_preserves_old_bytes_before_any_io[eight]",
+          "test_bad_save_preserves_old_bytes_before_any_io[nan]",
+          "test_bad_save_preserves_old_bytes_before_any_io[float32_overflow]",
+          "test_direct_convolution_rejects_incompatible_shape[six]",
+          "test_direct_convolution_rejects_incompatible_shape[eight]",
+          "test_direct_convolution_rejects_incompatible_shape[wrong_channels]",
+          "test_load_rejects_nonfinite_persisted_weights"
+        ],
+        "expected_assertion": "",
+        "pytest_summary": "16 failed, 2 passed in 0.85s",
+        "source_sha256": {
+          "lingshu/nn/hex_cnn.py": "2078d8482065e10c048c839ab78e608d422865efee5450bb1d505c104b3d1a6f"
+        }
+      },
+      {
+        "case": "metadata_overrides_parameters",
+        "ok": true,
+        "returncode": 1,
+        "passed": 0,
+        "failed_tests": [
+          "test_metadata_cannot_replace_learned_checkpoint"
+        ],
+        "errors": 0,
+        "skipped": 0,
+        "expected_failures": [
+          "test_metadata_cannot_replace_learned_checkpoint"
+        ],
+        "expected_assertion": "metadata erased learned kernel",
+        "pytest_summary": "1 failed in 0.50s",
+        "source_sha256": {
+          "lingshu/nn/hex_cnn.py": "5d678935f36c0e53b88f107807f18c73ef1f22dc1e0e5df2086718a1b5013d56"
+        }
+      },
+      {
+        "case": "accept_wrong_persisted_shape",
+        "ok": true,
+        "returncode": 1,
+        "passed": 0,
+        "failed_tests": [
+          "test_load_rejects_wrong_weight_shape[eight]"
+        ],
+        "errors": 0,
+        "skipped": 0,
+        "expected_failures": [
+          "test_load_rejects_wrong_weight_shape[eight]"
+        ],
+        "expected_assertion": "load accepted malformed seven-weight kernel",
+        "pytest_summary": "1 failed in 0.53s",
+        "source_sha256": {
+          "lingshu/nn/hex_cnn.py": "b36b01c47564a5f8771ab8208981083abadcf8da4901ec9834bb1fe990c59e42"
+        }
+      },
+      {
+        "case": "accept_invalid_envelope",
+        "ok": true,
+        "returncode": 1,
+        "passed": 0,
+        "failed_tests": [
+          "test_load_rejects_invalid_checkpoint_envelope[false]"
+        ],
+        "errors": 0,
+        "skipped": 0,
+        "expected_failures": [
+          "test_load_rejects_invalid_checkpoint_envelope[false]"
+        ],
+        "expected_assertion": "load accepted invalid checkpoint envelope",
+        "pytest_summary": "1 failed in 0.52s",
+        "source_sha256": {
+          "lingshu/nn/hex_cnn.py": "d1d42559bcef145c5b0f583c82c760c0731a0c74acab689d5fba8c7cfe905401"
+        }
+      },
+      {
+        "case": "truncate_direct_convolution",
+        "ok": true,
+        "returncode": 1,
+        "passed": 0,
+        "failed_tests": [
+          "test_direct_convolution_rejects_incompatible_shape[eight]"
+        ],
+        "errors": 0,
+        "skipped": 0,
+        "expected_failures": [
+          "test_direct_convolution_rejects_incompatible_shape[eight]"
+        ],
+        "expected_assertion": "convolution silently ignored extra kernel weights",
+        "pytest_summary": "1 failed in 0.53s",
+        "source_sha256": {
+          "lingshu/nn/hex_cnn.py": "9b096b0b7e654b5d4d4a8217dbdfb237741dd555d14ee96fd0602ea55bede11f"
+        }
+      },
+      {
+        "case": "accept_float32_overflow",
+        "ok": true,
+        "returncode": 1,
+        "passed": 0,
+        "failed_tests": [
+          "test_bad_save_preserves_old_bytes_before_any_io[float32_overflow]"
+        ],
+        "errors": 0,
+        "skipped": 0,
+        "expected_failures": [
+          "test_bad_save_preserves_old_bytes_before_any_io[float32_overflow]"
+        ],
+        "expected_assertion": "invalid save replaced good checkpoint",
+        "pytest_summary": "1 failed in 0.55s",
+        "source_sha256": {
+          "lingshu/nn/hex_cnn.py": "594eec248e64353fddab9d49e340ba7eb1b77003b739e46c49a63d6dd672b9a4"
+        }
+      }
+    ]
+  },
+  "linux": {
+    "python": "3.13.12",
+    "platform": "Linux",
+    "sqlite": "3.46.1",
+    "baseline": "ea7a13c87a4673a402c991430707809c500c8ec0",
+    "guard_sha256": "d89faea3513378cd490a82359e7cf83ea170466250e1a84bf0e1eee78d5b06df",
+    "records": [
+      {
+        "case": "fixed",
+        "ok": true,
+        "returncode": 0,
+        "passed": 18,
+        "failed_tests": [],
+        "errors": 0,
+        "skipped": 0,
+        "expected_failures": [],
+        "expected_assertion": "",
+        "pytest_summary": "18 passed in 1.18s",
+        "source_sha256": {
+          "lingshu/nn/hex_cnn.py": "df8cf0e9ba5ac2fcc49de0160b801e94958f03afa1ee7292bb2f296f3d195a5c"
+        }
+      },
+      {
+        "case": "baseline",
+        "ok": true,
+        "returncode": 1,
+        "passed": 2,
+        "failed_tests": [
+          "test_bad_save_preserves_old_bytes_before_any_io[eight]",
+          "test_bad_save_preserves_old_bytes_before_any_io[float32_overflow]",
+          "test_bad_save_preserves_old_bytes_before_any_io[nan]",
+          "test_bad_save_preserves_old_bytes_before_any_io[six]",
+          "test_direct_convolution_rejects_incompatible_shape[eight]",
+          "test_direct_convolution_rejects_incompatible_shape[six]",
+          "test_direct_convolution_rejects_incompatible_shape[wrong_channels]",
+          "test_load_rejects_invalid_checkpoint_envelope[false]",
+          "test_load_rejects_invalid_checkpoint_envelope[kernel_list]",
+          "test_load_rejects_invalid_checkpoint_envelope[missing]",
+          "test_load_rejects_invalid_checkpoint_envelope[root_list]",
+          "test_load_rejects_nonfinite_persisted_weights",
+          "test_load_rejects_wrong_weight_shape[eight]",
+          "test_load_rejects_wrong_weight_shape[matrix]",
+          "test_load_rejects_wrong_weight_shape[six]",
+          "test_metadata_cannot_replace_learned_checkpoint"
+        ],
+        "errors": 0,
+        "skipped": 0,
+        "expected_failures": [
+          "test_metadata_cannot_replace_learned_checkpoint",
+          "test_load_rejects_wrong_weight_shape[six]",
+          "test_load_rejects_wrong_weight_shape[eight]",
+          "test_load_rejects_wrong_weight_shape[matrix]",
+          "test_load_rejects_invalid_checkpoint_envelope[false]",
+          "test_load_rejects_invalid_checkpoint_envelope[missing]",
+          "test_load_rejects_invalid_checkpoint_envelope[kernel_list]",
+          "test_load_rejects_invalid_checkpoint_envelope[root_list]",
+          "test_bad_save_preserves_old_bytes_before_any_io[six]",
+          "test_bad_save_preserves_old_bytes_before_any_io[eight]",
+          "test_bad_save_preserves_old_bytes_before_any_io[nan]",
+          "test_bad_save_preserves_old_bytes_before_any_io[float32_overflow]",
+          "test_direct_convolution_rejects_incompatible_shape[six]",
+          "test_direct_convolution_rejects_incompatible_shape[eight]",
+          "test_direct_convolution_rejects_incompatible_shape[wrong_channels]",
+          "test_load_rejects_nonfinite_persisted_weights"
+        ],
+        "expected_assertion": "",
+        "pytest_summary": "16 failed, 2 passed in 1.85s",
+        "source_sha256": {
+          "lingshu/nn/hex_cnn.py": "2078d8482065e10c048c839ab78e608d422865efee5450bb1d505c104b3d1a6f"
+        }
+      },
+      {
+        "case": "metadata_overrides_parameters",
+        "ok": true,
+        "returncode": 1,
+        "passed": 0,
+        "failed_tests": [
+          "test_metadata_cannot_replace_learned_checkpoint"
+        ],
+        "errors": 0,
+        "skipped": 0,
+        "expected_failures": [
+          "test_metadata_cannot_replace_learned_checkpoint"
+        ],
+        "expected_assertion": "metadata erased learned kernel",
+        "pytest_summary": "1 failed in 0.51s",
+        "source_sha256": {
+          "lingshu/nn/hex_cnn.py": "5d678935f36c0e53b88f107807f18c73ef1f22dc1e0e5df2086718a1b5013d56"
+        }
+      },
+      {
+        "case": "accept_wrong_persisted_shape",
+        "ok": true,
+        "returncode": 1,
+        "passed": 0,
+        "failed_tests": [
+          "test_load_rejects_wrong_weight_shape[eight]"
+        ],
+        "errors": 0,
+        "skipped": 0,
+        "expected_failures": [
+          "test_load_rejects_wrong_weight_shape[eight]"
+        ],
+        "expected_assertion": "load accepted malformed seven-weight kernel",
+        "pytest_summary": "1 failed in 0.51s",
+        "source_sha256": {
+          "lingshu/nn/hex_cnn.py": "b36b01c47564a5f8771ab8208981083abadcf8da4901ec9834bb1fe990c59e42"
+        }
+      },
+      {
+        "case": "accept_invalid_envelope",
+        "ok": true,
+        "returncode": 1,
+        "passed": 0,
+        "failed_tests": [
+          "test_load_rejects_invalid_checkpoint_envelope[false]"
+        ],
+        "errors": 0,
+        "skipped": 0,
+        "expected_failures": [
+          "test_load_rejects_invalid_checkpoint_envelope[false]"
+        ],
+        "expected_assertion": "load accepted invalid checkpoint envelope",
+        "pytest_summary": "1 failed in 0.49s",
+        "source_sha256": {
+          "lingshu/nn/hex_cnn.py": "d1d42559bcef145c5b0f583c82c760c0731a0c74acab689d5fba8c7cfe905401"
+        }
+      },
+      {
+        "case": "truncate_direct_convolution",
+        "ok": true,
+        "returncode": 1,
+        "passed": 0,
+        "failed_tests": [
+          "test_direct_convolution_rejects_incompatible_shape[eight]"
+        ],
+        "errors": 0,
+        "skipped": 0,
+        "expected_failures": [
+          "test_direct_convolution_rejects_incompatible_shape[eight]"
+        ],
+        "expected_assertion": "convolution silently ignored extra kernel weights",
+        "pytest_summary": "1 failed in 0.44s",
+        "source_sha256": {
+          "lingshu/nn/hex_cnn.py": "9b096b0b7e654b5d4d4a8217dbdfb237741dd555d14ee96fd0602ea55bede11f"
+        }
+      },
+      {
+        "case": "accept_float32_overflow",
+        "ok": true,
+        "returncode": 1,
+        "passed": 0,
+        "failed_tests": [
+          "test_bad_save_preserves_old_bytes_before_any_io[float32_overflow]"
+        ],
+        "errors": 0,
+        "skipped": 0,
+        "expected_failures": [
+          "test_bad_save_preserves_old_bytes_before_any_io[float32_overflow]"
+        ],
+        "expected_assertion": "invalid save replaced good checkpoint",
+        "pytest_summary": "1 failed in 0.55s",
+        "source_sha256": {
+          "lingshu/nn/hex_cnn.py": "594eec248e64353fddab9d49e340ba7eb1b77003b739e46c49a63d6dd672b9a4"
+        }
+      }
+    ]
+  }
+}

@@ -1,0 +1,226 @@
+CASE fixed
+..................                                                       [100%]
+18 passed in 0.53s
+
+CASE baseline
+F.FFFFFFFFFFFFFFF.                                                       [100%]
+================================== FAILURES ===================================
+_______________ test_metadata_cannot_replace_learned_checkpoint _______________
+tests\test_consolidated_kernel_contract.py:26: in test_metadata_cannot_replace_learned_checkpoint
+    assert set(payload["kernels"]) == {"learned"}, "metadata erased learned kernel"
+E   AssertionError: metadata erased learned kernel
+E   assert set() == {'learned'}
+E
+E     Extra items in the right set:
+E     'learned'
+E     Use -v to get more diff
+__________________ test_load_rejects_wrong_weight_shape[six] __________________
+tests\test_consolidated_kernel_contract.py:50: in test_load_rejects_wrong_weight_shape
+    _rejects(lambda: H.load_consolidated(str(path)), "broken", "load accepted malformed seven-weight kernel")
+tests\test_consolidated_kernel_contract.py:17: in _rejects
+    assert False, failure
+E   AssertionError: load accepted malformed seven-weight kernel
+E   assert False
+_________________ test_load_rejects_wrong_weight_shape[eight] _________________
+tests\test_consolidated_kernel_contract.py:50: in test_load_rejects_wrong_weight_shape
+    _rejects(lambda: H.load_consolidated(str(path)), "broken", "load accepted malformed seven-weight kernel")
+tests\test_consolidated_kernel_contract.py:17: in _rejects
+    assert False, failure
+E   AssertionError: load accepted malformed seven-weight kernel
+E   assert False
+________________ test_load_rejects_wrong_weight_shape[matrix] _________________
+tests\test_consolidated_kernel_contract.py:50: in test_load_rejects_wrong_weight_shape
+    _rejects(lambda: H.load_consolidated(str(path)), "broken", "load accepted malformed seven-weight kernel")
+tests\test_consolidated_kernel_contract.py:17: in _rejects
+    assert False, failure
+E   AssertionError: load accepted malformed seven-weight kernel
+E   assert False
+____________ test_load_rejects_invalid_checkpoint_envelope[false] _____________
+tests\test_consolidated_kernel_contract.py:69: in test_load_rejects_invalid_checkpoint_envelope
+    assert False, "load accepted invalid checkpoint envelope"
+E   AssertionError: load accepted invalid checkpoint envelope
+E   assert False
+___________ test_load_rejects_invalid_checkpoint_envelope[missing] ____________
+tests\test_consolidated_kernel_contract.py:69: in test_load_rejects_invalid_checkpoint_envelope
+    assert False, "load accepted invalid checkpoint envelope"
+E   AssertionError: load accepted invalid checkpoint envelope
+E   assert False
+_________ test_load_rejects_invalid_checkpoint_envelope[kernel_list] __________
+tests\test_consolidated_kernel_contract.py:63: in test_load_rejects_invalid_checkpoint_envelope
+    H.load_consolidated(str(path))
+lingshu\nn\hex_cnn.py:392: in load_consolidated
+    return {k: np.array(v, dtype=np.float32) for k, v in payload["kernels"].items()}
+                                                         ^^^^^^^^^^^^^^^^^^^^^^^^
+E   AttributeError: 'list' object has no attribute 'items'
+
+During handling of the above exception, another exception occurred:
+tests\test_consolidated_kernel_contract.py:67: in test_load_rejects_invalid_checkpoint_envelope
+    assert False, "invalid envelope escaped as " + type(exc).__name__
+E   AssertionError: invalid envelope escaped as AttributeError
+E   assert False
+__________ test_load_rejects_invalid_checkpoint_envelope[root_list] ___________
+tests\test_consolidated_kernel_contract.py:63: in test_load_rejects_invalid_checkpoint_envelope
+    H.load_consolidated(str(path))
+lingshu\nn\hex_cnn.py:392: in load_consolidated
+    return {k: np.array(v, dtype=np.float32) for k, v in payload["kernels"].items()}
+                                                         ^^^^^^^^^^^^^^^^^^
+E   TypeError: list indices must be integers or slices, not str
+
+During handling of the above exception, another exception occurred:
+tests\test_consolidated_kernel_contract.py:67: in test_load_rejects_invalid_checkpoint_envelope
+    assert False, "invalid envelope escaped as " + type(exc).__name__
+E   AssertionError: invalid envelope escaped as TypeError
+E   assert False
+____________ test_bad_save_preserves_old_bytes_before_any_io[six] _____________
+tests\test_consolidated_kernel_contract.py:79: in test_bad_save_preserves_old_bytes_before_any_io
+    _rejects(lambda: H.save_consolidated({"broken": values}, {}, str(path)),
+tests\test_consolidated_kernel_contract.py:17: in _rejects
+    assert False, failure
+E   AssertionError: invalid save replaced good checkpoint
+E   assert False
+___________ test_bad_save_preserves_old_bytes_before_any_io[eight] ____________
+tests\test_consolidated_kernel_contract.py:79: in test_bad_save_preserves_old_bytes_before_any_io
+    _rejects(lambda: H.save_consolidated({"broken": values}, {}, str(path)),
+tests\test_consolidated_kernel_contract.py:17: in _rejects
+    assert False, failure
+E   AssertionError: invalid save replaced good checkpoint
+E   assert False
+____________ test_bad_save_preserves_old_bytes_before_any_io[nan] _____________
+tests\test_consolidated_kernel_contract.py:79: in test_bad_save_preserves_old_bytes_before_any_io
+    _rejects(lambda: H.save_consolidated({"broken": values}, {}, str(path)),
+tests\test_consolidated_kernel_contract.py:17: in _rejects
+    assert False, failure
+E   AssertionError: invalid save replaced good checkpoint
+E   assert False
+______ test_bad_save_preserves_old_bytes_before_any_io[float32_overflow] ______
+tests\test_consolidated_kernel_contract.py:79: in test_bad_save_preserves_old_bytes_before_any_io
+    _rejects(lambda: H.save_consolidated({"broken": values}, {}, str(path)),
+tests\test_consolidated_kernel_contract.py:17: in _rejects
+    assert False, failure
+E   AssertionError: invalid save replaced good checkpoint
+E   assert False
+___________ test_direct_convolution_rejects_incompatible_shape[six] ___________
+tests\test_consolidated_kernel_contract.py:94: in test_direct_convolution_rejects_incompatible_shape
+    H.hex_conv(field, values)
+lingshu\nn\hex_cnn.py:161: in hex_conv
+    acc = acc + k[:, i + 1][None, None, :] * e
+                ^^^^^^^^^^^
+E   IndexError: index 6 is out of bounds for axis 1 with size 6
+
+During handling of the above exception, another exception occurred:
+tests\test_consolidated_kernel_contract.py:98: in test_direct_convolution_rejects_incompatible_shape
+    assert False, "convolution indexed a malformed kernel"
+E   AssertionError: convolution indexed a malformed kernel
+E   assert False
+__________ test_direct_convolution_rejects_incompatible_shape[eight] __________
+tests\test_consolidated_kernel_contract.py:100: in test_direct_convolution_rejects_incompatible_shape
+    assert False, "convolution silently ignored extra kernel weights"
+E   AssertionError: convolution silently ignored extra kernel weights
+E   assert False
+_____ test_direct_convolution_rejects_incompatible_shape[wrong_channels] ______
+tests\test_consolidated_kernel_contract.py:94: in test_direct_convolution_rejects_incompatible_shape
+    H.hex_conv(field, values)
+lingshu\nn\hex_cnn.py:157: in hex_conv
+    acc = k[:, 0][None, None, :] * padded[1:-1, 1:-1, :]
+          ^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^
+E   ValueError: operands could not be broadcast together with shapes (1,1,2) (3,4,3)
+
+During handling of the above exception, another exception occurred:
+tests\test_consolidated_kernel_contract.py:96: in test_direct_convolution_rejects_incompatible_shape
+    assert "kernel7" in str(exc), "convolution failed late instead of validating shape"
+E   AssertionError: convolution failed late instead of validating shape
+E   assert 'kernel7' in 'operands could not be broadcast together with shapes (1,1,2) (3,4,3) '
+E    +  where 'operands could not be broadcast together with shapes (1,1,2) (3,4,3) ' = str(ValueError('operands could not be broadcast together with shapes (1,1,2) (3,4,3) '))
+________________ test_load_rejects_nonfinite_persisted_weights ________________
+tests\test_consolidated_kernel_contract.py:106: in test_load_rejects_nonfinite_persisted_weights
+    _rejects(lambda: H.load_consolidated(str(path)), "broken", "load accepted nonfinite kernel")
+tests\test_consolidated_kernel_contract.py:17: in _rejects
+    assert False, failure
+E   AssertionError: load accepted nonfinite kernel
+E   assert False
+=========================== short test summary info ===========================
+FAILED tests/test_consolidated_kernel_contract.py::test_metadata_cannot_replace_learned_checkpoint
+FAILED tests/test_consolidated_kernel_contract.py::test_load_rejects_wrong_weight_shape[six]
+FAILED tests/test_consolidated_kernel_contract.py::test_load_rejects_wrong_weight_shape[eight]
+FAILED tests/test_consolidated_kernel_contract.py::test_load_rejects_wrong_weight_shape[matrix]
+FAILED tests/test_consolidated_kernel_contract.py::test_load_rejects_invalid_checkpoint_envelope[false]
+FAILED tests/test_consolidated_kernel_contract.py::test_load_rejects_invalid_checkpoint_envelope[missing]
+FAILED tests/test_consolidated_kernel_contract.py::test_load_rejects_invalid_checkpoint_envelope[kernel_list]
+FAILED tests/test_consolidated_kernel_contract.py::test_load_rejects_invalid_checkpoint_envelope[root_list]
+FAILED tests/test_consolidated_kernel_contract.py::test_bad_save_preserves_old_bytes_before_any_io[six]
+FAILED tests/test_consolidated_kernel_contract.py::test_bad_save_preserves_old_bytes_before_any_io[eight]
+FAILED tests/test_consolidated_kernel_contract.py::test_bad_save_preserves_old_bytes_before_any_io[nan]
+FAILED tests/test_consolidated_kernel_contract.py::test_bad_save_preserves_old_bytes_before_any_io[float32_overflow]
+FAILED tests/test_consolidated_kernel_contract.py::test_direct_convolution_rejects_incompatible_shape[six]
+FAILED tests/test_consolidated_kernel_contract.py::test_direct_convolution_rejects_incompatible_shape[eight]
+FAILED tests/test_consolidated_kernel_contract.py::test_direct_convolution_rejects_incompatible_shape[wrong_channels]
+FAILED tests/test_consolidated_kernel_contract.py::test_load_rejects_nonfinite_persisted_weights
+16 failed, 2 passed in 0.85s
+
+CASE metadata_overrides_parameters
+F                                                                        [100%]
+================================== FAILURES ===================================
+_______________ test_metadata_cannot_replace_learned_checkpoint _______________
+tests\test_consolidated_kernel_contract.py:26: in test_metadata_cannot_replace_learned_checkpoint
+    assert set(payload["kernels"]) == {"learned"}, "metadata erased learned kernel"
+E   AssertionError: metadata erased learned kernel
+E   assert set() == {'learned'}
+E
+E     Extra items in the right set:
+E     'learned'
+E     Use -v to get more diff
+=========================== short test summary info ===========================
+FAILED tests/test_consolidated_kernel_contract.py::test_metadata_cannot_replace_learned_checkpoint
+1 failed in 0.50s
+
+CASE accept_wrong_persisted_shape
+F                                                                        [100%]
+================================== FAILURES ===================================
+_________________ test_load_rejects_wrong_weight_shape[eight] _________________
+tests\test_consolidated_kernel_contract.py:50: in test_load_rejects_wrong_weight_shape
+    _rejects(lambda: H.load_consolidated(str(path)), "broken", "load accepted malformed seven-weight kernel")
+tests\test_consolidated_kernel_contract.py:17: in _rejects
+    assert False, failure
+E   AssertionError: load accepted malformed seven-weight kernel
+E   assert False
+=========================== short test summary info ===========================
+FAILED tests/test_consolidated_kernel_contract.py::test_load_rejects_wrong_weight_shape[eight]
+1 failed in 0.53s
+
+CASE accept_invalid_envelope
+F                                                                        [100%]
+================================== FAILURES ===================================
+____________ test_load_rejects_invalid_checkpoint_envelope[false] _____________
+tests\test_consolidated_kernel_contract.py:69: in test_load_rejects_invalid_checkpoint_envelope
+    assert False, "load accepted invalid checkpoint envelope"
+E   AssertionError: load accepted invalid checkpoint envelope
+E   assert False
+=========================== short test summary info ===========================
+FAILED tests/test_consolidated_kernel_contract.py::test_load_rejects_invalid_checkpoint_envelope[false]
+1 failed in 0.52s
+
+CASE truncate_direct_convolution
+F                                                                        [100%]
+================================== FAILURES ===================================
+__________ test_direct_convolution_rejects_incompatible_shape[eight] __________
+tests\test_consolidated_kernel_contract.py:100: in test_direct_convolution_rejects_incompatible_shape
+    assert False, "convolution silently ignored extra kernel weights"
+E   AssertionError: convolution silently ignored extra kernel weights
+E   assert False
+=========================== short test summary info ===========================
+FAILED tests/test_consolidated_kernel_contract.py::test_direct_convolution_rejects_incompatible_shape[eight]
+1 failed in 0.53s
+
+CASE accept_float32_overflow
+F                                                                        [100%]
+================================== FAILURES ===================================
+______ test_bad_save_preserves_old_bytes_before_any_io[float32_overflow] ______
+tests\test_consolidated_kernel_contract.py:79: in test_bad_save_preserves_old_bytes_before_any_io
+    _rejects(lambda: H.save_consolidated({"broken": values}, {}, str(path)),
+tests\test_consolidated_kernel_contract.py:17: in _rejects
+    assert False, failure
+E   AssertionError: invalid save replaced good checkpoint
+E   assert False
+=========================== short test summary info ===========================
+FAILED tests/test_consolidated_kernel_contract.py::test_bad_save_preserves_old_bytes_before_any_io[float32_overflow]
+1 failed in 0.55s
