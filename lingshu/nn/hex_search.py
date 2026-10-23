@@ -207,8 +207,17 @@ def recursive_search(net: HexHierNet, lat: np.ndarray,
 
 def search_report(net: HexHierNet, lat: np.ndarray, metas: List[Dict],
                   max_depth: int = 2) -> Dict:
-    """批量搜索:位置检出率/物体匹配率/剪枝率/平均访问节点。"""
+    """批量搜索:位置检出率(召回)/物体匹配率(召回)/精确率/误报数/剪枝率/平均访问节点。
+
+    #394：旧报告只有召回口径（`|truth ∩ det| / |truth|`），检出集合多大都不扣分
+    ——「到处报物体」的退化检测器（把 9 个象限全报一遍）能拿满分。现**增补**
+    `pos_precision` / `obj_precision`（`|truth ∩ det| / |det|`）与
+    `pos_false_positives` / `obj_false_positives`（跨场景合计误报数）；
+    既有 `pos_hit_rate` / `obj_match_rate` 的语义与数值**一字未动**（向后兼容）。
+    检出集合为空时分母取 max(1,·) ⇒ 精确率记 0.0（不伪造成「满分」）。
+    """
     pos_hit = obj_hit = 0
+    det_pos_total = det_obj_total = 0
     total_nodes = total_rej = 0
     n = len(lat)
     for i in range(n):
@@ -223,9 +232,16 @@ def search_report(net: HexHierNet, lat: np.ndarray, metas: List[Dict],
         truth_obj = {(lb["pos"], lb["obj"]) for lb in metas[i]["labels"]}
         det_obj = {(f["pos"], f["obj"]) for f in found}
         obj_hit += len(truth_obj & det_obj)
+        det_pos_total += len(det_pos)
+        det_obj_total += len(det_obj)
         total_nodes += stats["visited"]
         total_rej += stats["rejected"]
     return {"pos_hit_rate": round(pos_hit / max(1, sum(len(m["labels"]) for m in metas)), 3),
             "obj_match_rate": round(obj_hit / max(1, sum(len(m["labels"]) for m in metas)), 3),
+            # #394：精确率与误报数——与上面的召回口径并列上报，供判「到处报」的退化。
+            "pos_precision": round(pos_hit / max(1, det_pos_total), 3),
+            "obj_precision": round(obj_hit / max(1, det_obj_total), 3),
+            "pos_false_positives": max(0, det_pos_total - pos_hit),
+            "obj_false_positives": max(0, det_obj_total - obj_hit),
             "avg_visited": round(total_nodes / n, 1),
             "prune_rate": round(total_rej / max(1, total_nodes), 3)}
