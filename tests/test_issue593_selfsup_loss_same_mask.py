@@ -66,7 +66,8 @@ def _fixture():
            + np.random.default_rng(0).integers(0, 12, img.shape)).astype(np.uint8)
     gray = (0.299 * img[..., 0] + 0.587 * img[..., 1]
             + 0.114 * img[..., 2]).astype(np.float32)
-    return img, image_to_grid(gray[..., None].repeat(3, axis=2), _CELLS)[0][..., :1]
+    # #351：实现侧亮度已归一到 0..1，独立复算必须同口径（否则 init_loss 差 255² 倍）。
+    return img, image_to_grid(gray[..., None].repeat(3, axis=2), _CELLS)[0][..., :1] / 255.0
 
 
 _IMG, _LUM = _fixture()
