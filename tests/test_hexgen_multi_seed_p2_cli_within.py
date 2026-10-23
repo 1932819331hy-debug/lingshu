@@ -104,6 +104,23 @@ def test_seed_slicing_is_identity_for_all_valid_values():
     assert len(M.SEEDS) == 5, f"SEEDS 变了，上界断言需同步：{M.SEEDS}"
 
 
+def test_pick_prompts_nonpositive_returns_empty(tmp_path):
+    """#355 残余：库函数被直接调用时，`n <= 0` 也必须返回空集。
+
+    旧实现先 `append` 再判 `len(out) >= n` ⇒ `pick_prompts(0)` / `(-3)` 都静默返回
+    1 条（CLI 的 `_positive_int` 挡不住直接调用）。正数照旧取前 N 条。
+    """
+    lib = [{"name": "vs_s%d_circle_red" % i,
+            "tags": {"prompt": "flat vector illustration, one red circle(s) in the %s" % z}}
+           for i, z in enumerate(("center", "top left", "bottom right", "top", "left side"))]
+    p = tmp_path / "lib.json"
+    p.write_text(json.dumps(lib), encoding="utf-8")
+    assert M.pick_prompts(0, str(p)) == [], "pick_prompts(0) 应返回空集"
+    assert M.pick_prompts(-3, str(p)) == [], "pick_prompts(-3) 应返回空集"
+    assert len(M.pick_prompts(2, str(p))) == 2
+    assert len(M.pick_prompts(5, str(p))) == 5
+
+
 # ==================== #356 · 件内方差无定义 ====================
 
 def _vec(**kw):
