@@ -173,7 +173,10 @@ def test_workset_state_existing_degradation_is_preserved(tmp_path):
     """
     path, eng = bare_engine(tmp_path, "ws")
     con = sqlite3.connect(path)
-    con.execute("INSERT OR REPLACE INTO activation_nodes VALUES (?,?,?,?,?,?,?)",
+    # 显式列名（#505 给激活表补了 query 列；位置式 7 值写法不再适用）。
+    con.execute("INSERT OR REPLACE INTO activation_nodes"
+                " (id, workset, node_id, activation, source, hop, ts)"
+                " VALUES (?,?,?,?,?,?,?)",
                 ("act_1", "w714ws", "absent-node", 0.9, "seed", 0, 1.0))
     con.commit()
     con.close()
