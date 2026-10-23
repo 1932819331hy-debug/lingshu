@@ -212,7 +212,14 @@ class ActivationEngine:
         with self._transaction() as con:
             con.execute("""CREATE TABLE IF NOT EXISTS activation_nodes (
                 id TEXT PRIMARY KEY, workset TEXT NOT NULL, node_id TEXT NOT NULL,
-                activation REAL NOT NULL, source TEXT NOT NULL, hop INTEGER NOT NULL, ts REAL NOT NULL)""")
+                activation REAL NOT NULL, source TEXT NOT NULL, hop INTEGER NOT NULL, ts REAL NOT NULL,
+                query TEXT)""")
+            # #505：`query` 列是工作集的可回溯输入（与 sources/hops 同签名、同落库面）。
+            # 既有库（旧 7 列结构）在这里补列；已存在则跳过（幂等）。
+            try:
+                con.execute("ALTER TABLE activation_nodes ADD COLUMN query TEXT")
+            except sqlite3.OperationalError:
+                pass
             con.execute("CREATE INDEX IF NOT EXISTS idx_act_ws ON activation_nodes(workset)")
 
     def _con(self):
@@ -590,6 +597,9 @@ class ActivationEngine:
 
         #314：`hops` 给每个 node_id 的**首次激活跳号**（种子/自条件 = 0）；缺省仍写 0
         （签名向后兼容——不传即旧行为）。
+        #505：`query` 与 sources/hops 同签名、同落库面——工作集必须能回溯到产生它的
+        查询（旧实现收下即弃、表里也无列可存）。实际查询文本随每个成员行同写
+        （同一 workset 的查询相同；按行冗余存储换取无需额外表与 join）。
         """
         with self._transaction() as con:
             con.execute("DELETE FROM activation_nodes WHERE workset=?", (workset,))
@@ -598,10 +608,12 @@ class ActivationEngine:
             hop_map = hops or {}
             for nid, a in members:
                 con.execute(
-                    "INSERT OR REPLACE INTO activation_nodes VALUES (?,?,?,?,?,?,?)",
+                    "INSERT OR REPLACE INTO activation_nodes"
+                    " (id, workset, node_id, activation, source, hop, ts, query)"
+                    " VALUES (?,?,?,?,?,?,?,?)",
                     ("act_%s_%d" % (uuid.uuid4().hex[:8], int(ts * 1000)),
                      workset, nid, a, src_map.get(nid, "propagate"),
-                     hop_map.get(nid, 0), ts))
+                     hop_map.get(nid, 0), ts, query))
 
     def _append_audit(self, audit: Dict):
         os.makedirs(os.path.dirname(self.audit_path) or ".", exist_ok=True)
@@ -627,14 +639,16 @@ class ActivationEngine:
         """当前工作态:激活节点+强度+内容摘要(执行层上下文的来源)。"""
         con = self._con()
         cur = con.cursor()
-        cur.execute("SELECT node_id, activation FROM activation_nodes WHERE workset=? "
+        cur.execute("SELECT node_id, activation, query FROM activation_nodes WHERE workset=? "
                     "ORDER BY activation DESC LIMIT ?", (workset, limit))
         rows = cur.fetchall()
         con.close()
+        # #505：工作态回读带出产生它的查询（同一 workset 的查询相同；空工作态为 None）。
+        query = rows[0][2] if rows else None
         members = []
         if rows:
             con = self._con(); cur = con.cursor()
-            for nid, a in rows:
+            for nid, a, _q in rows:
                 try:
                     cur.execute("SELECT content, layer, importance FROM nodes WHERE id=?", (nid,))
                     r = cur.fetchone()
@@ -645,17 +659,22 @@ class ActivationEngine:
                                 "layer": r[1] if r else None,
                                 "importance": r[2] if r else None})
             con.close()
-        return {"workset": workset, "size": len(rows), "members": members}
+        return {"workset": workset, "query": query, "size": len(rows),
+                "members": members}
 
     def export_workset(self, workset: str) -> Dict:
-        """快照(可序列化——跨进程恢复,Retained Reasoning 的持久形态)。"""
+        """快照(可序列化——跨进程恢复,Retained Reasoning 的持久形态)。
+
+        #505：快照顶层带出 `query`（产生该工作集的查询文本）——恢复后仍可回溯输入。
+        """
         con = self._con()
         cur = con.cursor()
-        cur.execute("SELECT node_id, activation, source, hop, ts FROM activation_nodes WHERE workset=?",
-                    (workset,))
+        cur.execute("SELECT node_id, activation, source, hop, ts, query"
+                    " FROM activation_nodes WHERE workset=?", (workset,))
         rows = cur.fetchall()
         con.close()
-        return {"algo": ALGO, "workset": workset, "ts": time.time(),
+        query = rows[0][5] if rows else None
+        return {"algo": ALGO, "workset": workset, "ts": time.time(), "query": query,
                 "members": [{"node_id": r[0], "activation": r[1],
                              "source": r[2], "hop": r[3], "ts": r[4]} for r in rows]}
 
@@ -683,13 +702,18 @@ class ActivationEngine:
         ws = workset or snapshot["workset"]
         # ① 写前物化（非可迭代 ⇒ 在任何 DELETE 之前抛出，目标零变更）。
         members = list(snapshot["members"])
+        # #505：旧版快照没有 `query` 键 ⇒ None（向后兼容）；新版按快照顶层恢复。
+        query = snapshot.get("query")
         with self._transaction() as con:
             ts = time.time()
             con.execute("DELETE FROM activation_nodes WHERE workset=?", (ws,))
             for m in members:
-                con.execute("INSERT OR REPLACE INTO activation_nodes VALUES (?,?,?,?,?,?,?)",
+                con.execute("INSERT OR REPLACE INTO activation_nodes"
+                            " (id, workset, node_id, activation, source, hop, ts, query)"
+                            " VALUES (?,?,?,?,?,?,?,?)",
                             ("act_%s_%d" % (uuid.uuid4().hex[:8], int(ts * 1000)),
-                             ws, m["node_id"], m["activation"], "restored", m.get("hop", 0), ts))
+                             ws, m["node_id"], m["activation"], "restored",
+                             m.get("hop", 0), ts, query))
         return {"status": "ok", "workset": ws, "restored": len(members)}
 
 
