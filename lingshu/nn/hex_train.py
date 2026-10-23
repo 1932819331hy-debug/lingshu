@@ -379,7 +379,12 @@ def train_infogap(net: HexNet, x: np.ndarray, y: np.ndarray,
         if log_every and step % log_every == 0 and verbose:
             print(f"  [step {step}] D={d:.4f} 死区={dead_zone:.4f} 冻结{sample.size - updates}/{sample.size}")
 
-    final_D = history[-1]["D"] if history else round(d0, 5)
+    # #335：final_D 必须是**最终模型**的损失——旧实现取 `history[-1]["D"]`，那是
+    # 最后一次参数更新**前**测的 d（更新后 d 不再复算），`final_D` 与 `net` 的实际
+    # 状态不一致（实测 2 步训练报 0.676、模型实际 0.636）。现在循环结束后对最终
+    # 模型重测同一口径；`history`（训练过程曲线）语义不动。steps==0 ⇒ 无更新，
+    # 仍回落 d0（与既有「零步无训练后读数」表述一致）。
+    final_D = round(net.loss(x[:batch], y[:batch]), 5) if history else round(d0, 5)
     return {"algo": ALGO, "dead_zone": round(dead_zone, 5), "final_D": final_D,
             "steps": len(history), "growths": growths, "reverts": reverts,
             "final_K": net.K, "n_params": net.n_params(),

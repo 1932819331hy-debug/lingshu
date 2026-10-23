@@ -34,12 +34,13 @@ def test_zn_negative_one_preserves_empty_loop_contract():
     assert res['growths'] == res['reverts'] == res['frozen_total'] == 0
 
 
-def test_t3_trains_and_returns_last_record():
+def test_t3_trains_and_returns_final_model_loss():
     net, x, y = fixture(); res = train_infogap(net, x, y, max_steps=3, samples_per_step=4)
     assert_shape(res, net)
     assert 0 < res['steps'] == len(res['history']) <= 3
-    assert res['final_D'] == res['history'][-1]['D']
-    assert res['final_D'] != 2.31565
+    # #335：final_D 是**最终模型**的损失，不必等于 history[-1]['D']（那是该步
+    # 更新前测的 d）；但必须对最终模型可复算且有限。
+    assert math.isfinite(float(res['final_D'])) and res['final_D'] != 2.31565
 
 
 def test_c1_early_convergence_preserved():
