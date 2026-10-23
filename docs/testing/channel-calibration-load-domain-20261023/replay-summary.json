@@ -1,0 +1,280 @@
+{
+  "windows": {
+    "python": "3.12.10",
+    "platform": "Windows",
+    "sqlite": "3.49.1",
+    "baseline": "cad16dc5e142a850c86a88915b76a8aca054d84d",
+    "guard_sha256": "04f13a91ac80ad965d9e16a97282dff653014c28f2a778ae61744e78e307659d",
+    "records": [
+      {
+        "case": "fixed",
+        "ok": true,
+        "returncode": 0,
+        "passed": 12,
+        "failed_tests": [],
+        "errors": 0,
+        "skipped": 0,
+        "expected_failures": [],
+        "expected_assertion": "",
+        "pytest_summary": "12 passed in 0.19s",
+        "source_sha256": {
+          "lingshu/world/channel_credibility.py": "79c23ecf746230777b2dfec823ec4001c72700df982360db14683bdbeb83304b"
+        }
+      },
+      {
+        "case": "baseline",
+        "ok": true,
+        "returncode": 1,
+        "passed": 1,
+        "failed_tests": [
+          "test_bad_channel_resets_whole_calibration_without_losing_neighbor[inf_misses]",
+          "test_bad_channel_resets_whole_calibration_without_losing_neighbor[nan_hits]",
+          "test_bad_channel_resets_whole_calibration_without_losing_neighbor[negative_beta]",
+          "test_bad_channel_resets_whole_calibration_without_losing_neighbor[negative_hits]",
+          "test_bad_channel_resets_whole_calibration_without_losing_neighbor[overflow_integer]",
+          "test_bad_channel_resets_whole_calibration_without_losing_neighbor[zero_beta]",
+          "test_non_object_file_root_keeps_prior[42]",
+          "test_non_object_file_root_keeps_prior[None]",
+          "test_non_object_file_root_keeps_prior[data0]",
+          "test_overflowed_beta_total_is_rejected",
+          "test_recovery_then_real_update_saves_a_reloadable_registry"
+        ],
+        "errors": 0,
+        "skipped": 0,
+        "expected_failures": [
+          "test_non_object_file_root_keeps_prior[data0]",
+          "test_non_object_file_root_keeps_prior[None]",
+          "test_non_object_file_root_keeps_prior[42]",
+          "test_bad_channel_resets_whole_calibration_without_losing_neighbor[nan_hits]",
+          "test_bad_channel_resets_whole_calibration_without_losing_neighbor[inf_misses]",
+          "test_bad_channel_resets_whole_calibration_without_losing_neighbor[negative_hits]",
+          "test_bad_channel_resets_whole_calibration_without_losing_neighbor[zero_beta]",
+          "test_bad_channel_resets_whole_calibration_without_losing_neighbor[negative_beta]",
+          "test_bad_channel_resets_whole_calibration_without_losing_neighbor[overflow_integer]",
+          "test_overflowed_beta_total_is_rejected",
+          "test_recovery_then_real_update_saves_a_reloadable_registry"
+        ],
+        "expected_assertion": "",
+        "pytest_summary": "11 failed, 1 passed in 0.51s",
+        "source_sha256": {
+          "lingshu/world/channel_credibility.py": "1d892582bb24757dd5496e8584706e1f82a6b593b260f92a9c5f83864cd1b9b7"
+        }
+      },
+      {
+        "case": "skip_root_shape_check",
+        "ok": true,
+        "returncode": 1,
+        "passed": 0,
+        "failed_tests": [
+          "test_non_object_file_root_keeps_prior[None]"
+        ],
+        "errors": 0,
+        "skipped": 0,
+        "expected_failures": [
+          "test_non_object_file_root_keeps_prior[None]"
+        ],
+        "expected_assertion": "invalid calibration root escaped recovery",
+        "pytest_summary": "1 failed in 0.39s",
+        "source_sha256": {
+          "lingshu/world/channel_credibility.py": "07ea553f166a174472c7b35099a07ef908aa2387bcc00146fdc3be2681f98b23"
+        }
+      },
+      {
+        "case": "ignore_nonfinite_counts",
+        "ok": true,
+        "returncode": 1,
+        "passed": 0,
+        "failed_tests": [
+          "test_bad_channel_resets_whole_calibration_without_losing_neighbor[nan_hits]"
+        ],
+        "errors": 0,
+        "skipped": 0,
+        "expected_failures": [
+          "test_bad_channel_resets_whole_calibration_without_losing_neighbor[nan_hits]"
+        ],
+        "expected_assertion": "invalid channel escaped recovery",
+        "pytest_summary": "1 failed in 0.30s",
+        "source_sha256": {
+          "lingshu/world/channel_credibility.py": "6b18331405ef5831bcf44c4a9aeed38feec52b8c7d051882e2c330a9b8916314"
+        }
+      },
+      {
+        "case": "admit_negative_beta_component",
+        "ok": true,
+        "returncode": 1,
+        "passed": 0,
+        "failed_tests": [
+          "test_bad_channel_resets_whole_calibration_without_losing_neighbor[negative_beta]"
+        ],
+        "errors": 0,
+        "skipped": 0,
+        "expected_failures": [
+          "test_bad_channel_resets_whole_calibration_without_losing_neighbor[negative_beta]"
+        ],
+        "expected_assertion": "invalid calibration was not reset as one complete channel",
+        "pytest_summary": "1 failed in 0.29s",
+        "source_sha256": {
+          "lingshu/world/channel_credibility.py": "b6e96cab5414724a90ad332a07c67144ee6ba2aec0fab4329f9826e7bedbd7da"
+        }
+      },
+      {
+        "case": "keep_overflowed_beta_total",
+        "ok": true,
+        "returncode": 1,
+        "passed": 0,
+        "failed_tests": [
+          "test_overflowed_beta_total_is_rejected"
+        ],
+        "errors": 0,
+        "skipped": 0,
+        "expected_failures": [
+          "test_overflowed_beta_total_is_rejected"
+        ],
+        "expected_assertion": "overflowed Beta total survived loading",
+        "pytest_summary": "1 failed in 0.29s",
+        "source_sha256": {
+          "lingshu/world/channel_credibility.py": "eaa4e7a3568cb59ab8f02d24a11a8de1bebe64cac8dfc855802d8fb79aba059d"
+        }
+      }
+    ]
+  },
+  "linux": {
+    "python": "3.13.12",
+    "platform": "Linux",
+    "sqlite": "3.46.1",
+    "baseline": "cad16dc5e142a850c86a88915b76a8aca054d84d",
+    "guard_sha256": "04f13a91ac80ad965d9e16a97282dff653014c28f2a778ae61744e78e307659d",
+    "records": [
+      {
+        "case": "fixed",
+        "ok": true,
+        "returncode": 0,
+        "passed": 12,
+        "failed_tests": [],
+        "errors": 0,
+        "skipped": 0,
+        "expected_failures": [],
+        "expected_assertion": "",
+        "pytest_summary": "12 passed in 0.94s",
+        "source_sha256": {
+          "lingshu/world/channel_credibility.py": "79c23ecf746230777b2dfec823ec4001c72700df982360db14683bdbeb83304b"
+        }
+      },
+      {
+        "case": "baseline",
+        "ok": true,
+        "returncode": 1,
+        "passed": 1,
+        "failed_tests": [
+          "test_bad_channel_resets_whole_calibration_without_losing_neighbor[inf_misses]",
+          "test_bad_channel_resets_whole_calibration_without_losing_neighbor[nan_hits]",
+          "test_bad_channel_resets_whole_calibration_without_losing_neighbor[negative_beta]",
+          "test_bad_channel_resets_whole_calibration_without_losing_neighbor[negative_hits]",
+          "test_bad_channel_resets_whole_calibration_without_losing_neighbor[overflow_integer]",
+          "test_bad_channel_resets_whole_calibration_without_losing_neighbor[zero_beta]",
+          "test_non_object_file_root_keeps_prior[42]",
+          "test_non_object_file_root_keeps_prior[None]",
+          "test_non_object_file_root_keeps_prior[data0]",
+          "test_overflowed_beta_total_is_rejected",
+          "test_recovery_then_real_update_saves_a_reloadable_registry"
+        ],
+        "errors": 0,
+        "skipped": 0,
+        "expected_failures": [
+          "test_non_object_file_root_keeps_prior[data0]",
+          "test_non_object_file_root_keeps_prior[None]",
+          "test_non_object_file_root_keeps_prior[42]",
+          "test_bad_channel_resets_whole_calibration_without_losing_neighbor[nan_hits]",
+          "test_bad_channel_resets_whole_calibration_without_losing_neighbor[inf_misses]",
+          "test_bad_channel_resets_whole_calibration_without_losing_neighbor[negative_hits]",
+          "test_bad_channel_resets_whole_calibration_without_losing_neighbor[zero_beta]",
+          "test_bad_channel_resets_whole_calibration_without_losing_neighbor[negative_beta]",
+          "test_bad_channel_resets_whole_calibration_without_losing_neighbor[overflow_integer]",
+          "test_overflowed_beta_total_is_rejected",
+          "test_recovery_then_real_update_saves_a_reloadable_registry"
+        ],
+        "expected_assertion": "",
+        "pytest_summary": "11 failed, 1 passed in 1.71s",
+        "source_sha256": {
+          "lingshu/world/channel_credibility.py": "1d892582bb24757dd5496e8584706e1f82a6b593b260f92a9c5f83864cd1b9b7"
+        }
+      },
+      {
+        "case": "skip_root_shape_check",
+        "ok": true,
+        "returncode": 1,
+        "passed": 0,
+        "failed_tests": [
+          "test_non_object_file_root_keeps_prior[None]"
+        ],
+        "errors": 0,
+        "skipped": 0,
+        "expected_failures": [
+          "test_non_object_file_root_keeps_prior[None]"
+        ],
+        "expected_assertion": "invalid calibration root escaped recovery",
+        "pytest_summary": "1 failed in 0.52s",
+        "source_sha256": {
+          "lingshu/world/channel_credibility.py": "07ea553f166a174472c7b35099a07ef908aa2387bcc00146fdc3be2681f98b23"
+        }
+      },
+      {
+        "case": "ignore_nonfinite_counts",
+        "ok": true,
+        "returncode": 1,
+        "passed": 0,
+        "failed_tests": [
+          "test_bad_channel_resets_whole_calibration_without_losing_neighbor[nan_hits]"
+        ],
+        "errors": 0,
+        "skipped": 0,
+        "expected_failures": [
+          "test_bad_channel_resets_whole_calibration_without_losing_neighbor[nan_hits]"
+        ],
+        "expected_assertion": "invalid channel escaped recovery",
+        "pytest_summary": "1 failed in 0.50s",
+        "source_sha256": {
+          "lingshu/world/channel_credibility.py": "6b18331405ef5831bcf44c4a9aeed38feec52b8c7d051882e2c330a9b8916314"
+        }
+      },
+      {
+        "case": "admit_negative_beta_component",
+        "ok": true,
+        "returncode": 1,
+        "passed": 0,
+        "failed_tests": [
+          "test_bad_channel_resets_whole_calibration_without_losing_neighbor[negative_beta]"
+        ],
+        "errors": 0,
+        "skipped": 0,
+        "expected_failures": [
+          "test_bad_channel_resets_whole_calibration_without_losing_neighbor[negative_beta]"
+        ],
+        "expected_assertion": "invalid calibration was not reset as one complete channel",
+        "pytest_summary": "1 failed in 0.43s",
+        "source_sha256": {
+          "lingshu/world/channel_credibility.py": "b6e96cab5414724a90ad332a07c67144ee6ba2aec0fab4329f9826e7bedbd7da"
+        }
+      },
+      {
+        "case": "keep_overflowed_beta_total",
+        "ok": true,
+        "returncode": 1,
+        "passed": 0,
+        "failed_tests": [
+          "test_overflowed_beta_total_is_rejected"
+        ],
+        "errors": 0,
+        "skipped": 0,
+        "expected_failures": [
+          "test_overflowed_beta_total_is_rejected"
+        ],
+        "expected_assertion": "overflowed Beta total survived loading",
+        "pytest_summary": "1 failed in 0.48s",
+        "source_sha256": {
+          "lingshu/world/channel_credibility.py": "eaa4e7a3568cb59ab8f02d24a11a8de1bebe64cac8dfc855802d8fb79aba059d"
+        }
+      }
+    ]
+  }
+}

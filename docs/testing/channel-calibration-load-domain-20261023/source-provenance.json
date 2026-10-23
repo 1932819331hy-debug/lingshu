@@ -1,0 +1,80 @@
+{
+  "baseline": "cad16dc5e142a850c86a88915b76a8aca054d84d",
+  "sha256_lf": {
+    "lingshu/world/channel_credibility.py": "79c23ecf746230777b2dfec823ec4001c72700df982360db14683bdbeb83304b",
+    "tests/test_channel_calibration_load_domain.py": "04f13a91ac80ad965d9e16a97282dff653014c28f2a778ae61744e78e307659d",
+    "tests/fixtures/channel_calibration_load_domain_mutations.json": "b1f099c8d8bba8be65660f8112de127d3104bb0999655f9f23c44e839829dfd4"
+  },
+  "runs": {
+    "windows": {
+      "platform": "Windows",
+      "python": "3.12.10",
+      "sqlite": "3.49.1",
+      "baseline": "cad16dc5e142a850c86a88915b76a8aca054d84d",
+      "validated_commit": "d264a666f60809586fae5ae350d22619d79f426c",
+      "sha256_lf": {
+        "lingshu/world/channel_credibility.py": "79c23ecf746230777b2dfec823ec4001c72700df982360db14683bdbeb83304b",
+        "tests/test_channel_calibration_load_domain.py": "04f13a91ac80ad965d9e16a97282dff653014c28f2a778ae61744e78e307659d",
+        "tests/fixtures/channel_calibration_load_domain_mutations.json": "b1f099c8d8bba8be65660f8112de127d3104bb0999655f9f23c44e839829dfd4"
+      },
+      "commands": [
+        {
+          "name": "replay",
+          "returncode": 0
+        },
+        {
+          "name": "related",
+          "returncode": 0
+        },
+        {
+          "name": "manifest",
+          "returncode": 0
+        },
+        {
+          "name": "time-core",
+          "returncode": 0
+        }
+      ],
+      "related_total": 36,
+      "related_failures": [],
+      "related_errors": [],
+      "related_skips": [],
+      "owned_test_temp_cleaned": true
+    },
+    "linux": {
+      "platform": "Linux",
+      "python": "3.13.12",
+      "sqlite": "3.46.1",
+      "baseline": "cad16dc5e142a850c86a88915b76a8aca054d84d",
+      "validated_commit": "d264a666f60809586fae5ae350d22619d79f426c",
+      "sha256_lf": {
+        "lingshu/world/channel_credibility.py": "79c23ecf746230777b2dfec823ec4001c72700df982360db14683bdbeb83304b",
+        "tests/test_channel_calibration_load_domain.py": "04f13a91ac80ad965d9e16a97282dff653014c28f2a778ae61744e78e307659d",
+        "tests/fixtures/channel_calibration_load_domain_mutations.json": "b1f099c8d8bba8be65660f8112de127d3104bb0999655f9f23c44e839829dfd4"
+      },
+      "commands": [
+        {
+          "name": "replay",
+          "returncode": 0
+        },
+        {
+          "name": "related",
+          "returncode": 0
+        },
+        {
+          "name": "manifest",
+          "returncode": 0
+        },
+        {
+          "name": "time-core",
+          "returncode": 0
+        }
+      ],
+      "related_total": 36,
+      "related_failures": [],
+      "related_errors": [],
+      "related_skips": [],
+      "owned_test_temp_cleaned": true
+    }
+  }
+}
