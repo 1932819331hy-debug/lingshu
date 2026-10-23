@@ -226,10 +226,12 @@ def extract_spatiotemporal_primitives(frames):
     # ② 帧差运动区域 + 质心轨迹
     diffs = frame_diff(frames)
     centroids = []
+    motion_frames = []          # #304：有运动的帧差下标（diffs[t] 对应帧 t→t+1）
     for t in range(diffs.shape[0]):
         region = diffs[t]
         ys, xs = np.nonzero(region)
         if len(xs) > 2:
+            motion_frames.append(t)
             centroids.append((float(xs.mean()), float(ys.mean())))
         elif centroids:
             centroids.append(centroids[-1])
@@ -238,7 +240,18 @@ def extract_spatiotemporal_primitives(frames):
     #    周期信号改用 frame_rise（只保留暗→亮的前沿），每个周期恰一个沿。
     motion_signal = [float(region.sum()) for region in frame_rise(frames)]
     period = detect_period(motion_signal)
-    # ④ 原语汇总
+    # ④ 原语汇总。#304：`t_first` / `t_last` = 片段内运动实际发生的帧区间
+    # （闭区间；diffs[t] 对应帧 t→t+1，判定口径与质心轨迹一致：>2 个变化像素）。
+    # diff 下标 t 覆盖帧 [t, t+1] ⇒ 有运动的 diff 下标 [i..j] 对应帧区间
+    # [i, j+1]（迟动球实测 diffs 39..42 ⇒ 帧 39..43——球在 40..43，diff 在 39
+    # 也触发是因为 39→40 的边界变化属于运动起点的过渡帧）。
+    # 无任何运动帧 ⇒ 取整段 [0, n_frames-1]（报告口径：无运动时区间无信息，
+    # 记整段不算谎）。`remember` 用它们把 clip 首帧绝对时刻换算成真实事件区间。
+    n_frames = len(frames)
+    if motion_frames:
+        t_first, t_last = motion_frames[0], motion_frames[-1] + 1
+    else:
+        t_first, t_last = 0, max(0, n_frames - 1)
     prims = {
         "motion_magnitude": round(float(motion_mag), 4),
         "direction": motion_direction(centroids),
@@ -246,6 +259,8 @@ def extract_spatiotemporal_primitives(frames):
         "period": period,
         "moving": bool(motion_mag > 0.5),  # bool()：numpy bool 不满足 is True
         "trajectory_len": len(centroids),
+        "t_first": t_first,
+        "t_last": t_last,
     }
     return prims, motion_feat
 
@@ -264,10 +279,24 @@ class SpatiotemporalMemory:
         self.events = []  # {t_start, t_end, direction, speed, period, label}
 
     def remember(self, prims, label, t_start=0):
-        """把一次「看见」的时空原语写为记忆事件（时空锚点）"""
+        """把一次「看见」的时空原语写为记忆事件（时空锚点）。
+
+        #304：`t_start` 视为**片段首帧**的绝对时刻；事件区间 = 片段内运动实际
+        发生的帧区间（原语 `t_first`/`t_last`，闭区间）平移到绝对时刻 ⇒
+        事件 [t_start+t_first, t_start+t_last]（如「迟动球」clip 帧 200..243、
+        运动发生在 240..243 ⇒ 事件 [240, 243]，不再误记 [200, 202]）。
+        原语没有这两个键（手工构造的旧口径原语）⇒ 保持原公式
+        `t_start + trajectory_len - 1` 不变（向后兼容）。
+        """
+        if "t_first" in prims and "t_last" in prims:
+            ev_start = t_start + prims["t_first"]
+            ev_end = t_start + prims["t_last"]
+        else:
+            ev_start = t_start
+            ev_end = t_start + max(1, prims.get("trajectory_len", 1) - 1)
         event = {
-            "t_start": t_start,
-            "t_end": t_start + max(1, prims.get("trajectory_len", 1) - 1),
+            "t_start": ev_start,
+            "t_end": max(ev_start + 1, ev_end),
             "direction": prims.get("direction", "静止"),
             "speed": prims.get("speed", 0.0),
             "period": prims.get("period"),
