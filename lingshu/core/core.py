@@ -8662,13 +8662,17 @@ class SpacetimeMemoryEngine:
                                   "ts": now, "count": 1})
 
     def consume_events(self) -> Dict:
-        """P1-4：批量消费事件标记（定时轮询优先；P0 危机期间暂停）"""
+        """P1-4：批量消费事件标记（定时轮询优先；P0 危机期间暂停）。
+
+        #54：paused 时**不消费也不清空**队列——事件保留到恢复后一并处理；
+        旧实现先清空再判 paused ⇒ paused 期间排队的事件被静默丢弃。"""
+        if self._lifecycle and self._lifecycle.state == "paused":
+            return {"status": "paused", "consumed": 0,
+                    "pending": len(self._event_queue),
+                    "note": "P0 危机期间暂停非 P0 处理（3.4 节）；队列保留"}
         events = list(self._event_queue)
         self._event_queue = []
         consumed = 0
-        if self._lifecycle and self._lifecycle.state == "paused":
-            return {"status": "paused", "consumed": 0,
-                    "note": "P0 危机期间暂停非 P0 处理（3.4 节）"}
         for ev in events:
             if ev["type"] in ("perception", "write", "condition_switch") and self._flywheel:
                 try:
