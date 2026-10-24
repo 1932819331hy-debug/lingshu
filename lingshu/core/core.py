@@ -10033,6 +10033,7 @@ class SpacetimeMemoryEngine:
         - identity: 只读检查 observations 的整帧身份候选（tick 可选）
         - identity_policy: 查询/设置 legacy 或 conservative 关联策略
         - generate: 生成端口（世界图→候选未来，顺序语义外推+不确定边界）
+        - counterfactual: 隔离比较 seek/flee 关系条件（horizon/relations，不提交真实状态）
         - verify: 验证端口（外部观察者对比→命中率）
         - run: 持续运行 n tick（generate→物理演化→perceive→verify）
         - patterns: 观测-only 行为模式推断（关系/速度/方向一致性）
@@ -10104,6 +10105,10 @@ class SpacetimeMemoryEngine:
         if action == "generate":
             r = self._wmodel.generate(horizon=int(p.get("horizon", 1)))
             return {"status": "ok", "generate": r}
+        if action == "counterfactual":
+            r = self._wmodel.counterfactual(horizon=p.get("horizon", 1),
+                                           relations=p.get("relations"))
+            return {"status": "ok", "counterfactual": r}
         if action == "verify":
             r = self._wmodel.verify()
             return {"status": "ok", "verify": r}
