@@ -2889,10 +2889,16 @@ class LayeredStore:
                 # 连接级外键开关必须逐连接重设，否则该连接上外键不生效。
                 obs.execute("PRAGMA foreign_keys=ON")
                 if touch:
+                    # #52：整批共用**一个**时间戳——此前逐行 time.time()，而 ids 是
+                    # 按检索得分序传入的（高分在前）⇒ 低分节点拿到更晚的
+                    # last_access，下一次 recall 的近因项反向偏向低分节点
+                    # （:memory: 上该刷新曾因 #52 静默丢失而从未生效，修复后暴露，
+                    # W6 在依赖下界档复现）。一次检索事件＝一个时刻。
+                    ts = time.time()
                     obs.executemany(
                         'UPDATE nodes SET access_count = access_count + 1,'
                         ' last_access = ? WHERE id=?',
-                        [(time.time(), nid) for nid in ids])
+                        [(ts, nid) for nid in ids])
                 else:
                     obs.executemany(
                         'UPDATE nodes SET access_count = access_count + 1 WHERE id=?',
