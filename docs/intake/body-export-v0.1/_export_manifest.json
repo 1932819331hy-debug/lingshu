@@ -552,7 +552,7 @@
     {
      "file": "stcnn.py",
      "src": "wisdom.stcnn",
-     "sha256": "ac142fde843d02d8",
+     "sha256": "d42da60a7ab64a0c",
      "rewrites": 0,
      "sanitized": 0,
      "patches": 0,
