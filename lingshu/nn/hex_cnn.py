@@ -365,7 +365,6 @@ def save_consolidated(kernels: Dict[str, np.ndarray], meta: Dict, path: str) -> 
     """
     import uuid
 
-<<<<<<< HEAD
     # #349：`kernels` / `consolidated` 是本档的结构字段，meta 里的同名键不得覆盖
     # （旧实现 `**meta` 后置展开 ⇒ meta 带 `kernels` 时落盘 kernels={}、学习核全丢）。
     # #895 正交合成：落盘前逐核过 `_consolidated_kernel` 契约（一维 7 有限参数，
@@ -378,12 +377,6 @@ def save_consolidated(kernels: Dict[str, np.ndarray], meta: Dict, path: str) -> 
             payload.setdefault("_meta_%s" % mk, mv)   # 保留信息但不冒充结构字段
         else:
             payload[mk] = mv
-=======
-    # #349：先验核契约在落盘前核对；元数据不能覆盖真实参数/固化标记。
-    payload = {**meta, "algo": ALGO, "consolidated": True,
-               "kernels": {k: [round(float(x), 6) for x in _consolidated_kernel(k, v)]
-                           for k, v in kernels.items()}}
->>>>>>> pr895
     target = os.path.realpath(path)
     os.makedirs(os.path.dirname(target) or ".", exist_ok=True)
     tmp = os.path.join(os.path.dirname(target), f".lingshu-save.tmp-{os.getpid()}-{uuid.uuid4().hex}")
