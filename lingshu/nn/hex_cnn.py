@@ -217,11 +217,18 @@ def extended_prior_family(n: int) -> List[np.ndarray]:
     构成:六方向 edge(六边形天然各向同性完备)+smooth+粗平滑+laplacian
     +center-surround;超出时按序加微噪变体(仍互异)。
 
-    #940：微噪变体的**互异性是断言并保证的**，不是声明——旧实现对常幅基核
-    （如均匀 smooth）加均匀微噪再 L1 归一，扰动被归一化**恒坍缩**回原核：
-    实测 idx 16/26/36 与 idx 6 逐位相同（「互异」声明不实；#339 修 grow_kernel
-    回绕时探针已见 fam dup: 16/6, 26/6, 36/6）。修法：变体扰动**逐档加强**
-    （×10 递进）并在落位前 `array_equal` 复核，仍重合才落位——互异由构造保证。
+    #940：旧变体是 `base + 常数 (i+1)*1e-3` 再 L1 归一。对**全正全等的均匀基核**
+    （`smooth` = 1/7 均匀向量）加常数后仍是均匀向量，L1 归一恒得同一向量、与常数
+    大小无关 ⇒ `extended_prior_family(37)` 里 idx 6/16/26/36 逐位相同（4 个同形、
+    6 对重复），"互异"不实；#339 想消灭的"重复核"以变种复活。
+
+    改为**非均匀、随序号变化的确定性微扰**：
+      · 扰动图案 `pat[k] = (-1)**(k+i) * (k+1)` —— 正负混合、相位随 i 轮转，
+        对均匀基核叠加后必然非均匀（不再坍缩）；
+      · 幅度 `amp = 1e-3 * (1 + i//10)` 每 10 个变体递增一档 —— 同一基核的后续
+        变体（i 与 i+10、i+20…）靠幅度区分，故互异性对任意 n 成立。
+    末尾再做一次**互异性 fail-closed 校验**：真出现同形核直接 `ValueError`，
+    不再静默返回重复核（"声明互异"必须与"实际互异"一致）。
     """
     fam: List[np.ndarray] = []
     for d in range(6):                                   # 六方向 edge
@@ -237,18 +244,21 @@ def extended_prior_family(n: int) -> List[np.ndarray]:
     fam.append(kernel_center_surround())
     i = 0
     while len(fam) < n:                                  # 微噪变体(互异)
-        base = fam[i % 10].copy()
-        # #940：扰动逐档加强（1e-3 → 1e-2 → 1e-1 …）；均匀底核的均匀扰动会被
-        # L1 归一坍缩 ⇒ 只扰动**非均匀分量**（对均匀核改为单点脉冲式偏移）。
-        amp = 1e-3 * (10 ** (i // 10))
-        cand = base.copy()
-        cand[1 + (i % 6)] += amp
-        cand = cand / (np.abs(cand).sum() + 1e-9)
+        amp = 1e-3 * (1 + i // 10)
+        pat = np.array([((-1.0) ** (k + i)) * (k + 1) for k in range(7)],
+                       dtype=np.float32)
+        base = fam[i % 10].copy() + amp * pat
+        fam.append(base / (np.abs(base).sum() + 1e-9))
         i += 1
-        if any(np.array_equal(cand, ex) for ex in fam):
-            continue                                     # 仍重合 ⇒ 换下一档
-        fam.append(cand)
-    return fam[:n]
+    fam = fam[:n]
+    # #940 fail-closed：声明互异就必须真的互异
+    for a in range(len(fam)):
+        for b in range(a + 1, len(fam)):
+            if np.array_equal(fam[a], fam[b]):
+                raise ValueError(
+                    f"extended_prior_family({n})：idx {a} 与 idx {b} 逐位相同，"
+                    f"核族互异性被破坏（不应发生，请检查变体构造）")
+    return fam
 
 
 DEFAULT_KERNELS: Dict[str, np.ndarray] = {
