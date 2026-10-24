@@ -96,7 +96,12 @@ def verify_designer(designer_key) -> bool:
     expected = os.environ.get("AEIS_DESIGNER_KEY")
     if not expected or not designer_key:
         return False
-    return _hmac.compare_digest(str(designer_key), str(expected))
+    # #51：`hmac.compare_digest` 对**非 ASCII str** 抛 TypeError（CPython 文档化
+    # 行为）⇒ 中文密钥下终裁门禁从「干净拒绝」变成「崩」（6 条终裁通路全部
+    # 不可用）。修法：统一 encode 成 bytes 再比较——时序安全语义不变、对任意
+    # Unicode 密钥成立；不匹配 ⇒ False（fail-closed 原样），不再抛。
+    return _hmac.compare_digest(str(designer_key).encode("utf-8"),
+                                str(expected).encode("utf-8"))
 
 
 # main 侧 #29② 判据的原因名 → 矛盾感知（contradiction.py）的原因名，供 conflict:{reason} 标签统一口径
@@ -2870,16 +2875,30 @@ class LayeredStore:
         if not ids:
             return
         try:
-            obs = sqlite3.connect(self.db_path, timeout=0)
+            # #52：`:memory:` 后端时 `self.db_path` 是 ":memory:" 字面量——
+            # `sqlite3.connect(":memory:")` 得到**另一个空库**（每连接一个独立库），
+            # UPDATE 落在 `no such table` 上被吞 ⇒ 访问计数静默失效（实测 3 次调用
+            # 后 access_count=0，文件库=3）。内存库实际载体是 shared-cache DSN
+            # （`_memory_dsn`，见 `__init__`），旁路连接必须带 `uri=True` 连它才看
+            # 得到同一份数据；`timeout=0` 的非阻塞设计保留不动。文件库路径原样。
+            dsn = self._memory_dsn or self.db_path
+            obs = sqlite3.connect(dsn, timeout=0,
+                                  uri=dsn.startswith("file:"))
             try:
                 # #93：本连接独立于 `_connect`（访问计数为尽力而为的旁路写），
                 # 连接级外键开关必须逐连接重设，否则该连接上外键不生效。
                 obs.execute("PRAGMA foreign_keys=ON")
                 if touch:
+                    # #52：整批共用**一个**时间戳——此前逐行 time.time()，而 ids 是
+                    # 按检索得分序传入的（高分在前）⇒ 低分节点拿到更晚的
+                    # last_access，下一次 recall 的近因项反向偏向低分节点
+                    # （:memory: 上该刷新曾因 #52 静默丢失而从未生效，修复后暴露，
+                    # W6 在依赖下界档复现）。一次检索事件＝一个时刻。
+                    ts = time.time()
                     obs.executemany(
                         'UPDATE nodes SET access_count = access_count + 1,'
                         ' last_access = ? WHERE id=?',
-                        [(time.time(), nid) for nid in ids])
+                        [(ts, nid) for nid in ids])
                 else:
                     obs.executemany(
                         'UPDATE nodes SET access_count = access_count + 1 WHERE id=?',
