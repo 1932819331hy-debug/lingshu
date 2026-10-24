@@ -78,6 +78,7 @@ env:
     tests/test_issue481_snapshot_divergence.py
     tests/test_issue487b_launch_dir.py
     tests/test_issue825_text_gates.py
+    tests/test_issue940_prior_family_distinct_guard.py
 
 jobs:
   gate:

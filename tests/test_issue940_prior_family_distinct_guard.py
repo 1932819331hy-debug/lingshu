@@ -73,79 +73,86 @@ def dups_of(fam):
             if np.array_equal(fam[i], fam[j])]
 
 
-# ==================== A 组：核心判据（issue 指名的那一档） ====================
-print("== A 组：#940 核心 —— extended_prior_family(37) 任意两核不得逐位相同 ==")
-fam37 = extended_prior_family(37)
-_d = dups_of(fam37)
-check("A1 族大小 == 37", len(fam37) == 37, f"<- {len(fam37)}")
-check("A2 37 族内无重复对（旧实现 6 对）", not _d, f"<- {_d}")
-_collapsed = [i for i in (6, 16, 26, 36) if np.array_equal(fam37[i], fam37[6])]
-check("A3 issue 指名的 idx 6/16/26/36 不再同形", _collapsed == [6], f"<- 与 idx6 同形的: {_collapsed}")
 
-# ==================== B 组：扩容面（n≥17 可达区间 + 更远） ====================
-print("== B 组：扩容面 —— n = 12 / 17 / 37 / 50 全族互异 ==")
-for n in (12, 17, 37, 50):
-    fam = extended_prior_family(n)
-    dd = dups_of(fam)
-    check(f"B{n} n={n} 族大小正确", len(fam) == n, f"<- {len(fam)}")
-    check(f"B{n} n={n} 无重复对", not dd, f"<- {dd}")
+def main() -> int:
+    # ==================== A 组：核心判据（issue 指名的那一档） ====================
+    print("== A 组：#940 核心 —— extended_prior_family(37) 任意两核不得逐位相同 ==")
+    fam37 = extended_prior_family(37)
+    _d = dups_of(fam37)
+    check("A1 族大小 == 37", len(fam37) == 37, f"<- {len(fam37)}")
+    check("A2 37 族内无重复对（旧实现 6 对）", not _d, f"<- {_d}")
+    _collapsed = [i for i in (6, 16, 26, 36) if np.array_equal(fam37[i], fam37[6])]
+    check("A3 issue 指名的 idx 6/16/26/36 不再同形", _collapsed == [6], f"<- 与 idx6 同形的: {_collapsed}")
 
-# ==================== C 组：语义保留（防过度修） ====================
-print("== C 组：前 10 项构成不变（不得为了互异改掉白箱语义） ==")
-check("C1 idx6 是均匀 smooth（全等）",
-      np.allclose(fam37[6], fam37[6][0], atol=1e-6),
-      f"<- {np.round(fam37[6], 6).tolist()}")
-check("C2 idx6 归一后和为 1", abs(float(fam37[6].sum()) - 1.0) < 1e-5,
-      f"<- {float(fam37[6].sum()):.8f}")
-# 六方向 edge：idx 0..5 各含 +1 与 -1，其余 0
-edge_ok = True
-for d in range(6):
-    k = fam37[d]
-    if not (abs(float(k[1 + d]) + 1.0) < 1e-6 and abs(float(k[1 + (d + 3) % 6]) - 1.0) < 1e-6):
-        edge_ok = False
-check("C3 idx0..5 仍是六方向 edge(+1/-1 对)", edge_ok)
-# 变体与基核同向但不等（微扰语义未变）
-base, var = fam37[6], fam37[16]
-cos = float(np.dot(base, var) / (np.linalg.norm(base) * np.linalg.norm(var)))
-check("C4 idx16 仍以 idx6 为基（余弦 > 0.99）", cos > 0.99, f"<- cos={cos:.6f}")
-check("C5 idx16 与 idx6 不相等（微扰生效）", not np.array_equal(base, var))
+    # ==================== B 组：扩容面（n≥17 可达区间 + 更远） ====================
+    print("== B 组：扩容面 —— n = 12 / 17 / 37 / 50 全族互异 ==")
+    for n in (12, 17, 37, 50):
+        fam = extended_prior_family(n)
+        dd = dups_of(fam)
+        check(f"B{n} n={n} 族大小正确", len(fam) == n, f"<- {len(fam)}")
+        check(f"B{n} n={n} 无重复对", not dd, f"<- {dd}")
 
-# ==================== D 组：fail-closed 契约 ====================
-print("== D 组：函数自身必须检出重复并抛错（不能静默返回） ==")
-# 做法：把两个「原始核」的构造函数都换成都返回同一个均匀核，制造 idx6 == idx8
-# 的退化族。修好的实现末尾有互异性校验 ⇒ 必抛 ValueError；旧实现无校验 ⇒ 静默返回。
-_old_smooth = hex_cnn.kernel_smooth
-_old_lap = hex_cnn.kernel_laplacian
+    # ==================== C 组：语义保留（防过度修） ====================
+    print("== C 组：前 10 项构成不变（不得为了互异改掉白箱语义） ==")
+    check("C1 idx6 是均匀 smooth（全等）",
+          np.allclose(fam37[6], fam37[6][0], atol=1e-6),
+          f"<- {np.round(fam37[6], 6).tolist()}")
+    check("C2 idx6 归一后和为 1", abs(float(fam37[6].sum()) - 1.0) < 1e-5,
+          f"<- {float(fam37[6].sum()):.8f}")
+    # 六方向 edge：idx 0..5 各含 +1 与 -1，其余 0
+    edge_ok = True
+    for d in range(6):
+        k = fam37[d]
+        if not (abs(float(k[1 + d]) + 1.0) < 1e-6 and abs(float(k[1 + (d + 3) % 6]) - 1.0) < 1e-6):
+            edge_ok = False
+    check("C3 idx0..5 仍是六方向 edge(+1/-1 对)", edge_ok)
+    # 变体与基核同向但不等（微扰语义未变）
+    base, var = fam37[6], fam37[16]
+    cos = float(np.dot(base, var) / (np.linalg.norm(base) * np.linalg.norm(var)))
+    check("C4 idx16 仍以 idx6 为基（余弦 > 0.99）", cos > 0.99, f"<- cos={cos:.6f}")
+    check("C5 idx16 与 idx6 不相等（微扰生效）", not np.array_equal(base, var))
 
-
-def _fake_uniform() -> np.ndarray:
-    return np.full(7, 1.0 / 7.0, dtype=np.float32)
+    # ==================== D 组：fail-closed 契约 ====================
+    print("== D 组：函数自身必须检出重复并抛错（不能静默返回） ==")
+    # 做法：把两个「原始核」的构造函数都换成都返回同一个均匀核，制造 idx6 == idx8
+    # 的退化族。修好的实现末尾有互异性校验 ⇒ 必抛 ValueError；旧实现无校验 ⇒ 静默返回。
+    _old_smooth = hex_cnn.kernel_smooth
+    _old_lap = hex_cnn.kernel_laplacian
 
 
-try:
-    hex_cnn.kernel_smooth = _fake_uniform
-    hex_cnn.kernel_laplacian = _fake_uniform
-    _raised = None
+    def _fake_uniform() -> np.ndarray:
+        return np.full(7, 1.0 / 7.0, dtype=np.float32)
+
+
     try:
-        _fam_deg = extended_prior_family(37)
-    except ValueError as e:
-        _raised = str(e)
-    check("D1 原始核重复时抛 ValueError（fail-closed）", _raised is not None,
-          f"<- {(_raised or '未抛错，静默返回了重复族')[:70]}")
-    check("D2 抛错信息点名了下标", bool(_raised) and "idx" in _raised,
-          f"<- {(_raised or '')[:70]}")
-finally:
-    hex_cnn.kernel_smooth = _old_smooth
-    hex_cnn.kernel_laplacian = _old_lap
+        hex_cnn.kernel_smooth = _fake_uniform
+        hex_cnn.kernel_laplacian = _fake_uniform
+        _raised = None
+        try:
+            _fam_deg = extended_prior_family(37)
+        except ValueError as e:
+            _raised = str(e)
+        check("D1 原始核重复时抛 ValueError（fail-closed）", _raised is not None,
+              f"<- {(_raised or '未抛错，静默返回了重复族')[:70]}")
+        check("D2 抛错信息点名了下标", bool(_raised) and "idx" in _raised,
+              f"<- {(_raised or '')[:70]}")
+    finally:
+        hex_cnn.kernel_smooth = _old_smooth
+        hex_cnn.kernel_laplacian = _old_lap
 
-# 复原后必须恢复正常
-_fam_back = extended_prior_family(37)
-check("D3 复原后 37 族仍无重复", not dups_of(_fam_back), f"<- {dups_of(_fam_back)}")
+    # 复原后必须恢复正常
+    _fam_back = extended_prior_family(37)
+    check("D3 复原后 37 族仍无重复", not dups_of(_fam_back), f"<- {dups_of(_fam_back)}")
 
-print()
-print("===== SUMMARY %d/%d 通过 =====" % (len(_PASS), len(_PASS) + len(_FAIL)))
-if _FAIL:
-    print("失败项:", _FAIL)
-    sys.exit(1)
-print("VERDICT=PASS（#940 先验核族互异：37 族无重复、扩容面互异、"
-      "前 10 项语义保留、重复时 fail-closed）")
+    print()
+    print("===== SUMMARY %d/%d 通过 =====" % (len(_PASS), len(_PASS) + len(_FAIL)))
+    if _FAIL:
+        print("失败项:", _FAIL)
+        return 1
+    print("VERDICT=PASS（#940 先验核族互异：37 族无重复、扩容面互异、"
+          "前 10 项语义保留、重复时 fail-closed）")
+    return 0
+
+
+if __name__ == "__main__":
+    sys.exit(main())
