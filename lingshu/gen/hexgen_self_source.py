@@ -1203,11 +1203,15 @@ def split_self(items):
 
 
 def build_enum_items(repeats=1):
-    """枚举配方的渲染件（`repeats` 次/配方 ⇒ 可用于稳定性复核；默认 1 次）。"""
+    """枚举配方的渲染件（`repeats` 次/配方 ⇒ 可用于稳定性复核；默认 1 次）。
+
+    ID 在同一批次唯一；≤10 次保留旧 ID，高重复数的缓存须按该配置重建。
+    """
     items = []
+    stride = max(10, int(repeats))
     for ti, tup in enumerate(enumerate_tuples()):
         for rep in range(repeats):
-            items.append({"file": f"self://enum/{ti}/{rep}", "id": ti * 10 + rep,
+            items.append({"file": f"self://enum/{ti}/{rep}", "id": ti * stride + rep,
                           "shape": tup[1], "color": tup[2],
                           "img": render_self(tup).astype(np.float64),
                           "truth": truth_of(tup), "prompt": None,

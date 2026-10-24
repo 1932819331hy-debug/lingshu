@@ -1,0 +1,55 @@
+{
+  "guard": "tests/test_self_source_enum_identity.py",
+  "total": 9,
+  "sources": [
+    "lingshu/gen/hexgen_self_source.py"
+  ],
+  "baseline_failures": [
+    "test_eleven_repeats_keep_each_rendered_sample",
+    "test_large_repeat_count_does_not_use_a_fixed_id_stride",
+    "test_recipe_split_also_separates_evaluation_ids",
+    "test_real_evaluator_selects_exactly_the_split_members",
+    "test_real_measurements_keep_their_recipe_owner"
+  ],
+  "mutations": [
+    {
+      "name": "legacy_stride_collides",
+      "test": "test_eleven_repeats_keep_each_rendered_sample",
+      "assertion": "rendered samples share an evaluation ID",
+      "changes": [
+        {
+          "file": "lingshu/gen/hexgen_self_source.py",
+          "method": "build_enum_items",
+          "old": "stride = max(10, int(repeats))",
+          "new": "stride = 10"
+        }
+      ]
+    },
+    {
+      "name": "larger_fixed_stride_collides",
+      "test": "test_large_repeat_count_does_not_use_a_fixed_id_stride",
+      "assertion": "large-repeat evaluation IDs collided",
+      "changes": [
+        {
+          "file": "lingshu/gen/hexgen_self_source.py",
+          "method": "build_enum_items",
+          "old": "stride = max(10, int(repeats))",
+          "new": "stride = 100"
+        }
+      ]
+    },
+    {
+      "name": "change_legacy_identities",
+      "test": "test_existing_small_repeat_identities_are_unchanged[default]",
+      "assertion": "small-repeat identities changed",
+      "changes": [
+        {
+          "file": "lingshu/gen/hexgen_self_source.py",
+          "method": "build_enum_items",
+          "old": "stride = max(10, int(repeats))",
+          "new": "stride = max(11, int(repeats))"
+        }
+      ]
+    }
+  ]
+}

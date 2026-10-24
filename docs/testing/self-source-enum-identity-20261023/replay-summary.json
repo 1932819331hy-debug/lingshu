@@ -1,0 +1,218 @@
+{
+  "windows": {
+    "python": "3.12.10",
+    "platform": "Windows",
+    "sqlite": "3.49.1",
+    "baseline": "ea7a13c87a4673a402c991430707809c500c8ec0",
+    "guard_sha256": "f56bbcaa5c96332a09b587d441fd793cb6c75807655e16615ab9904c6798e060",
+    "records": [
+      {
+        "case": "fixed",
+        "ok": true,
+        "returncode": 0,
+        "passed": 9,
+        "failed_tests": [],
+        "errors": 0,
+        "skipped": 0,
+        "expected_failures": [],
+        "expected_assertion": "",
+        "pytest_summary": "9 passed in 2.78s",
+        "source_sha256": {
+          "lingshu/gen/hexgen_self_source.py": "9f5a8fa806e7ecf388d0ef1e364105fbf84e284ab4a95712fe2d7717970992f9"
+        }
+      },
+      {
+        "case": "baseline",
+        "ok": true,
+        "returncode": 1,
+        "passed": 4,
+        "failed_tests": [
+          "test_eleven_repeats_keep_each_rendered_sample",
+          "test_large_repeat_count_does_not_use_a_fixed_id_stride",
+          "test_real_evaluator_selects_exactly_the_split_members",
+          "test_real_measurements_keep_their_recipe_owner",
+          "test_recipe_split_also_separates_evaluation_ids"
+        ],
+        "errors": 0,
+        "skipped": 0,
+        "expected_failures": [
+          "test_eleven_repeats_keep_each_rendered_sample",
+          "test_large_repeat_count_does_not_use_a_fixed_id_stride",
+          "test_recipe_split_also_separates_evaluation_ids",
+          "test_real_evaluator_selects_exactly_the_split_members",
+          "test_real_measurements_keep_their_recipe_owner"
+        ],
+        "expected_assertion": "",
+        "pytest_summary": "5 failed, 4 passed in 2.24s",
+        "source_sha256": {
+          "lingshu/gen/hexgen_self_source.py": "118c2021550c1dbbb9e83d2c425d52bc988c1f674089395d5878f1f6d55131d6"
+        }
+      },
+      {
+        "case": "legacy_stride_collides",
+        "ok": true,
+        "returncode": 1,
+        "passed": 0,
+        "failed_tests": [
+          "test_eleven_repeats_keep_each_rendered_sample"
+        ],
+        "errors": 0,
+        "skipped": 0,
+        "expected_failures": [
+          "test_eleven_repeats_keep_each_rendered_sample"
+        ],
+        "expected_assertion": "rendered samples share an evaluation ID",
+        "pytest_summary": "1 failed in 0.96s",
+        "source_sha256": {
+          "lingshu/gen/hexgen_self_source.py": "ed51b5d2f6e1561a1f8954273aeac90bee6e7cdd401cb809e235fb1b167aabe0"
+        }
+      },
+      {
+        "case": "larger_fixed_stride_collides",
+        "ok": true,
+        "returncode": 1,
+        "passed": 0,
+        "failed_tests": [
+          "test_large_repeat_count_does_not_use_a_fixed_id_stride"
+        ],
+        "errors": 0,
+        "skipped": 0,
+        "expected_failures": [
+          "test_large_repeat_count_does_not_use_a_fixed_id_stride"
+        ],
+        "expected_assertion": "large-repeat evaluation IDs collided",
+        "pytest_summary": "1 failed in 0.73s",
+        "source_sha256": {
+          "lingshu/gen/hexgen_self_source.py": "5d746d0f8eb124ac0709c282bda96dbf89024236cce3ca2c32cdec64ba08b7be"
+        }
+      },
+      {
+        "case": "change_legacy_identities",
+        "ok": true,
+        "returncode": 1,
+        "passed": 0,
+        "failed_tests": [
+          "test_existing_small_repeat_identities_are_unchanged[default]"
+        ],
+        "errors": 0,
+        "skipped": 0,
+        "expected_failures": [
+          "test_existing_small_repeat_identities_are_unchanged[default]"
+        ],
+        "expected_assertion": "small-repeat identities changed",
+        "pytest_summary": "1 failed in 0.69s",
+        "source_sha256": {
+          "lingshu/gen/hexgen_self_source.py": "809e1c82f4953664cc1061062cdd30cf0bf16a49e601dd2a69a6f8643fe55ff5"
+        }
+      }
+    ]
+  },
+  "linux": {
+    "python": "3.13.12",
+    "platform": "Linux",
+    "sqlite": "3.46.1",
+    "baseline": "ea7a13c87a4673a402c991430707809c500c8ec0",
+    "guard_sha256": "f56bbcaa5c96332a09b587d441fd793cb6c75807655e16615ab9904c6798e060",
+    "records": [
+      {
+        "case": "fixed",
+        "ok": true,
+        "returncode": 0,
+        "passed": 9,
+        "failed_tests": [],
+        "errors": 0,
+        "skipped": 0,
+        "expected_failures": [],
+        "expected_assertion": "",
+        "pytest_summary": "9 passed in 3.70s",
+        "source_sha256": {
+          "lingshu/gen/hexgen_self_source.py": "9f5a8fa806e7ecf388d0ef1e364105fbf84e284ab4a95712fe2d7717970992f9"
+        }
+      },
+      {
+        "case": "baseline",
+        "ok": true,
+        "returncode": 1,
+        "passed": 4,
+        "failed_tests": [
+          "test_eleven_repeats_keep_each_rendered_sample",
+          "test_large_repeat_count_does_not_use_a_fixed_id_stride",
+          "test_real_evaluator_selects_exactly_the_split_members",
+          "test_real_measurements_keep_their_recipe_owner",
+          "test_recipe_split_also_separates_evaluation_ids"
+        ],
+        "errors": 0,
+        "skipped": 0,
+        "expected_failures": [
+          "test_eleven_repeats_keep_each_rendered_sample",
+          "test_large_repeat_count_does_not_use_a_fixed_id_stride",
+          "test_recipe_split_also_separates_evaluation_ids",
+          "test_real_evaluator_selects_exactly_the_split_members",
+          "test_real_measurements_keep_their_recipe_owner"
+        ],
+        "expected_assertion": "",
+        "pytest_summary": "5 failed, 4 passed in 2.69s",
+        "source_sha256": {
+          "lingshu/gen/hexgen_self_source.py": "118c2021550c1dbbb9e83d2c425d52bc988c1f674089395d5878f1f6d55131d6"
+        }
+      },
+      {
+        "case": "legacy_stride_collides",
+        "ok": true,
+        "returncode": 1,
+        "passed": 0,
+        "failed_tests": [
+          "test_eleven_repeats_keep_each_rendered_sample"
+        ],
+        "errors": 0,
+        "skipped": 0,
+        "expected_failures": [
+          "test_eleven_repeats_keep_each_rendered_sample"
+        ],
+        "expected_assertion": "rendered samples share an evaluation ID",
+        "pytest_summary": "1 failed in 1.15s",
+        "source_sha256": {
+          "lingshu/gen/hexgen_self_source.py": "ed51b5d2f6e1561a1f8954273aeac90bee6e7cdd401cb809e235fb1b167aabe0"
+        }
+      },
+      {
+        "case": "larger_fixed_stride_collides",
+        "ok": true,
+        "returncode": 1,
+        "passed": 0,
+        "failed_tests": [
+          "test_large_repeat_count_does_not_use_a_fixed_id_stride"
+        ],
+        "errors": 0,
+        "skipped": 0,
+        "expected_failures": [
+          "test_large_repeat_count_does_not_use_a_fixed_id_stride"
+        ],
+        "expected_assertion": "large-repeat evaluation IDs collided",
+        "pytest_summary": "1 failed in 0.76s",
+        "source_sha256": {
+          "lingshu/gen/hexgen_self_source.py": "5d746d0f8eb124ac0709c282bda96dbf89024236cce3ca2c32cdec64ba08b7be"
+        }
+      },
+      {
+        "case": "change_legacy_identities",
+        "ok": true,
+        "returncode": 1,
+        "passed": 0,
+        "failed_tests": [
+          "test_existing_small_repeat_identities_are_unchanged[default]"
+        ],
+        "errors": 0,
+        "skipped": 0,
+        "expected_failures": [
+          "test_existing_small_repeat_identities_are_unchanged[default]"
+        ],
+        "expected_assertion": "small-repeat identities changed",
+        "pytest_summary": "1 failed in 0.63s",
+        "source_sha256": {
+          "lingshu/gen/hexgen_self_source.py": "809e1c82f4953664cc1061062cdd30cf0bf16a49e601dd2a69a6f8643fe55ff5"
+        }
+      }
+    ]
+  }
+}

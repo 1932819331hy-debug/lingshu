@@ -1,0 +1,82 @@
+CASE fixed
+.........                                                                [100%]
+9 passed in 2.78s
+
+CASE baseline
+FFFFF....                                                                [100%]
+================================== FAILURES ===================================
+________________ test_eleven_repeats_keep_each_rendered_sample ________________
+tests\test_self_source_enum_identity.py:28: in test_eleven_repeats_keep_each_rendered_sample
+    assert len({it["id"] for it in items11}) == 297, "rendered samples share an evaluation ID"
+E   AssertionError: rendered samples share an evaluation ID
+E   assert 271 == 297
+E    +  where 271 = len({0, 1, 2, 3, 4, 5, ...})
+___________ test_large_repeat_count_does_not_use_a_fixed_id_stride ____________
+tests\test_self_source_enum_identity.py:35: in test_large_repeat_count_does_not_use_a_fixed_id_stride
+    assert len({it["id"] for it in items}) == 202, "large-repeat evaluation IDs collided"
+E   AssertionError: large-repeat evaluation IDs collided
+E   assert 111 == 202
+E    +  where 111 = len({0, 1, 2, 3, 4, 5, ...})
+_______________ test_recipe_split_also_separates_evaluation_ids _______________
+tests\test_self_source_enum_identity.py:41: in test_recipe_split_also_separates_evaluation_ids
+    assert {it["id"] for it in cal}.isdisjoint({it["id"] for it in hold}), "evaluation IDs cross the recipe split"
+E   AssertionError: evaluation IDs cross the recipe split
+E   assert False
+E    +  where False = <built-in method isdisjoint of set object at 0x000001D3CD57C120>({10, 11, 12, 13, 14, 15, ...})
+E    +    where <built-in method isdisjoint of set object at 0x000001D3CD57C120> = {0, 1, 2, 3, 4, 5, ...}.isdisjoint
+____________ test_real_evaluator_selects_exactly_the_split_members ____________
+tests\test_self_source_enum_identity.py:51: in test_real_evaluator_selects_exactly_the_split_members
+    assert result["n_img"] == len(side), "evaluator selected images from the other split"
+E   AssertionError: evaluator selected images from the other split
+E   assert 189 == 165
+E    +  where 165 = len([{'file': 'self://enum/0/0', 'id': 0, 'shape': 'circle', 'color': 'red', ...}, {'file': 'self://enum/0/1', 'id': 1, 's...pe': 'circle', 'color': 'red', ...}, {'file': 'self://enum/0/5', 'id': 5, 'shape': 'circle', 'color': 'red', ...}, ...])
+_______________ test_real_measurements_keep_their_recipe_owner ________________
+tests\test_self_source_enum_identity.py:65: in test_real_measurements_keep_their_recipe_owner
+    assert by_id[first["id"]] is first_obs, "another recipe overwrote the measured observation"
+E   AssertionError: another recipe overwrote the measured observation
+E   assert [{'feat': {'extent': 0.7941176470588235, 'log_aspect': -0.060624621816434854, 'solidity': 0.9473684210526315, 'compact...315, 'compactness': 1.0038225046973304, ...}, 'kdom': 4, 'bbox': (16, 17), 'core_rgb': array([ 40., 200.,  60.]), ...}] is [{'feat': {'extent': 0.7647058823529411, 'log_aspect': 0.0, 'solidity': 0.9404255319148936, 'compactness': 0.6780195082454534, ...}, 'kdom': 4, 'bbox': (17, 17), 'core_rgb': array([220.,  40.,  40.]), ...}]
+=========================== short test summary info ===========================
+FAILED tests/test_self_source_enum_identity.py::test_eleven_repeats_keep_each_rendered_sample
+FAILED tests/test_self_source_enum_identity.py::test_large_repeat_count_does_not_use_a_fixed_id_stride
+FAILED tests/test_self_source_enum_identity.py::test_recipe_split_also_separates_evaluation_ids
+FAILED tests/test_self_source_enum_identity.py::test_real_evaluator_selects_exactly_the_split_members
+FAILED tests/test_self_source_enum_identity.py::test_real_measurements_keep_their_recipe_owner
+5 failed, 4 passed in 2.24s
+
+CASE legacy_stride_collides
+F                                                                        [100%]
+================================== FAILURES ===================================
+________________ test_eleven_repeats_keep_each_rendered_sample ________________
+tests\test_self_source_enum_identity.py:28: in test_eleven_repeats_keep_each_rendered_sample
+    assert len({it["id"] for it in items11}) == 297, "rendered samples share an evaluation ID"
+E   AssertionError: rendered samples share an evaluation ID
+E   assert 271 == 297
+E    +  where 271 = len({0, 1, 2, 3, 4, 5, ...})
+=========================== short test summary info ===========================
+FAILED tests/test_self_source_enum_identity.py::test_eleven_repeats_keep_each_rendered_sample
+1 failed in 0.96s
+
+CASE larger_fixed_stride_collides
+F                                                                        [100%]
+================================== FAILURES ===================================
+___________ test_large_repeat_count_does_not_use_a_fixed_id_stride ____________
+tests\test_self_source_enum_identity.py:35: in test_large_repeat_count_does_not_use_a_fixed_id_stride
+    assert len({it["id"] for it in items}) == 202, "large-repeat evaluation IDs collided"
+E   AssertionError: large-repeat evaluation IDs collided
+E   assert 201 == 202
+E    +  where 201 = len({0, 1, 2, 3, 4, 5, ...})
+=========================== short test summary info ===========================
+FAILED tests/test_self_source_enum_identity.py::test_large_repeat_count_does_not_use_a_fixed_id_stride
+1 failed in 0.73s
+
+CASE change_legacy_identities
+F                                                                        [100%]
+================================== FAILURES ===================================
+________ test_existing_small_repeat_identities_are_unchanged[default] _________
+tests\test_self_source_enum_identity.py:78: in test_existing_small_repeat_identities_are_unchanged
+    assert by_file[filename]["id"] == item_id, "small-repeat identities changed"
+E   AssertionError: small-repeat identities changed
+E   assert 11 == 10
+=========================== short test summary info ===========================
+FAILED tests/test_self_source_enum_identity.py::test_existing_small_repeat_identities_are_unchanged[default]
+1 failed in 0.69s
