@@ -93,6 +93,8 @@ class ChannelCredibilityRegistry:
         except Exception:
             # 只兜「文件级」失败（不可读 / 非 JSON）——整体保持构造器先验。
             return
+        if not isinstance(data, dict):
+            return  # A parseable non-object is still an invalid calibration file.
         for ch, st in data.items():
             if ch not in self._state or not isinstance(st, dict):
                 continue
@@ -105,13 +107,15 @@ class ChannelCredibilityRegistry:
             # 写入半套值，故毒通道不会留下「一半新一半旧」的混合状态。
             try:
                 self._state[ch].update({k: float(st.get(k, self._state[ch][k])) for k in ("a", "b", "hits", "misses")})
-            except (TypeError, ValueError):
+            except (TypeError, ValueError, OverflowError):
                 continue
         self._sanitize()
 
     def _sanitize(self) -> None:
         """把持久化带入的毒状态挡在查询面之外。
 
+        非对象根按坏文件处理；正的有限 Beta 参数、有限正总量与非负有限计数
+        是公开查询的前置条件。坏通道只复位自身，载入不回写文件。
         `_update` 只做加法、`reset` 复位到先验，所以 `a+b<=0` / 非有限**只可能
         来自被篡改或损坏的持久化文件**。修前这些值一路带到
         `credibility()`/`channel_state()`/`registry()` 才炸（`ZeroDivisionError`，
@@ -122,8 +126,12 @@ class ChannelCredibilityRegistry:
         """
         for ch, st in self._state.items():
             a, b = st.get("a"), st.get("b")
-            if not (isinstance(a, (int, float)) and isinstance(b, (int, float))) \
-                    or not math.isfinite(a) or not math.isfinite(b) or (a + b) <= 0:
+            values = (a, b, st.get("hits"), st.get("misses"))
+            # Beta parameters must be positive; counts must be nonnegative.
+            # Validate all four fields before public registry() converts counts to int.
+            valid = all(isinstance(v, (int, float)) and math.isfinite(v) for v in values)
+            if not valid or a <= 0 or b <= 0 or not math.isfinite(a + b) \
+                    or st["hits"] < 0 or st["misses"] < 0:
                 st["a"], st["b"] = PRIOR_A, PRIOR_B
                 st["hits"], st["misses"] = 0.0, 0.0
 

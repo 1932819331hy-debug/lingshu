@@ -16,6 +16,7 @@
 定点变异：把 `_write_workset` 的 INSERT 里 `query` 改回不写（或删 ALTER 迁移）⇒
 ④/⑤ 与 ① 相应变红。
 """
+import gc
 import sqlite3
 
 import pytest
@@ -24,11 +25,23 @@ from lingshu.core.activation import ActivationEngine
 from lingshu.core.core import SpacetimeMemoryEngine
 
 
-def _engine(tmp_path, name="act.db"):
-    path = str(tmp_path / name)
-    mem = SpacetimeMemoryEngine(path)
-    mem.add_perception("量子纠缠实验在液氦温区观测到超导涡旋", skip_dedup=True)
-    return ActivationEngine(store=mem.store), path
+@pytest.fixture
+def engine_factory(tmp_path):
+    """The activation engine borrows its connection; retain and close its owner."""
+    owners = []
+
+    def create(name="act.db"):
+        path = str(tmp_path / name)
+        mem = SpacetimeMemoryEngine(path)
+        owners.append(mem)
+        mem.add_perception("量子纠缠实验在液氦温区观测到超导涡旋", skip_dedup=True)
+        return ActivationEngine(store=mem.store), path
+
+    try:
+        yield create
+    finally:
+        for mem in reversed(owners):
+            mem.close()
 
 
 def _seeded(eng, query, workset="w1"):
@@ -40,8 +53,8 @@ def _seeded(eng, query, workset="w1"):
 
 # ---------------------------------------------------------------- ① 写入与回读
 
-def test_activate_persists_and_exposes_query(tmp_path):
-    eng, _ = _engine(tmp_path)
+def test_activate_persists_and_exposes_query(tmp_path, engine_factory):
+    eng, _ = engine_factory()
     _seeded(eng, "量子纠缠 超导")
     st = eng.workset_state("w1")
     assert st["query"] == "量子纠缠 超导", "workset_state 未回读查询：%r" % (st,)
@@ -52,8 +65,8 @@ def test_activate_persists_and_exposes_query(tmp_path):
 
 # ---------------------------------------------------------------- ② 持久化
 
-def test_query_survives_reopen(tmp_path):
-    eng, path = _engine(tmp_path)
+def test_query_survives_reopen(tmp_path, engine_factory):
+    eng, path = engine_factory()
     _seeded(eng, "超导 液氦")
     eng2 = ActivationEngine(db_path=path)
     assert eng2.workset_state("w1")["query"] == "超导 液氦"
@@ -61,8 +74,8 @@ def test_query_survives_reopen(tmp_path):
 
 # ---------------------------------------------------------------- ③ 覆盖语义
 
-def test_reactivation_replaces_query(tmp_path):
-    eng, path = _engine(tmp_path)
+def test_reactivation_replaces_query(tmp_path, engine_factory):
+    eng, path = engine_factory()
     _seeded(eng, "量子纠缠")
     _seeded(eng, "超导 温区")
     assert eng.workset_state("w1")["query"] == "超导 温区"
@@ -99,8 +112,8 @@ def test_legacy_schema_gets_query_column(tmp_path):
 
 # ---------------------------------------------------------------- ⑤ 快照往返
 
-def test_export_import_roundtrip_keeps_query(tmp_path):
-    eng, _ = _engine(tmp_path)
+def test_export_import_roundtrip_keeps_query(tmp_path, engine_factory):
+    eng, _ = engine_factory()
     _seeded(eng, "量子 涡旋")
     snap = eng.export_workset("w1")
     eng.import_workset(snap, workset="w1-restored")
@@ -114,9 +127,20 @@ def test_export_import_roundtrip_keeps_query(tmp_path):
 
 # ---------------------------------------------------------------- ⑥ 空工作集
 
-def test_empty_workset_query_is_none(tmp_path):
-    eng, _ = _engine(tmp_path)
+def test_empty_workset_query_is_none(tmp_path, engine_factory):
+    eng, _ = engine_factory()
     st = eng.workset_state("no-such-workset")
     assert st["size"] == 0 and st["query"] is None
     snap = eng.export_workset("no-such-workset")
     assert snap["members"] == [] and snap["query"] is None
+
+
+def test_borrowed_fixture_owner_survives_collection(engine_factory):
+    """Deterministic negative control for the former CI-only owner collection."""
+    eng, _ = engine_factory()
+    gc.collect()
+    try:
+        _seeded(eng, "量子纠缠 超导")
+    except sqlite3.ProgrammingError as exc:
+        pytest.fail("borrowed query fixture lost its database owner: " + str(exc))
+    assert eng.workset_state("w1")["query"] == "量子纠缠 超导"

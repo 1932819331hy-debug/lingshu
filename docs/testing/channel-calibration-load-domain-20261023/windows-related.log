@@ -1,0 +1,36 @@
+....................................                                     [100%]
+36 passed in 1.60s
+
+MANIFEST
+ORIGINS origin-only=3 src-only=61 both=0 neither=0
+SUMMARY manifests=2 entries=64 match=64 mismatch=0 bytes_mismatch=0 missing=0 malformed=0 unparseable=0 exit_code=0
+
+TIME-CORE
+exit=0; raw log SHA256 807cae810372c1eaa58b04bb8479427ed4eb126a1dae06ea63826a1cd2cb5181
+
+UPSTREAM QUERY FIXTURE OWNERSHIP
+.......                                                                  [100%]
+7 passed, 50 warnings in 1.10s
+
+F                                                                        [100%]
+================================== FAILURES ===================================
+_______________ test_borrowed_fixture_owner_survives_collection _______________
+tests\test_issue505_workset_query_guard.py:143: in test_borrowed_fixture_owner_survives_collection
+    _seeded(eng, "量子纠缠 超导")
+tests\test_issue505_workset_query_guard.py:48: in _seeded
+    out = eng.activate(query, workset=workset)
+          ^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^
+lingshu\core\activation.py:489: in activate
+    self._load_graph()
+lingshu\core\activation.py:305: in _load_graph
+    cur = con.cursor()
+          ^^^^^^^^^^^^
+E   sqlite3.ProgrammingError: Cannot operate on a closed database.
+
+During handling of the above exception, another exception occurred:
+tests\test_issue505_workset_query_guard.py:145: in test_borrowed_fixture_owner_survives_collection
+    pytest.fail("borrowed query fixture lost its database owner: " + str(exc))
+E   Failed: borrowed query fixture lost its database owner: Cannot operate on a closed database.
+=========================== short test summary info ===========================
+FAILED tests/test_issue505_workset_query_guard.py::test_borrowed_fixture_owner_survives_collection
+1 failed, 9 warnings in 0.99s
