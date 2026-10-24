@@ -1,0 +1,92 @@
+{
+  "guard": "tests/test_consolidated_kernel_contract.py",
+  "total": 18,
+  "sources": [
+    "lingshu/nn/hex_cnn.py"
+  ],
+  "baseline_failures": [
+    "test_metadata_cannot_replace_learned_checkpoint",
+    "test_load_rejects_wrong_weight_shape[six]",
+    "test_load_rejects_wrong_weight_shape[eight]",
+    "test_load_rejects_wrong_weight_shape[matrix]",
+    "test_load_rejects_invalid_checkpoint_envelope[false]",
+    "test_load_rejects_invalid_checkpoint_envelope[missing]",
+    "test_load_rejects_invalid_checkpoint_envelope[kernel_list]",
+    "test_load_rejects_invalid_checkpoint_envelope[root_list]",
+    "test_bad_save_preserves_old_bytes_before_any_io[six]",
+    "test_bad_save_preserves_old_bytes_before_any_io[eight]",
+    "test_bad_save_preserves_old_bytes_before_any_io[nan]",
+    "test_bad_save_preserves_old_bytes_before_any_io[float32_overflow]",
+    "test_direct_convolution_rejects_incompatible_shape[six]",
+    "test_direct_convolution_rejects_incompatible_shape[eight]",
+    "test_direct_convolution_rejects_incompatible_shape[wrong_channels]",
+    "test_load_rejects_nonfinite_persisted_weights"
+  ],
+  "mutations": [
+    {
+      "name": "metadata_overrides_parameters",
+      "test": "test_metadata_cannot_replace_learned_checkpoint",
+      "assertion": "metadata erased learned kernel",
+      "changes": [
+        {
+          "file": "lingshu/nn/hex_cnn.py",
+          "method": "save_consolidated",
+          "old": "payload = {**meta, \"algo\": ALGO, \"consolidated\": True,\n               \"kernels\": {k: [round(float(x), 6) for x in _consolidated_kernel(k, v)]\n                           for k, v in kernels.items()}}",
+          "new": "payload = {\"algo\": ALGO, \"consolidated\": True,\n               \"kernels\": {k: [round(float(x), 6) for x in _consolidated_kernel(k, v)]\n                           for k, v in kernels.items()}, **meta}"
+        }
+      ]
+    },
+    {
+      "name": "accept_wrong_persisted_shape",
+      "test": "test_load_rejects_wrong_weight_shape[eight]",
+      "assertion": "load accepted malformed seven-weight kernel",
+      "changes": [
+        {
+          "file": "lingshu/nn/hex_cnn.py",
+          "method": "_consolidated_kernel",
+          "old": "k.shape == (7,) and np.isfinite(k).all()",
+          "new": "True and np.isfinite(k).all()"
+        }
+      ]
+    },
+    {
+      "name": "accept_invalid_envelope",
+      "test": "test_load_rejects_invalid_checkpoint_envelope[false]",
+      "assertion": "load accepted invalid checkpoint envelope",
+      "changes": [
+        {
+          "file": "lingshu/nn/hex_cnn.py",
+          "method": "load_consolidated",
+          "old": "if (not isinstance(payload, dict) or payload.get(\"consolidated\") is not True\n            or not isinstance(payload.get(\"kernels\"), dict)):",
+          "new": "if False:"
+        }
+      ]
+    },
+    {
+      "name": "truncate_direct_convolution",
+      "test": "test_direct_convolution_rejects_incompatible_shape[eight]",
+      "assertion": "convolution silently ignored extra kernel weights",
+      "changes": [
+        {
+          "file": "lingshu/nn/hex_cnn.py",
+          "method": "hex_conv",
+          "old": "if k.shape not in ((7,), (C, 7)):",
+          "new": "if False:"
+        }
+      ]
+    },
+    {
+      "name": "accept_float32_overflow",
+      "test": "test_bad_save_preserves_old_bytes_before_any_io[float32_overflow]",
+      "assertion": "invalid save replaced good checkpoint",
+      "changes": [
+        {
+          "file": "lingshu/nn/hex_cnn.py",
+          "method": "_consolidated_kernel",
+          "old": "and np.isfinite(k.astype(np.float32)).all()",
+          "new": "and True"
+        }
+      ]
+    }
+  ]
+}

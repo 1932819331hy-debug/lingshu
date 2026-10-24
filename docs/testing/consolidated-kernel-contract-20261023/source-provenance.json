@@ -1,0 +1,80 @@
+{
+  "baseline": "ea7a13c87a4673a402c991430707809c500c8ec0",
+  "sha256_lf": {
+    "lingshu/nn/hex_cnn.py": "df8cf0e9ba5ac2fcc49de0160b801e94958f03afa1ee7292bb2f296f3d195a5c",
+    "tests/test_consolidated_kernel_contract.py": "d89faea3513378cd490a82359e7cf83ea170466250e1a84bf0e1eee78d5b06df",
+    "tests/fixtures/consolidated_kernel_contract_mutations.json": "69430b81fbdaa60f22d2deb0794608f333762eeae98fcf7b46713c3fb55516d1"
+  },
+  "runs": {
+    "windows": {
+      "platform": "Windows",
+      "python": "3.12.10",
+      "sqlite": "3.49.1",
+      "baseline": "ea7a13c87a4673a402c991430707809c500c8ec0",
+      "validated_commit": "d95caa3410eefd93f849aebf0d9b95847187dd97",
+      "sha256_lf": {
+        "lingshu/nn/hex_cnn.py": "df8cf0e9ba5ac2fcc49de0160b801e94958f03afa1ee7292bb2f296f3d195a5c",
+        "tests/test_consolidated_kernel_contract.py": "d89faea3513378cd490a82359e7cf83ea170466250e1a84bf0e1eee78d5b06df",
+        "tests/fixtures/consolidated_kernel_contract_mutations.json": "69430b81fbdaa60f22d2deb0794608f333762eeae98fcf7b46713c3fb55516d1"
+      },
+      "commands": [
+        {
+          "name": "replay",
+          "returncode": 0
+        },
+        {
+          "name": "related",
+          "returncode": 0
+        },
+        {
+          "name": "manifest",
+          "returncode": 0
+        },
+        {
+          "name": "time-core",
+          "returncode": 0
+        }
+      ],
+      "related_total": 17,
+      "related_failures": [],
+      "related_errors": [],
+      "related_skips": [],
+      "owned_test_temp_cleaned": true
+    },
+    "linux": {
+      "platform": "Linux",
+      "python": "3.13.12",
+      "sqlite": "3.46.1",
+      "baseline": "ea7a13c87a4673a402c991430707809c500c8ec0",
+      "validated_commit": "d95caa3410eefd93f849aebf0d9b95847187dd97",
+      "sha256_lf": {
+        "lingshu/nn/hex_cnn.py": "df8cf0e9ba5ac2fcc49de0160b801e94958f03afa1ee7292bb2f296f3d195a5c",
+        "tests/test_consolidated_kernel_contract.py": "d89faea3513378cd490a82359e7cf83ea170466250e1a84bf0e1eee78d5b06df",
+        "tests/fixtures/consolidated_kernel_contract_mutations.json": "69430b81fbdaa60f22d2deb0794608f333762eeae98fcf7b46713c3fb55516d1"
+      },
+      "commands": [
+        {
+          "name": "replay",
+          "returncode": 0
+        },
+        {
+          "name": "related",
+          "returncode": 0
+        },
+        {
+          "name": "manifest",
+          "returncode": 0
+        },
+        {
+          "name": "time-core",
+          "returncode": 0
+        }
+      ],
+      "related_total": 17,
+      "related_failures": [],
+      "related_errors": [],
+      "related_skips": [],
+      "owned_test_temp_cleaned": true
+    }
+  }
+}
