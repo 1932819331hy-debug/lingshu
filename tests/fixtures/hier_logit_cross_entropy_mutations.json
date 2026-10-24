@@ -1,0 +1,9 @@
+{
+ "guard":"tests/test_hier_logit_cross_entropy.py","total":9,"sources":["lingshu/nn/hex_hier.py"],
+ "baseline_failures":["test_confident_wrong_logits_do_not_saturate[20.0]","test_confident_wrong_logits_do_not_saturate[50.0]","test_confident_wrong_logits_do_not_saturate[100.0]","test_confident_wrong_logits_do_not_saturate[1000.0]","test_confident_correct_prediction_has_nonnegative_loss","test_real_training_updates_a_saturated_wrong_object","test_shape_auxiliary_loss_retains_low_probability_group"],
+ "mutations":[
+  {"name":"restore_probability_epsilon_ce","test":"test_confident_wrong_logits_do_not_saturate[100.0]","assertion":"cross entropy saturated instead of tracking the wrong-logit gap","changes":[{"file":"lingshu/nn/hex_hier.py","method":"ce_loss","old":"return float((_logsumexp(z) - z[np.arange(len(yi)), yi]).mean())","new":"return float(-np.log(softmax(logits)[np.arange(len(yi)), yi] + 1e-12).mean())"}]},
+  {"name":"clip_shape_group_probability","test":"test_shape_auxiliary_loss_retains_low_probability_group","assertion":"shape auxiliary objective was clipped or grouped incorrectly","changes":[{"file":"lingshu/nn/hex_hier.py","method":"train_hier","old":"d_shape = float((_logsumexp(z) - _logsumexp(true_group)).mean())","new":"d_shape = float(-np.log(np.exp(_logsumexp(true_group) - _logsumexp(z)) + 1e-12).mean())"}]},
+  {"name":"use_interleaved_shape_classes","test":"test_shape_auxiliary_loss_retains_low_probability_group","assertion":"shape auxiliary objective was clipped or grouped incorrectly","changes":[{"file":"lingshu/nn/hex_hier.py","method":"train_hier","old":"grouped = z.reshape(len(z), 3, 3)","new":"grouped = z.reshape(len(z), 3, 3).transpose(0, 2, 1)"}]}
+ ]
+}

@@ -1,0 +1,226 @@
+{
+  "windows": {
+    "python": "3.12.10",
+    "platform": "Windows",
+    "sqlite": "3.49.1",
+    "baseline": "cad16dc5e142a850c86a88915b76a8aca054d84d",
+    "guard_sha256": "692e810ce9d1a3ce6f252c8a07e6559b9a0ae457242d471711b78f1f992b9aa0",
+    "records": [
+      {
+        "case": "fixed",
+        "ok": true,
+        "returncode": 0,
+        "passed": 9,
+        "failed_tests": [],
+        "errors": 0,
+        "skipped": 0,
+        "expected_failures": [],
+        "expected_assertion": "",
+        "pytest_summary": "9 passed in 0.39s",
+        "source_sha256": {
+          "lingshu/nn/hex_hier.py": "761f376a4d65d407cd7d4a3c33a8eea67e41c37dfc6b8dbcdf7710018c2a93e6"
+        }
+      },
+      {
+        "case": "baseline",
+        "ok": true,
+        "returncode": 1,
+        "passed": 2,
+        "failed_tests": [
+          "test_confident_correct_prediction_has_nonnegative_loss",
+          "test_confident_wrong_logits_do_not_saturate[100.0]",
+          "test_confident_wrong_logits_do_not_saturate[1000.0]",
+          "test_confident_wrong_logits_do_not_saturate[20.0]",
+          "test_confident_wrong_logits_do_not_saturate[50.0]",
+          "test_real_training_updates_a_saturated_wrong_object",
+          "test_shape_auxiliary_loss_retains_low_probability_group"
+        ],
+        "errors": 0,
+        "skipped": 0,
+        "expected_failures": [
+          "test_confident_wrong_logits_do_not_saturate[20.0]",
+          "test_confident_wrong_logits_do_not_saturate[50.0]",
+          "test_confident_wrong_logits_do_not_saturate[100.0]",
+          "test_confident_wrong_logits_do_not_saturate[1000.0]",
+          "test_confident_correct_prediction_has_nonnegative_loss",
+          "test_real_training_updates_a_saturated_wrong_object",
+          "test_shape_auxiliary_loss_retains_low_probability_group"
+        ],
+        "expected_assertion": "",
+        "pytest_summary": "7 failed, 2 passed in 0.54s",
+        "source_sha256": {
+          "lingshu/nn/hex_hier.py": "5279ad131b4054878ea3d8125af8528ed466607ae1103b73d1ebf42fd5d79326"
+        }
+      },
+      {
+        "case": "restore_probability_epsilon_ce",
+        "ok": true,
+        "returncode": 1,
+        "passed": 0,
+        "failed_tests": [
+          "test_confident_wrong_logits_do_not_saturate[100.0]"
+        ],
+        "errors": 0,
+        "skipped": 0,
+        "expected_failures": [
+          "test_confident_wrong_logits_do_not_saturate[100.0]"
+        ],
+        "expected_assertion": "cross entropy saturated instead of tracking the wrong-logit gap",
+        "pytest_summary": "1 failed in 0.50s",
+        "source_sha256": {
+          "lingshu/nn/hex_hier.py": "ebfecd612c69f060e8bb320816d119b6c409754e5278432e7befb8482155dad1"
+        }
+      },
+      {
+        "case": "clip_shape_group_probability",
+        "ok": true,
+        "returncode": 1,
+        "passed": 0,
+        "failed_tests": [
+          "test_shape_auxiliary_loss_retains_low_probability_group"
+        ],
+        "errors": 0,
+        "skipped": 0,
+        "expected_failures": [
+          "test_shape_auxiliary_loss_retains_low_probability_group"
+        ],
+        "expected_assertion": "shape auxiliary objective was clipped or grouped incorrectly",
+        "pytest_summary": "1 failed in 0.44s",
+        "source_sha256": {
+          "lingshu/nn/hex_hier.py": "772b5dfa353964014026b0f8b65772474ca2e19dfcd4d4eec75ee180c1b0e81d"
+        }
+      },
+      {
+        "case": "use_interleaved_shape_classes",
+        "ok": true,
+        "returncode": 1,
+        "passed": 0,
+        "failed_tests": [
+          "test_shape_auxiliary_loss_retains_low_probability_group"
+        ],
+        "errors": 0,
+        "skipped": 0,
+        "expected_failures": [
+          "test_shape_auxiliary_loss_retains_low_probability_group"
+        ],
+        "expected_assertion": "shape auxiliary objective was clipped or grouped incorrectly",
+        "pytest_summary": "1 failed in 0.44s",
+        "source_sha256": {
+          "lingshu/nn/hex_hier.py": "35d530a2c16742b1882333c678d6caf82a648997dfe0e77b8c1c3d931e63c5eb"
+        }
+      }
+    ]
+  },
+  "linux": {
+    "python": "3.13.12",
+    "platform": "Linux",
+    "sqlite": "3.46.1",
+    "baseline": "cad16dc5e142a850c86a88915b76a8aca054d84d",
+    "guard_sha256": "692e810ce9d1a3ce6f252c8a07e6559b9a0ae457242d471711b78f1f992b9aa0",
+    "records": [
+      {
+        "case": "fixed",
+        "ok": true,
+        "returncode": 0,
+        "passed": 9,
+        "failed_tests": [],
+        "errors": 0,
+        "skipped": 0,
+        "expected_failures": [],
+        "expected_assertion": "",
+        "pytest_summary": "9 passed in 0.57s",
+        "source_sha256": {
+          "lingshu/nn/hex_hier.py": "761f376a4d65d407cd7d4a3c33a8eea67e41c37dfc6b8dbcdf7710018c2a93e6"
+        }
+      },
+      {
+        "case": "baseline",
+        "ok": true,
+        "returncode": 1,
+        "passed": 2,
+        "failed_tests": [
+          "test_confident_correct_prediction_has_nonnegative_loss",
+          "test_confident_wrong_logits_do_not_saturate[100.0]",
+          "test_confident_wrong_logits_do_not_saturate[1000.0]",
+          "test_confident_wrong_logits_do_not_saturate[20.0]",
+          "test_confident_wrong_logits_do_not_saturate[50.0]",
+          "test_real_training_updates_a_saturated_wrong_object",
+          "test_shape_auxiliary_loss_retains_low_probability_group"
+        ],
+        "errors": 0,
+        "skipped": 0,
+        "expected_failures": [
+          "test_confident_wrong_logits_do_not_saturate[20.0]",
+          "test_confident_wrong_logits_do_not_saturate[50.0]",
+          "test_confident_wrong_logits_do_not_saturate[100.0]",
+          "test_confident_wrong_logits_do_not_saturate[1000.0]",
+          "test_confident_correct_prediction_has_nonnegative_loss",
+          "test_real_training_updates_a_saturated_wrong_object",
+          "test_shape_auxiliary_loss_retains_low_probability_group"
+        ],
+        "expected_assertion": "",
+        "pytest_summary": "7 failed, 2 passed in 0.75s",
+        "source_sha256": {
+          "lingshu/nn/hex_hier.py": "5279ad131b4054878ea3d8125af8528ed466607ae1103b73d1ebf42fd5d79326"
+        }
+      },
+      {
+        "case": "restore_probability_epsilon_ce",
+        "ok": true,
+        "returncode": 1,
+        "passed": 0,
+        "failed_tests": [
+          "test_confident_wrong_logits_do_not_saturate[100.0]"
+        ],
+        "errors": 0,
+        "skipped": 0,
+        "expected_failures": [
+          "test_confident_wrong_logits_do_not_saturate[100.0]"
+        ],
+        "expected_assertion": "cross entropy saturated instead of tracking the wrong-logit gap",
+        "pytest_summary": "1 failed in 0.52s",
+        "source_sha256": {
+          "lingshu/nn/hex_hier.py": "ebfecd612c69f060e8bb320816d119b6c409754e5278432e7befb8482155dad1"
+        }
+      },
+      {
+        "case": "clip_shape_group_probability",
+        "ok": true,
+        "returncode": 1,
+        "passed": 0,
+        "failed_tests": [
+          "test_shape_auxiliary_loss_retains_low_probability_group"
+        ],
+        "errors": 0,
+        "skipped": 0,
+        "expected_failures": [
+          "test_shape_auxiliary_loss_retains_low_probability_group"
+        ],
+        "expected_assertion": "shape auxiliary objective was clipped or grouped incorrectly",
+        "pytest_summary": "1 failed in 0.55s",
+        "source_sha256": {
+          "lingshu/nn/hex_hier.py": "772b5dfa353964014026b0f8b65772474ca2e19dfcd4d4eec75ee180c1b0e81d"
+        }
+      },
+      {
+        "case": "use_interleaved_shape_classes",
+        "ok": true,
+        "returncode": 1,
+        "passed": 0,
+        "failed_tests": [
+          "test_shape_auxiliary_loss_retains_low_probability_group"
+        ],
+        "errors": 0,
+        "skipped": 0,
+        "expected_failures": [
+          "test_shape_auxiliary_loss_retains_low_probability_group"
+        ],
+        "expected_assertion": "shape auxiliary objective was clipped or grouped incorrectly",
+        "pytest_summary": "1 failed in 0.54s",
+        "source_sha256": {
+          "lingshu/nn/hex_hier.py": "35d530a2c16742b1882333c678d6caf82a648997dfe0e77b8c1c3d931e63c5eb"
+        }
+      }
+    ]
+  }
+}

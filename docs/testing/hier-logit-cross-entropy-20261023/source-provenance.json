@@ -1,0 +1,80 @@
+{
+  "baseline": "cad16dc5e142a850c86a88915b76a8aca054d84d",
+  "sha256_lf": {
+    "lingshu/nn/hex_hier.py": "761f376a4d65d407cd7d4a3c33a8eea67e41c37dfc6b8dbcdf7710018c2a93e6",
+    "tests/test_hier_logit_cross_entropy.py": "692e810ce9d1a3ce6f252c8a07e6559b9a0ae457242d471711b78f1f992b9aa0",
+    "tests/fixtures/hier_logit_cross_entropy_mutations.json": "963434150608501182c856db854d5fbde303fbdb1f1c6fc47aace445c7462d7d"
+  },
+  "runs": {
+    "windows": {
+      "platform": "Windows",
+      "python": "3.12.10",
+      "sqlite": "3.49.1",
+      "baseline": "cad16dc5e142a850c86a88915b76a8aca054d84d",
+      "validated_commit": "7c0e004f287cca561cc55d939eb340f914641f99",
+      "sha256_lf": {
+        "lingshu/nn/hex_hier.py": "761f376a4d65d407cd7d4a3c33a8eea67e41c37dfc6b8dbcdf7710018c2a93e6",
+        "tests/test_hier_logit_cross_entropy.py": "692e810ce9d1a3ce6f252c8a07e6559b9a0ae457242d471711b78f1f992b9aa0",
+        "tests/fixtures/hier_logit_cross_entropy_mutations.json": "963434150608501182c856db854d5fbde303fbdb1f1c6fc47aace445c7462d7d"
+      },
+      "commands": [
+        {
+          "name": "replay",
+          "returncode": 0
+        },
+        {
+          "name": "related",
+          "returncode": 0
+        },
+        {
+          "name": "manifest",
+          "returncode": 0
+        },
+        {
+          "name": "time-core",
+          "returncode": 0
+        }
+      ],
+      "related_total": 5,
+      "related_failures": [],
+      "related_errors": [],
+      "related_skips": [],
+      "owned_test_temp_cleaned": true
+    },
+    "linux": {
+      "platform": "Linux",
+      "python": "3.13.12",
+      "sqlite": "3.46.1",
+      "baseline": "cad16dc5e142a850c86a88915b76a8aca054d84d",
+      "validated_commit": "7c0e004f287cca561cc55d939eb340f914641f99",
+      "sha256_lf": {
+        "lingshu/nn/hex_hier.py": "761f376a4d65d407cd7d4a3c33a8eea67e41c37dfc6b8dbcdf7710018c2a93e6",
+        "tests/test_hier_logit_cross_entropy.py": "692e810ce9d1a3ce6f252c8a07e6559b9a0ae457242d471711b78f1f992b9aa0",
+        "tests/fixtures/hier_logit_cross_entropy_mutations.json": "963434150608501182c856db854d5fbde303fbdb1f1c6fc47aace445c7462d7d"
+      },
+      "commands": [
+        {
+          "name": "replay",
+          "returncode": 0
+        },
+        {
+          "name": "related",
+          "returncode": 0
+        },
+        {
+          "name": "manifest",
+          "returncode": 0
+        },
+        {
+          "name": "time-core",
+          "returncode": 0
+        }
+      ],
+      "related_total": 5,
+      "related_failures": [],
+      "related_errors": [],
+      "related_skips": [],
+      "owned_test_temp_cleaned": true
+    }
+  }
+}
