@@ -1,0 +1,121 @@
+CASE fixed
+........                                                                 [100%]
+8 passed in 0.28s
+
+CASE baseline
+FFFFFF.F                                                                 [100%]
+================================== FAILURES ===================================
+__________________ test_returned_event_mutation_is_detected ___________________
+tests\test_stcnn_write_snapshot.py:16: in test_returned_event_mutation_is_detected
+    assert mem.verify_consistency() is False, 'modified returned event passed the write receipt check'
+E   AssertionError: modified returned event passed the write receipt check
+E   assert True is False
+E    +  where True = verify_consistency()
+E    +    where verify_consistency = <lingshu.nn.stcnn.SpatiotemporalMemory object at 0x0000020AF6890BC0>.verify_consistency
+___________________ test_recall_alias_mutation_is_detected ____________________
+tests\test_stcnn_write_snapshot.py:22: in test_recall_alias_mutation_is_detected
+    assert mem.verify_consistency() is False, 'modified recall alias passed the write receipt check'
+E   AssertionError: modified recall alias passed the write receipt check
+E   assert True is False
+E    +  where True = verify_consistency()
+E    +    where verify_consistency = <lingshu.nn.stcnn.SpatiotemporalMemory object at 0x0000020AF6529E80>.verify_consistency
+____ test_lost_event_is_detected_even_when_recall_matches_remaining_events ____
+tests\test_stcnn_write_snapshot.py:28: in test_lost_event_is_detected_even_when_recall_matches_remaining_events
+    assert mem.verify_consistency() is False, 'lost event was accepted as complete memory'
+E   AssertionError: lost event was accepted as complete memory
+E   assert True is False
+E    +  where True = verify_consistency()
+E    +    where verify_consistency = <lingshu.nn.stcnn.SpatiotemporalMemory object at 0x0000020AFE896DE0>.verify_consistency
+_________________ test_complete_fabricated_event_is_detected __________________
+tests\test_stcnn_write_snapshot.py:34: in test_complete_fabricated_event_is_detected
+    assert mem.verify_consistency() is False, 'complete unwritten event was accepted'
+E   AssertionError: complete unwritten event was accepted
+E   assert True is False
+E    +  where True = verify_consistency()
+E    +    where verify_consistency = <lingshu.nn.stcnn.SpatiotemporalMemory object at 0x0000020AFE897830>.verify_consistency
+_____________________ test_reordered_events_are_detected ______________________
+tests\test_stcnn_write_snapshot.py:40: in test_reordered_events_are_detected
+    assert mem.verify_consistency() is False, 'reordered write history was accepted'
+E   AssertionError: reordered write history was accepted
+E   assert True is False
+E    +  where True = verify_consistency()
+E    +    where verify_consistency = <lingshu.nn.stcnn.SpatiotemporalMemory object at 0x0000020AFE8E5550>.verify_consistency
+__________________ test_nested_label_is_copied_independently __________________
+tests\test_stcnn_write_snapshot.py:48: in test_nested_label_is_copied_independently
+    assert mem.verify_consistency() is False, 'nested label alias changed the independent receipt'
+E   AssertionError: nested label alias changed the independent receipt
+E   assert True is False
+E    +  where True = verify_consistency()
+E    +    where verify_consistency = <lingshu.nn.stcnn.SpatiotemporalMemory object at 0x0000020AFE8E5B80>.verify_consistency
+_____________ test_restoring_original_value_restores_consistency ______________
+tests\test_stcnn_write_snapshot.py:65: in test_restoring_original_value_restores_consistency
+    assert mem.verify_consistency() is False, 'temporary event mutation went undetected'
+E   AssertionError: temporary event mutation went undetected
+E   assert True is False
+E    +  where True = verify_consistency()
+E    +    where verify_consistency = <lingshu.nn.stcnn.SpatiotemporalMemory object at 0x0000020AFE8E6A80>.verify_consistency
+=========================== short test summary info ===========================
+FAILED tests/test_stcnn_write_snapshot.py::test_returned_event_mutation_is_detected
+FAILED tests/test_stcnn_write_snapshot.py::test_recall_alias_mutation_is_detected
+FAILED tests/test_stcnn_write_snapshot.py::test_lost_event_is_detected_even_when_recall_matches_remaining_events
+FAILED tests/test_stcnn_write_snapshot.py::test_complete_fabricated_event_is_detected
+FAILED tests/test_stcnn_write_snapshot.py::test_reordered_events_are_detected
+FAILED tests/test_stcnn_write_snapshot.py::test_nested_label_is_copied_independently
+FAILED tests/test_stcnn_write_snapshot.py::test_restoring_original_value_restores_consistency
+7 failed, 1 passed in 0.39s
+
+CASE compare_only_lengths
+F                                                                        [100%]
+================================== FAILURES ===================================
+__________________ test_returned_event_mutation_is_detected ___________________
+tests\test_stcnn_write_snapshot.py:16: in test_returned_event_mutation_is_detected
+    assert mem.verify_consistency() is False, 'modified returned event passed the write receipt check'
+E   AssertionError: modified returned event passed the write receipt check
+E   assert True is False
+E    +  where True = verify_consistency()
+E    +    where verify_consistency = <lingshu.nn.stcnn.SpatiotemporalMemory object at 0x0000025F86781F40>.verify_consistency
+=========================== short test summary info ===========================
+FAILED tests/test_stcnn_write_snapshot.py::test_returned_event_mutation_is_detected
+1 failed in 0.38s
+
+CASE alias_the_event_receipt
+F                                                                        [100%]
+================================== FAILURES ===================================
+__________________ test_returned_event_mutation_is_detected ___________________
+tests\test_stcnn_write_snapshot.py:16: in test_returned_event_mutation_is_detected
+    assert mem.verify_consistency() is False, 'modified returned event passed the write receipt check'
+E   AssertionError: modified returned event passed the write receipt check
+E   assert True is False
+E    +  where True = verify_consistency()
+E    +    where verify_consistency = <lingshu.nn.stcnn.SpatiotemporalMemory object at 0x0000021FC59DCF50>.verify_consistency
+=========================== short test summary info ===========================
+FAILED tests/test_stcnn_write_snapshot.py::test_returned_event_mutation_is_detected
+1 failed in 0.38s
+
+CASE copy_only_top_level
+F                                                                        [100%]
+================================== FAILURES ===================================
+__________________ test_nested_label_is_copied_independently __________________
+tests\test_stcnn_write_snapshot.py:48: in test_nested_label_is_copied_independently
+    assert mem.verify_consistency() is False, 'nested label alias changed the independent receipt'
+E   AssertionError: nested label alias changed the independent receipt
+E   assert True is False
+E    +  where True = verify_consistency()
+E    +    where verify_consistency = <lingshu.nn.stcnn.SpatiotemporalMemory object at 0x00000216F31CF2C0>.verify_consistency
+=========================== short test summary info ===========================
+FAILED tests/test_stcnn_write_snapshot.py::test_nested_label_is_copied_independently
+1 failed in 0.39s
+
+CASE check_only_surviving_prefix
+F                                                                        [100%]
+================================== FAILURES ===================================
+____ test_lost_event_is_detected_even_when_recall_matches_remaining_events ____
+tests\test_stcnn_write_snapshot.py:28: in test_lost_event_is_detected_even_when_recall_matches_remaining_events
+    assert mem.verify_consistency() is False, 'lost event was accepted as complete memory'
+E   AssertionError: lost event was accepted as complete memory
+E   assert True is False
+E    +  where True = verify_consistency()
+E    +    where verify_consistency = <lingshu.nn.stcnn.SpatiotemporalMemory object at 0x00000208359E4500>.verify_consistency
+=========================== short test summary info ===========================
+FAILED tests/test_stcnn_write_snapshot.py::test_lost_event_is_detected_even_when_recall_matches_remaining_events
+1 failed in 0.39s

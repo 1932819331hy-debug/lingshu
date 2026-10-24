@@ -1,0 +1,80 @@
+{
+  "baseline": "cad16dc5e142a850c86a88915b76a8aca054d84d",
+  "sha256_lf": {
+    "lingshu/nn/stcnn.py": "d42da60a7ab64a0c44b7539f0493739ee7d03b906126f972f3891416b34b5837",
+    "tests/test_stcnn_write_snapshot.py": "d8c4b4f6e4eeb58049dde14bc21f94268fc6e9df55bafafcd53593ebc84dbc8a",
+    "tests/fixtures/stcnn_write_snapshot_mutations.json": "198250f4b65f4ef5c939b5c147a3a44bba5354ec8aacc4d61a414bcedef37fe1"
+  },
+  "runs": {
+    "windows": {
+      "platform": "Windows",
+      "python": "3.12.10",
+      "sqlite": "3.49.1",
+      "baseline": "cad16dc5e142a850c86a88915b76a8aca054d84d",
+      "validated_commit": "eca4524e40eecc8158999e254ab09bc14132bb7e",
+      "sha256_lf": {
+        "lingshu/nn/stcnn.py": "d42da60a7ab64a0c44b7539f0493739ee7d03b906126f972f3891416b34b5837",
+        "tests/test_stcnn_write_snapshot.py": "d8c4b4f6e4eeb58049dde14bc21f94268fc6e9df55bafafcd53593ebc84dbc8a",
+        "tests/fixtures/stcnn_write_snapshot_mutations.json": "198250f4b65f4ef5c939b5c147a3a44bba5354ec8aacc4d61a414bcedef37fe1"
+      },
+      "commands": [
+        {
+          "name": "replay",
+          "returncode": 0
+        },
+        {
+          "name": "related",
+          "returncode": 0
+        },
+        {
+          "name": "manifest",
+          "returncode": 0
+        },
+        {
+          "name": "time-core",
+          "returncode": 0
+        }
+      ],
+      "related_total": 13,
+      "related_failures": [],
+      "related_errors": [],
+      "related_skips": [],
+      "owned_test_temp_cleaned": true
+    },
+    "linux": {
+      "platform": "Linux",
+      "python": "3.13.12",
+      "sqlite": "3.46.1",
+      "baseline": "cad16dc5e142a850c86a88915b76a8aca054d84d",
+      "validated_commit": "eca4524e40eecc8158999e254ab09bc14132bb7e",
+      "sha256_lf": {
+        "lingshu/nn/stcnn.py": "d42da60a7ab64a0c44b7539f0493739ee7d03b906126f972f3891416b34b5837",
+        "tests/test_stcnn_write_snapshot.py": "d8c4b4f6e4eeb58049dde14bc21f94268fc6e9df55bafafcd53593ebc84dbc8a",
+        "tests/fixtures/stcnn_write_snapshot_mutations.json": "198250f4b65f4ef5c939b5c147a3a44bba5354ec8aacc4d61a414bcedef37fe1"
+      },
+      "commands": [
+        {
+          "name": "replay",
+          "returncode": 0
+        },
+        {
+          "name": "related",
+          "returncode": 0
+        },
+        {
+          "name": "manifest",
+          "returncode": 0
+        },
+        {
+          "name": "time-core",
+          "returncode": 0
+        }
+      ],
+      "related_total": 13,
+      "related_failures": [],
+      "related_errors": [],
+      "related_skips": [],
+      "owned_test_temp_cleaned": true
+    }
+  }
+}

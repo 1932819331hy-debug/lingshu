@@ -409,7 +409,7 @@
     {
      "file": "hex_cnn.py",
      "src": "aeis.hex_cnn",
-     "sha256": "d019f7433a7c4953",
+     "sha256": "bee9136a6a886143",
      "rewrites": 0,
      "sanitized": 0,
      "patches": 0,
@@ -442,7 +442,7 @@
     {
      "file": "hex_hier.py",
      "src": "aeis.hex_hier",
-     "sha256": "7bd452b32b05d939",
+     "sha256": "f54e61d10dda98b3",
      "rewrites": 3,
      "sanitized": 0,
      "patches": 0,
@@ -552,7 +552,7 @@
     {
      "file": "stcnn.py",
      "src": "wisdom.stcnn",
-     "sha256": "db481492852e8367",
+     "sha256": "2b73b2e3e3923e10",
      "rewrites": 0,
      "sanitized": 0,
      "patches": 0,

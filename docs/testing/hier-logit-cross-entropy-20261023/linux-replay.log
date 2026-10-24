@@ -1,0 +1,124 @@
+CASE fixed
+.........
+9 passed in 0.57s
+
+CASE baseline
+FFFF..FFF
+=================================== FAILURES ===================================
+______________ test_confident_wrong_logits_do_not_saturate[20.0] _______________
+tests/test_hier_logit_cross_entropy.py:19: in test_confident_wrong_logits_do_not_saturate
+    assert actual == pytest.approx(expected, abs=1e-10), 'cross entropy saturated instead of tracking the wrong-logit gap'
+E   AssertionError: cross entropy saturated instead of tracking the wrong-logit gap
+E   assert 27.63101686758338 == 40.000000014428075 ± 1.0e-10
+E
+E     comparison failed
+E     Obtained: 27.63101686758338
+E     Expected: 40.000000014428075 ± 1.0e-10
+______________ test_confident_wrong_logits_do_not_saturate[50.0] _______________
+tests/test_hier_logit_cross_entropy.py:19: in test_confident_wrong_logits_do_not_saturate
+    assert actual == pytest.approx(expected, abs=1e-10), 'cross entropy saturated instead of tracking the wrong-logit gap'
+E   AssertionError: cross entropy saturated instead of tracking the wrong-logit gap
+E   assert 27.631021115928547 == 100.0 ± 1.0e-10
+E
+E     comparison failed
+E     Obtained: 27.631021115928547
+E     Expected: 100.0 ± 1.0e-10
+______________ test_confident_wrong_logits_do_not_saturate[100.0] ______________
+tests/test_hier_logit_cross_entropy.py:19: in test_confident_wrong_logits_do_not_saturate
+    assert actual == pytest.approx(expected, abs=1e-10), 'cross entropy saturated instead of tracking the wrong-logit gap'
+E   AssertionError: cross entropy saturated instead of tracking the wrong-logit gap
+E   assert 27.631021115928547 == 200.0 ± 1.0e-10
+E
+E     comparison failed
+E     Obtained: 27.631021115928547
+E     Expected: 200.0 ± 1.0e-10
+_____________ test_confident_wrong_logits_do_not_saturate[1000.0] ______________
+tests/test_hier_logit_cross_entropy.py:19: in test_confident_wrong_logits_do_not_saturate
+    assert actual == pytest.approx(expected, abs=1e-10), 'cross entropy saturated instead of tracking the wrong-logit gap'
+E   AssertionError: cross entropy saturated instead of tracking the wrong-logit gap
+E   assert 27.631021115928547 == 2000.0 ± 1.0e-10
+E
+E     comparison failed
+E     Obtained: 27.631021115928547
+E     Expected: 2000.0 ± 1.0e-10
+____________ test_confident_correct_prediction_has_nonnegative_loss ____________
+tests/test_hier_logit_cross_entropy.py:35: in test_confident_correct_prediction_has_nonnegative_loss
+    assert ce_loss(z, [OBJ[0]], INDEX) >= 0., 'perfect prediction produced a negative cross entropy'
+E   AssertionError: perfect prediction produced a negative cross entropy
+E   assert -1.000088900581841e-12 >= 0.0
+E    +  where -1.000088900581841e-12 = ce_loss(array([[ 1000., -1000.,     0.,     0.,     0.,     0.,     0.,     0.,\n            0.]]), ['circle|red'], {'circle|blue': 2, 'circle|green': 1, 'circle|red': 0, 'stripe|blue': 8, ...})
+_____________ test_real_training_updates_a_saturated_wrong_object ______________
+tests/test_hier_logit_cross_entropy.py:57: in test_real_training_updates_a_saturated_wrong_object
+    assert np.count_nonzero(before != net.get_vec()) > 0, 'finite confident wrong prediction could not update any parameter'
+E   AssertionError: finite confident wrong prediction could not update any parameter
+E   assert np.int64(0) > 0
+E    +  where np.int64(0) = <function count_nonzero at 0x7b0d8db4da30>(array([   0.14285715,    0.14285715,    0.14285715,    0.14285715,\n          0.14285715,    0.14285715,    0.14285715,...          0.        ,    0.        ,    0.        ,    0.        ,\n          0.        ,    0.        ,    0.        ]) != array([   0.14285715,    0.14285715,    0.14285715,    0.14285715,\n          0.14285715,    0.14285715,    0.14285715,...          0.        ,    0.        ,    0.        ,    0.        ,\n          0.        ,    0.        ,    0.        ]))
+E    +    where <function count_nonzero at 0x7b0d8db4da30> = np.count_nonzero
+E    +    and   array([   0.14285715,    0.14285715,    0.14285715,    0.14285715,\n          0.14285715,    0.14285715,    0.14285715,...          0.        ,    0.        ,    0.        ,    0.        ,\n          0.        ,    0.        ,    0.        ]) = get_vec()
+E    +      where get_vec = <lingshu.nn.hex_hier.HexHierNet object at 0x7b0d8eb90ad0>.get_vec
+___________ test_shape_auxiliary_loss_retains_low_probability_group ____________
+tests/test_hier_logit_cross_entropy.py:68: in test_shape_auxiliary_loss_retains_low_probability_group
+    assert result['init_D'] == pytest.approx(round(float(d_obj + .5*d_shape), 4), abs=1e-4), 'shape auxiliary objective was clipped or grouped incorrectly'
+E   AssertionError: shape auxiliary objective was clipped or grouped incorrectly
+E   assert 41.4465 == 1499.6535 ± 1.0e-04
+E
+E     comparison failed
+E     Obtained: 41.4465
+E     Expected: 1499.6535 ± 1.0e-04
+=========================== short test summary info ============================
+FAILED tests/test_hier_logit_cross_entropy.py::test_confident_wrong_logits_do_not_saturate[20.0]
+FAILED tests/test_hier_logit_cross_entropy.py::test_confident_wrong_logits_do_not_saturate[50.0]
+FAILED tests/test_hier_logit_cross_entropy.py::test_confident_wrong_logits_do_not_saturate[100.0]
+FAILED tests/test_hier_logit_cross_entropy.py::test_confident_wrong_logits_do_not_saturate[1000.0]
+FAILED tests/test_hier_logit_cross_entropy.py::test_confident_correct_prediction_has_nonnegative_loss
+FAILED tests/test_hier_logit_cross_entropy.py::test_real_training_updates_a_saturated_wrong_object
+FAILED tests/test_hier_logit_cross_entropy.py::test_shape_auxiliary_loss_retains_low_probability_group
+7 failed, 2 passed in 0.75s
+
+CASE restore_probability_epsilon_ce
+F
+=================================== FAILURES ===================================
+______________ test_confident_wrong_logits_do_not_saturate[100.0] ______________
+tests/test_hier_logit_cross_entropy.py:19: in test_confident_wrong_logits_do_not_saturate
+    assert actual == pytest.approx(expected, abs=1e-10), 'cross entropy saturated instead of tracking the wrong-logit gap'
+E   AssertionError: cross entropy saturated instead of tracking the wrong-logit gap
+E   assert 27.631021115928547 == 200.0 ± 1.0e-10
+E
+E     comparison failed
+E     Obtained: 27.631021115928547
+E     Expected: 200.0 ± 1.0e-10
+=========================== short test summary info ============================
+FAILED tests/test_hier_logit_cross_entropy.py::test_confident_wrong_logits_do_not_saturate[100.0]
+1 failed in 0.52s
+
+CASE clip_shape_group_probability
+F
+=================================== FAILURES ===================================
+___________ test_shape_auxiliary_loss_retains_low_probability_group ____________
+tests/test_hier_logit_cross_entropy.py:68: in test_shape_auxiliary_loss_retains_low_probability_group
+    assert result['init_D'] == pytest.approx(round(float(d_obj + .5*d_shape), 4), abs=1e-4), 'shape auxiliary objective was clipped or grouped incorrectly'
+E   AssertionError: shape auxiliary objective was clipped or grouped incorrectly
+E   assert 1213.8155 == 1499.6535 ± 1.0e-04
+E
+E     comparison failed
+E     Obtained: 1213.8155
+E     Expected: 1499.6535 ± 1.0e-04
+=========================== short test summary info ============================
+FAILED tests/test_hier_logit_cross_entropy.py::test_shape_auxiliary_loss_retains_low_probability_group
+1 failed in 0.55s
+
+CASE use_interleaved_shape_classes
+F
+=================================== FAILURES ===================================
+___________ test_shape_auxiliary_loss_retains_low_probability_group ____________
+tests/test_hier_logit_cross_entropy.py:68: in test_shape_auxiliary_loss_retains_low_probability_group
+    assert result['init_D'] == pytest.approx(round(float(d_obj + .5*d_shape), 4), abs=1e-4), 'shape auxiliary objective was clipped or grouped incorrectly'
+E   AssertionError: shape auxiliary objective was clipped or grouped incorrectly
+E   assert 1200.0 == 1499.6535 ± 1.0e-04
+E
+E     comparison failed
+E     Obtained: 1200.0
+E     Expected: 1499.6535 ± 1.0e-04
+=========================== short test summary info ============================
+FAILED tests/test_hier_logit_cross_entropy.py::test_shape_auxiliary_loss_retains_low_probability_group
+1 failed in 0.54s

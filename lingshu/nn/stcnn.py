@@ -6,6 +6,8 @@
 零依赖：纯 numpy 确定性实现（D-005 核心零外部依赖哲学）。
 """
 import sys
+from copy import deepcopy
+
 import numpy as np
 sys.stdout.reconfigure(encoding='utf-8')
 
@@ -277,6 +279,7 @@ class SpatiotemporalMemory:
     def __init__(self):
         """时空卷积网络层级参数初始化。"""
         self.events = []  # {t_start, t_end, direction, speed, period, label}
+        self._written = []  # Independent snapshots; mutable recall aliases are not a baseline.
 
     def remember(self, prims, label, t_start=0):
         """把一次「看见」的时空原语写为记忆事件（时空锚点）。
@@ -303,7 +306,9 @@ class SpatiotemporalMemory:
             "moving": prims.get("moving", False),
             "label": label,
         }
+        written = deepcopy(event)  # Copy before either list is published.
         self.events.append(event)
+        self._written.append(written)
         return event
 
     def recall(self, query=None):
@@ -332,8 +337,12 @@ class SpatiotemporalMemory:
           ② 每条已记事件具备时空锚点必备字段（_EVENT_FIELDS）；
           ③ 每条已记事件都能被 recall 以该事件自身字段查询**命中**（召回可达性）；
           ④ 每条回忆出的事件确实是 self.events 中的同一对象（无凭空多出的幻觉事件）。
+        ⑤ 事件与 remember 时的独立深快照逐条相同（#302 残余）：改写、丢失、
+          换序或完整伪事件不能通过自检。快照是进程内基准，不是持久审计/安全防篡改。
         任一条不成立即判不一致（返回 False），不再恒真。
         """
+        if self.events != self._written:
+            return False
         recalled = self.recall()
         if len(recalled) != len(self.events):
             return False

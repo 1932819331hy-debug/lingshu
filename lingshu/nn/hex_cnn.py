@@ -144,6 +144,8 @@ def hex_conv(feature: np.ndarray, kernel7: np.ndarray,
     边界：出界邻取自身值（edge-replicate 的蜂窝版，保结构）。"""
     rows, cols, C = feature.shape
     k = np.asarray(kernel7, dtype=np.float32)
+    if k.shape not in ((7,), (C, 7)):
+        raise ValueError("kernel7 must have shape (7,) or (C, 7)")
     if k.ndim == 1:
         k = np.tile(k, (C, 1))          # (C,7) 共享核
     out = np.zeros_like(feature, dtype=np.float32)
@@ -329,6 +331,21 @@ def selfsup_finetune(img_arr: np.ndarray, kernel_name: str = "center_surround",
             "loss_curve": loss_curve, "algo": ALGO, "epochs": epochs, "lr": lr}
 
 
+def _consolidated_kernel(name: str, values) -> np.ndarray:
+    """固化格式只保存一维共享核；保留六位小数写入前的原始精度。"""
+    message = f"kernel {name!r} must contain seven finite float32 weights"
+    try:
+        k = np.asarray(values, dtype=np.float64)
+    except (TypeError, ValueError, OverflowError) as exc:
+        raise ValueError(message) from exc
+    with np.errstate(over="ignore", invalid="ignore"):
+        valid = (k.shape == (7,) and np.isfinite(k).all()
+                 and np.isfinite(k.astype(np.float32)).all())
+    if not valid:
+        raise ValueError(message)
+    return k
+
+
 def save_consolidated(kernels: Dict[str, np.ndarray], meta: Dict, path: str) -> str:
     """白箱固化：学完的核参数 + 训练元数据落盘（JSON——可直读可审计）。
 
@@ -350,11 +367,15 @@ def save_consolidated(kernels: Dict[str, np.ndarray], meta: Dict, path: str) -> 
 
     # #349：`kernels` / `consolidated` 是本档的结构字段，meta 里的同名键不得覆盖
     # （旧实现 `**meta` 后置展开 ⇒ meta 带 `kernels` 时落盘 kernels={}、学习核全丢）。
+    # #895 正交合成：落盘前逐核过 `_consolidated_kernel` 契约（一维 7 有限参数，
+    # 违者当场 ValueError——与 load 侧 fail-closed 对称）。
     payload = {"algo": ALGO, "consolidated": True,
-               "kernels": {k: [round(float(x), 6) for x in v] for k, v in kernels.items()}}
+               "kernels": {k: [round(float(x), 6) for x in _consolidated_kernel(k, v)]
+                           for k, v in kernels.items()}}
     for mk, mv in meta.items():
-        if mk in ("kernels", "consolidated"):
-            payload.setdefault("_meta_%s" % mk, mv)   # 保留信息但不冒充结构字段
+        if mk in ("kernels", "consolidated", "algo"):
+            # #895：algo 亦属结构字段（固化档的算法标识），meta 同名键不覆盖
+            payload.setdefault("_meta_%s" % mk, mv)
         else:
             payload[mk] = mv
     target = os.path.realpath(path)
@@ -403,15 +424,20 @@ def load_consolidated(path: str) -> Dict[str, np.ndarray]:
     """
     with open(path, encoding="utf-8") as f:
         payload = json.load(f)
+    # #349（main 侧口径，保留）＋ #895 正交合成：结构标记/kernels 形状/逐核 7 参数
+    # 三闸保留（消息含路径与实际 shape，便于定位坏档）；坏核改经 `_consolidated_kernel`
+    # 做有限性核对（两侧判据并集：形状 + 有限性，fail-closed 对称于 save 侧）。
     if not isinstance(payload, dict) or payload.get("consolidated") is not True:
         raise ValueError("固化核档 %s 缺少 consolidated=true 标记，不是固化档" % path)
     kernels = payload.get("kernels")
     if not isinstance(kernels, dict) or not kernels:
-        raise ValueError("固化核档 %s 的 kernels 缺失或为空" % path)
+        # #895：消息带 'consolidated'——坏 envelope（含 kernels 为列表/缺失）都属
+        # 「固化标记/结构不成立」同一族，消费方按同一关键字过滤。
+        raise ValueError("固化核档 %s 的 kernels 缺失或为空（consolidated 结构不成立）" % path)
     out: Dict[str, np.ndarray] = {}
     for k, v in kernels.items():
-        arr = np.array(v, dtype=np.float32)
-        if arr.ndim != 1 or arr.shape[0] != 7:
+        arr = _consolidated_kernel(k, v).astype(np.float32)
+        if arr.shape != (7,):
             raise ValueError(
                 "固化核 %r 需为一维 7 参数（hex_conv 契约），实得 shape=%r（%s）"
                 % (k, arr.shape, path))

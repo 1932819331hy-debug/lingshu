@@ -1,0 +1,264 @@
+{
+  "windows": {
+    "python": "3.12.10",
+    "platform": "Windows",
+    "sqlite": "3.49.1",
+    "baseline": "cad16dc5e142a850c86a88915b76a8aca054d84d",
+    "guard_sha256": "d8c4b4f6e4eeb58049dde14bc21f94268fc6e9df55bafafcd53593ebc84dbc8a",
+    "records": [
+      {
+        "case": "fixed",
+        "ok": true,
+        "returncode": 0,
+        "passed": 8,
+        "failed_tests": [],
+        "errors": 0,
+        "skipped": 0,
+        "expected_failures": [],
+        "expected_assertion": "",
+        "pytest_summary": "8 passed in 0.28s",
+        "source_sha256": {
+          "lingshu/nn/stcnn.py": "d42da60a7ab64a0c44b7539f0493739ee7d03b906126f972f3891416b34b5837"
+        }
+      },
+      {
+        "case": "baseline",
+        "ok": true,
+        "returncode": 1,
+        "passed": 1,
+        "failed_tests": [
+          "test_complete_fabricated_event_is_detected",
+          "test_lost_event_is_detected_even_when_recall_matches_remaining_events",
+          "test_nested_label_is_copied_independently",
+          "test_recall_alias_mutation_is_detected",
+          "test_reordered_events_are_detected",
+          "test_restoring_original_value_restores_consistency",
+          "test_returned_event_mutation_is_detected"
+        ],
+        "errors": 0,
+        "skipped": 0,
+        "expected_failures": [
+          "test_returned_event_mutation_is_detected",
+          "test_recall_alias_mutation_is_detected",
+          "test_lost_event_is_detected_even_when_recall_matches_remaining_events",
+          "test_complete_fabricated_event_is_detected",
+          "test_reordered_events_are_detected",
+          "test_nested_label_is_copied_independently",
+          "test_restoring_original_value_restores_consistency"
+        ],
+        "expected_assertion": "",
+        "pytest_summary": "7 failed, 1 passed in 0.39s",
+        "source_sha256": {
+          "lingshu/nn/stcnn.py": "ac142fde843d02d88037c59853833de3056192b6cb8083923dfa876f640e0834"
+        }
+      },
+      {
+        "case": "compare_only_lengths",
+        "ok": true,
+        "returncode": 1,
+        "passed": 0,
+        "failed_tests": [
+          "test_returned_event_mutation_is_detected"
+        ],
+        "errors": 0,
+        "skipped": 0,
+        "expected_failures": [
+          "test_returned_event_mutation_is_detected"
+        ],
+        "expected_assertion": "modified returned event passed the write receipt check",
+        "pytest_summary": "1 failed in 0.38s",
+        "source_sha256": {
+          "lingshu/nn/stcnn.py": "4e2f266bfba1e4f5f98ab02e657325413820afcaa687984ff88bf4a95617e6b9"
+        }
+      },
+      {
+        "case": "alias_the_event_receipt",
+        "ok": true,
+        "returncode": 1,
+        "passed": 0,
+        "failed_tests": [
+          "test_returned_event_mutation_is_detected"
+        ],
+        "errors": 0,
+        "skipped": 0,
+        "expected_failures": [
+          "test_returned_event_mutation_is_detected"
+        ],
+        "expected_assertion": "modified returned event passed the write receipt check",
+        "pytest_summary": "1 failed in 0.38s",
+        "source_sha256": {
+          "lingshu/nn/stcnn.py": "0e1a4be571d92a1e1e2e7402d44082520037e28ab59389c00a67a400644c4a11"
+        }
+      },
+      {
+        "case": "copy_only_top_level",
+        "ok": true,
+        "returncode": 1,
+        "passed": 0,
+        "failed_tests": [
+          "test_nested_label_is_copied_independently"
+        ],
+        "errors": 0,
+        "skipped": 0,
+        "expected_failures": [
+          "test_nested_label_is_copied_independently"
+        ],
+        "expected_assertion": "nested label alias changed the independent receipt",
+        "pytest_summary": "1 failed in 0.39s",
+        "source_sha256": {
+          "lingshu/nn/stcnn.py": "4d6e52d32b80fdc91fb67d139688a35dd1f018f4e894dbdf196ff42275f71924"
+        }
+      },
+      {
+        "case": "check_only_surviving_prefix",
+        "ok": true,
+        "returncode": 1,
+        "passed": 0,
+        "failed_tests": [
+          "test_lost_event_is_detected_even_when_recall_matches_remaining_events"
+        ],
+        "errors": 0,
+        "skipped": 0,
+        "expected_failures": [
+          "test_lost_event_is_detected_even_when_recall_matches_remaining_events"
+        ],
+        "expected_assertion": "lost event was accepted as complete memory",
+        "pytest_summary": "1 failed in 0.39s",
+        "source_sha256": {
+          "lingshu/nn/stcnn.py": "9c2ff986c44bffd55c61ae5227374e51330dc79da3e00c32bf0b3aa36daebf10"
+        }
+      }
+    ]
+  },
+  "linux": {
+    "python": "3.13.12",
+    "platform": "Linux",
+    "sqlite": "3.46.1",
+    "baseline": "cad16dc5e142a850c86a88915b76a8aca054d84d",
+    "guard_sha256": "d8c4b4f6e4eeb58049dde14bc21f94268fc6e9df55bafafcd53593ebc84dbc8a",
+    "records": [
+      {
+        "case": "fixed",
+        "ok": true,
+        "returncode": 0,
+        "passed": 8,
+        "failed_tests": [],
+        "errors": 0,
+        "skipped": 0,
+        "expected_failures": [],
+        "expected_assertion": "",
+        "pytest_summary": "8 passed in 0.43s",
+        "source_sha256": {
+          "lingshu/nn/stcnn.py": "d42da60a7ab64a0c44b7539f0493739ee7d03b906126f972f3891416b34b5837"
+        }
+      },
+      {
+        "case": "baseline",
+        "ok": true,
+        "returncode": 1,
+        "passed": 1,
+        "failed_tests": [
+          "test_complete_fabricated_event_is_detected",
+          "test_lost_event_is_detected_even_when_recall_matches_remaining_events",
+          "test_nested_label_is_copied_independently",
+          "test_recall_alias_mutation_is_detected",
+          "test_reordered_events_are_detected",
+          "test_restoring_original_value_restores_consistency",
+          "test_returned_event_mutation_is_detected"
+        ],
+        "errors": 0,
+        "skipped": 0,
+        "expected_failures": [
+          "test_returned_event_mutation_is_detected",
+          "test_recall_alias_mutation_is_detected",
+          "test_lost_event_is_detected_even_when_recall_matches_remaining_events",
+          "test_complete_fabricated_event_is_detected",
+          "test_reordered_events_are_detected",
+          "test_nested_label_is_copied_independently",
+          "test_restoring_original_value_restores_consistency"
+        ],
+        "expected_assertion": "",
+        "pytest_summary": "7 failed, 1 passed in 0.60s",
+        "source_sha256": {
+          "lingshu/nn/stcnn.py": "ac142fde843d02d88037c59853833de3056192b6cb8083923dfa876f640e0834"
+        }
+      },
+      {
+        "case": "compare_only_lengths",
+        "ok": true,
+        "returncode": 1,
+        "passed": 0,
+        "failed_tests": [
+          "test_returned_event_mutation_is_detected"
+        ],
+        "errors": 0,
+        "skipped": 0,
+        "expected_failures": [
+          "test_returned_event_mutation_is_detected"
+        ],
+        "expected_assertion": "modified returned event passed the write receipt check",
+        "pytest_summary": "1 failed in 0.45s",
+        "source_sha256": {
+          "lingshu/nn/stcnn.py": "4e2f266bfba1e4f5f98ab02e657325413820afcaa687984ff88bf4a95617e6b9"
+        }
+      },
+      {
+        "case": "alias_the_event_receipt",
+        "ok": true,
+        "returncode": 1,
+        "passed": 0,
+        "failed_tests": [
+          "test_returned_event_mutation_is_detected"
+        ],
+        "errors": 0,
+        "skipped": 0,
+        "expected_failures": [
+          "test_returned_event_mutation_is_detected"
+        ],
+        "expected_assertion": "modified returned event passed the write receipt check",
+        "pytest_summary": "1 failed in 0.45s",
+        "source_sha256": {
+          "lingshu/nn/stcnn.py": "0e1a4be571d92a1e1e2e7402d44082520037e28ab59389c00a67a400644c4a11"
+        }
+      },
+      {
+        "case": "copy_only_top_level",
+        "ok": true,
+        "returncode": 1,
+        "passed": 0,
+        "failed_tests": [
+          "test_nested_label_is_copied_independently"
+        ],
+        "errors": 0,
+        "skipped": 0,
+        "expected_failures": [
+          "test_nested_label_is_copied_independently"
+        ],
+        "expected_assertion": "nested label alias changed the independent receipt",
+        "pytest_summary": "1 failed in 0.44s",
+        "source_sha256": {
+          "lingshu/nn/stcnn.py": "4d6e52d32b80fdc91fb67d139688a35dd1f018f4e894dbdf196ff42275f71924"
+        }
+      },
+      {
+        "case": "check_only_surviving_prefix",
+        "ok": true,
+        "returncode": 1,
+        "passed": 0,
+        "failed_tests": [
+          "test_lost_event_is_detected_even_when_recall_matches_remaining_events"
+        ],
+        "errors": 0,
+        "skipped": 0,
+        "expected_failures": [
+          "test_lost_event_is_detected_even_when_recall_matches_remaining_events"
+        ],
+        "expected_assertion": "lost event was accepted as complete memory",
+        "pytest_summary": "1 failed in 0.44s",
+        "source_sha256": {
+          "lingshu/nn/stcnn.py": "9c2ff986c44bffd55c61ae5227374e51330dc79da3e00c32bf0b3aa36daebf10"
+        }
+      }
+    ]
+  }
+}

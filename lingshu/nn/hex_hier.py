@@ -258,10 +258,16 @@ def softmax(z: np.ndarray) -> np.ndarray:
     return e / e.sum(axis=-1, keepdims=True)
 
 
+def _logsumexp(z: np.ndarray, axis: int = -1) -> np.ndarray:
+    maximum = z.max(axis=axis, keepdims=True)
+    return np.squeeze(maximum, axis=axis) + np.log(np.exp(z - maximum).sum(axis=axis))
+
+
 def ce_loss(logits: np.ndarray, y: np.ndarray, idx: Dict[str, int]) -> float:
-    p = softmax(logits)
+    """Logit-domain cross entropy: finite wrong logits retain correction signal (#332)."""
+    z = logits - logits.max(axis=1, keepdims=True)
     yi = np.array([idx[v] for v in y])
-    return float(-np.log(p[np.arange(len(yi)), yi] + 1e-12).mean())
+    return float((_logsumexp(z) - z[np.arange(len(yi)), yi]).mean())
 
 
 # ==================== 分层信息差门控训练 ====================
@@ -283,12 +289,12 @@ def train_hier(net: HexHierNet, lat: np.ndarray, labels: Dict[str, np.ndarray],
         sf, cf = net.l2_features(xb)
         logits = net.l3_logits(sf, cf)
         # 物体 CE + 形状辅助 CE(从物体 logits 边缘化:9→3 分组求和)
-        p = softmax(logits)
-        p_shape = np.stack([p[:, i * 3:(i + 1) * 3].sum(axis=1)
-                            for i in range(3)], axis=1)   # obj 顺序 shape|color(每形状连续 3 类)
+        z = logits - logits.max(axis=1, keepdims=True)
+        grouped = z.reshape(len(z), 3, 3)  # shape|color: three contiguous colors per shape
         sh_idx = np.array([shape_idx[v] for v in sb])
         d_obj = ce_loss(logits, ob, obj_idx)
-        d_shape = float(-np.log(p_shape[np.arange(len(sh_idx)), sh_idx] + 1e-12).mean())
+        true_group = grouped[np.arange(len(sh_idx)), sh_idx]
+        d_shape = float((_logsumexp(z) - _logsumexp(true_group)).mean())
         return d_obj + 0.5 * d_shape
 
     d0 = joint_loss(lat[:batch], labels["shape"][:batch], labels["obj"][:batch])
