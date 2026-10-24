@@ -373,8 +373,9 @@ def save_consolidated(kernels: Dict[str, np.ndarray], meta: Dict, path: str) -> 
                "kernels": {k: [round(float(x), 6) for x in _consolidated_kernel(k, v)]
                            for k, v in kernels.items()}}
     for mk, mv in meta.items():
-        if mk in ("kernels", "consolidated"):
-            payload.setdefault("_meta_%s" % mk, mv)   # 保留信息但不冒充结构字段
+        if mk in ("kernels", "consolidated", "algo"):
+            # #895：algo 亦属结构字段（固化档的算法标识），meta 同名键不覆盖
+            payload.setdefault("_meta_%s" % mk, mv)
         else:
             payload[mk] = mv
     target = os.path.realpath(path)
@@ -430,7 +431,9 @@ def load_consolidated(path: str) -> Dict[str, np.ndarray]:
         raise ValueError("固化核档 %s 缺少 consolidated=true 标记，不是固化档" % path)
     kernels = payload.get("kernels")
     if not isinstance(kernels, dict) or not kernels:
-        raise ValueError("固化核档 %s 的 kernels 缺失或为空" % path)
+        # #895：消息带 'consolidated'——坏 envelope（含 kernels 为列表/缺失）都属
+        # 「固化标记/结构不成立」同一族，消费方按同一关键字过滤。
+        raise ValueError("固化核档 %s 的 kernels 缺失或为空（consolidated 结构不成立）" % path)
     out: Dict[str, np.ndarray] = {}
     for k, v in kernels.items():
         arr = _consolidated_kernel(k, v).astype(np.float32)
