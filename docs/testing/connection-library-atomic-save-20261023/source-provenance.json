@@ -1,0 +1,78 @@
+{
+  "baseline": "cad16dc5e142a850c86a88915b76a8aca054d84d",
+  "sha256_lf": {
+    "lingshu/nn/hex_query.py": "2717cd646df02ec4165e505e307264f5c77a05008083c4e27a266aa47d23d248",
+    "tests/test_connection_library_atomic_save.py": "1bb03faeeea4ebb8d8b9f621bd76a5c1376b1a0121e587f37095fd780ba1ec9d",
+    "tests/fixtures/connection_library_atomic_save_mutations.json": "8c673525d8154db266741fe66d1f54ad5bc198dcc660ee367ab9f6d7c2d31a77"
+  },
+  "runs": {
+    "windows": {
+      "platform": "Windows",
+      "python": "3.12.10",
+      "sqlite": "3.49.1",
+      "baseline": "cad16dc5e142a850c86a88915b76a8aca054d84d",
+      "validated_commit": "105b49006c0e546611278df472708365470e54dd",
+      "sha256_lf": {
+        "lingshu/nn/hex_query.py": "2717cd646df02ec4165e505e307264f5c77a05008083c4e27a266aa47d23d248",
+        "tests/test_connection_library_atomic_save.py": "1bb03faeeea4ebb8d8b9f621bd76a5c1376b1a0121e587f37095fd780ba1ec9d",
+        "tests/fixtures/connection_library_atomic_save_mutations.json": "8c673525d8154db266741fe66d1f54ad5bc198dcc660ee367ab9f6d7c2d31a77"
+      },
+      "commands": [
+        {
+          "name": "replay",
+          "returncode": 0
+        },
+        {
+          "name": "related",
+          "returncode": 0
+        },
+        {
+          "name": "manifest",
+          "returncode": 0
+        },
+        {
+          "name": "time-core",
+          "returncode": 0
+        }
+      ],
+      "related_total": 10,
+      "related_failures": [],
+      "related_errors": [],
+      "related_skips": []
+    },
+    "linux": {
+      "platform": "Linux",
+      "python": "3.13.12",
+      "sqlite": "3.46.1",
+      "baseline": "cad16dc5e142a850c86a88915b76a8aca054d84d",
+      "validated_commit": "105b49006c0e546611278df472708365470e54dd",
+      "sha256_lf": {
+        "lingshu/nn/hex_query.py": "2717cd646df02ec4165e505e307264f5c77a05008083c4e27a266aa47d23d248",
+        "tests/test_connection_library_atomic_save.py": "1bb03faeeea4ebb8d8b9f621bd76a5c1376b1a0121e587f37095fd780ba1ec9d",
+        "tests/fixtures/connection_library_atomic_save_mutations.json": "8c673525d8154db266741fe66d1f54ad5bc198dcc660ee367ab9f6d7c2d31a77"
+      },
+      "commands": [
+        {
+          "name": "replay",
+          "returncode": 0
+        },
+        {
+          "name": "related",
+          "returncode": 0
+        },
+        {
+          "name": "manifest",
+          "returncode": 0
+        },
+        {
+          "name": "time-core",
+          "returncode": 0
+        }
+      ],
+      "related_total": 10,
+      "related_failures": [],
+      "related_errors": [],
+      "related_skips": []
+    }
+  }
+}

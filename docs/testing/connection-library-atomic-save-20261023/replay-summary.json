@@ -1,0 +1,222 @@
+{
+  "windows": {
+    "python": "3.12.10",
+    "platform": "Windows",
+    "sqlite": "3.49.1",
+    "baseline": "cad16dc5e142a850c86a88915b76a8aca054d84d",
+    "guard_sha256": "1bb03faeeea4ebb8d8b9f621bd76a5c1376b1a0121e587f37095fd780ba1ec9d",
+    "records": [
+      {
+        "case": "fixed",
+        "ok": true,
+        "returncode": 0,
+        "passed": 8,
+        "failed_tests": [],
+        "errors": 0,
+        "skipped": 0,
+        "expected_failures": [],
+        "expected_assertion": "",
+        "pytest_summary": "8 passed in 0.40s",
+        "source_sha256": {
+          "lingshu/nn/hex_query.py": "2717cd646df02ec4165e505e307264f5c77a05008083c4e27a266aa47d23d248"
+        }
+      },
+      {
+        "case": "baseline",
+        "ok": true,
+        "returncode": 1,
+        "passed": 2,
+        "failed_tests": [
+          "test_concurrent_saves_publish_only_complete_owned_files",
+          "test_exclusive_name_collision_never_consumes_another_file",
+          "test_failed_new_save_leaves_no_target",
+          "test_replace_failure_keeps_old_file_and_cleans_owned_temp",
+          "test_serialization_failure_preserves_existing_library",
+          "test_write_failure_preserves_existing_bytes"
+        ],
+        "errors": 0,
+        "skipped": 0,
+        "expected_failures": [
+          "test_serialization_failure_preserves_existing_library",
+          "test_failed_new_save_leaves_no_target",
+          "test_write_failure_preserves_existing_bytes",
+          "test_replace_failure_keeps_old_file_and_cleans_owned_temp",
+          "test_exclusive_name_collision_never_consumes_another_file",
+          "test_concurrent_saves_publish_only_complete_owned_files"
+        ],
+        "expected_assertion": "",
+        "pytest_summary": "6 failed, 2 passed in 3.54s",
+        "source_sha256": {
+          "lingshu/nn/hex_query.py": "d2413453b792145f6938320e153a92f01dd2e50497eb74ec83407471f2befc16"
+        }
+      },
+      {
+        "case": "truncate_the_target_while_serializing",
+        "ok": true,
+        "returncode": 1,
+        "passed": 0,
+        "failed_tests": [
+          "test_serialization_failure_preserves_existing_library"
+        ],
+        "errors": 0,
+        "skipped": 0,
+        "expected_failures": [
+          "test_serialization_failure_preserves_existing_library"
+        ],
+        "expected_assertion": "failed serialization destroyed the previous connection library",
+        "pytest_summary": "1 failed in 0.47s",
+        "source_sha256": {
+          "lingshu/nn/hex_query.py": "fd9be0442414e3c6aeecb67096e909f1ed5f219d5d5c019abe5c035aa953d9ac"
+        }
+      },
+      {
+        "case": "allow_temp_name_reuse",
+        "ok": true,
+        "returncode": 1,
+        "passed": 0,
+        "failed_tests": [
+          "test_exclusive_name_collision_never_consumes_another_file"
+        ],
+        "errors": 0,
+        "skipped": 0,
+        "expected_failures": [
+          "test_exclusive_name_collision_never_consumes_another_file"
+        ],
+        "expected_assertion": "DID NOT RAISE",
+        "pytest_summary": "1 failed in 0.44s",
+        "source_sha256": {
+          "lingshu/nn/hex_query.py": "f0a96ec8577160fe5277b31593b402b8ef7cdbda49d797b5ca11884002bc1ed1"
+        }
+      },
+      {
+        "case": "leave_failed_first_save_published",
+        "ok": true,
+        "returncode": 1,
+        "passed": 0,
+        "failed_tests": [
+          "test_failed_new_save_leaves_no_target"
+        ],
+        "errors": 0,
+        "skipped": 0,
+        "expected_failures": [
+          "test_failed_new_save_leaves_no_target"
+        ],
+        "expected_assertion": "failed first save published a partial library",
+        "pytest_summary": "1 failed in 0.45s",
+        "source_sha256": {
+          "lingshu/nn/hex_query.py": "fd9be0442414e3c6aeecb67096e909f1ed5f219d5d5c019abe5c035aa953d9ac"
+        }
+      }
+    ]
+  },
+  "linux": {
+    "python": "3.13.12",
+    "platform": "Linux",
+    "sqlite": "3.46.1",
+    "baseline": "cad16dc5e142a850c86a88915b76a8aca054d84d",
+    "guard_sha256": "1bb03faeeea4ebb8d8b9f621bd76a5c1376b1a0121e587f37095fd780ba1ec9d",
+    "records": [
+      {
+        "case": "fixed",
+        "ok": true,
+        "returncode": 0,
+        "passed": 8,
+        "failed_tests": [],
+        "errors": 0,
+        "skipped": 0,
+        "expected_failures": [],
+        "expected_assertion": "",
+        "pytest_summary": "8 passed in 0.92s",
+        "source_sha256": {
+          "lingshu/nn/hex_query.py": "2717cd646df02ec4165e505e307264f5c77a05008083c4e27a266aa47d23d248"
+        }
+      },
+      {
+        "case": "baseline",
+        "ok": true,
+        "returncode": 1,
+        "passed": 2,
+        "failed_tests": [
+          "test_concurrent_saves_publish_only_complete_owned_files",
+          "test_exclusive_name_collision_never_consumes_another_file",
+          "test_failed_new_save_leaves_no_target",
+          "test_replace_failure_keeps_old_file_and_cleans_owned_temp",
+          "test_serialization_failure_preserves_existing_library",
+          "test_write_failure_preserves_existing_bytes"
+        ],
+        "errors": 0,
+        "skipped": 0,
+        "expected_failures": [
+          "test_serialization_failure_preserves_existing_library",
+          "test_failed_new_save_leaves_no_target",
+          "test_write_failure_preserves_existing_bytes",
+          "test_replace_failure_keeps_old_file_and_cleans_owned_temp",
+          "test_exclusive_name_collision_never_consumes_another_file",
+          "test_concurrent_saves_publish_only_complete_owned_files"
+        ],
+        "expected_assertion": "",
+        "pytest_summary": "6 failed, 2 passed in 3.86s",
+        "source_sha256": {
+          "lingshu/nn/hex_query.py": "d2413453b792145f6938320e153a92f01dd2e50497eb74ec83407471f2befc16"
+        }
+      },
+      {
+        "case": "truncate_the_target_while_serializing",
+        "ok": true,
+        "returncode": 1,
+        "passed": 0,
+        "failed_tests": [
+          "test_serialization_failure_preserves_existing_library"
+        ],
+        "errors": 0,
+        "skipped": 0,
+        "expected_failures": [
+          "test_serialization_failure_preserves_existing_library"
+        ],
+        "expected_assertion": "failed serialization destroyed the previous connection library",
+        "pytest_summary": "1 failed in 0.51s",
+        "source_sha256": {
+          "lingshu/nn/hex_query.py": "fd9be0442414e3c6aeecb67096e909f1ed5f219d5d5c019abe5c035aa953d9ac"
+        }
+      },
+      {
+        "case": "allow_temp_name_reuse",
+        "ok": true,
+        "returncode": 1,
+        "passed": 0,
+        "failed_tests": [
+          "test_exclusive_name_collision_never_consumes_another_file"
+        ],
+        "errors": 0,
+        "skipped": 0,
+        "expected_failures": [
+          "test_exclusive_name_collision_never_consumes_another_file"
+        ],
+        "expected_assertion": "DID NOT RAISE",
+        "pytest_summary": "1 failed in 0.51s",
+        "source_sha256": {
+          "lingshu/nn/hex_query.py": "f0a96ec8577160fe5277b31593b402b8ef7cdbda49d797b5ca11884002bc1ed1"
+        }
+      },
+      {
+        "case": "leave_failed_first_save_published",
+        "ok": true,
+        "returncode": 1,
+        "passed": 0,
+        "failed_tests": [
+          "test_failed_new_save_leaves_no_target"
+        ],
+        "errors": 0,
+        "skipped": 0,
+        "expected_failures": [
+          "test_failed_new_save_leaves_no_target"
+        ],
+        "expected_assertion": "failed first save published a partial library",
+        "pytest_summary": "1 failed in 0.49s",
+        "source_sha256": {
+          "lingshu/nn/hex_query.py": "fd9be0442414e3c6aeecb67096e909f1ed5f219d5d5c019abe5c035aa953d9ac"
+        }
+      }
+    ]
+  }
+}
