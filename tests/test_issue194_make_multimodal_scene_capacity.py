@@ -33,7 +33,7 @@ import pytest  # noqa: E402
 from lingshu.nn import hex_text as ht  # noqa: E402
 
 TIMEOUT_S = 15
-_PROBE = _os.path.join(_RP, 'tests', '_issue194_child_probe.py')
+_PROBE = _os.path.join(_RP, 'tools', '_issue194_child_probe.py')
 
 assert _os.path.isfile(_PROBE), '子进程探针缺失: %s' % _PROBE
 
