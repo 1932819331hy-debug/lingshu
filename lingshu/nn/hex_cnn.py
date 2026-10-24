@@ -248,7 +248,19 @@ def extended_prior_family(n: int) -> List[np.ndarray]:
         if any(np.array_equal(cand, ex) for ex in fam):
             continue                                     # 仍重合 ⇒ 换下一档
         fam.append(cand)
-    return fam[:n]
+    # #940 fail-closed（#958 的**唯一增量**，不碰上面任何算法）：
+    #   main 的做法是「重合就换下一档」，但没有**最终**校验 ——
+    #   若 amp 用尽（极端 n）仍重合，会静默返回重复族，
+    #   「声明互异」与「实际互异」再次脱钩（这正是 #940 的缺陷本体）。
+    #   这里在返回前复核一遍：真出现同形核就 raise，不静默。
+    out = fam[:n]
+    for a in range(len(out)):
+        for b in range(a + 1, len(out)):
+            if np.array_equal(out[a], out[b]):
+                raise ValueError(
+                    f"extended_prior_family({n})：idx {a} 与 idx {b} 逐位相同，"
+                    f"核族互异性被破坏（不应发生，请检查变体构造）")
+    return out
 
 
 DEFAULT_KERNELS: Dict[str, np.ndarray] = {
