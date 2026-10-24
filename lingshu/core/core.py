@@ -2875,7 +2875,15 @@ class LayeredStore:
         if not ids:
             return
         try:
-            obs = sqlite3.connect(self.db_path, timeout=0)
+            # #52：`:memory:` 后端时 `self.db_path` 是 ":memory:" 字面量——
+            # `sqlite3.connect(":memory:")` 得到**另一个空库**（每连接一个独立库），
+            # UPDATE 落在 `no such table` 上被吞 ⇒ 访问计数静默失效（实测 3 次调用
+            # 后 access_count=0，文件库=3）。内存库实际载体是 shared-cache DSN
+            # （`_memory_dsn`，见 `__init__`），旁路连接必须带 `uri=True` 连它才看
+            # 得到同一份数据；`timeout=0` 的非阻塞设计保留不动。文件库路径原样。
+            dsn = self._memory_dsn or self.db_path
+            obs = sqlite3.connect(dsn, timeout=0,
+                                  uri=dsn.startswith("file:"))
             try:
                 # #93：本连接独立于 `_connect`（访问计数为尽力而为的旁路写），
                 # 连接级外键开关必须逐连接重设，否则该连接上外键不生效。
