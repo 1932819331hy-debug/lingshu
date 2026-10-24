@@ -4539,10 +4539,20 @@ class LayeredStore:
         # 同一事务：多进程 0 异常但标签静默丢失」＋ 其修法建议「把标签改动收进单条 SQL
         # （同一事务内读改写，或 BEGIN IMMEDIATE）」。取后者（IMMEDIATE）——不改
         # `nodes.tags` 的**整列覆盖**语义，只把读改写收进一个原子边界。
+        # #928：`tag` 必须是**非空字符串**——旧实现来者不拒，传 list 时整个列表被
+        # 当作**一个元素** append 进 tags（`["甲"]` ⇒ `[["甲"]]`），串行两次即得嵌套
+        # `[[甲],[乙]]`；`get_nodes_by_tag` 对嵌套形态匹配必失配 ⇒ 按标签检索丢节点。
+        # 跨进程+字符串 tag 本身无恙（#344 的 BEGIN IMMEDIATE 保证），损坏源是
+        # **类型未校验**，与进程数无关。fail-closed：非 str/空串当场 ValueError，
+        # 不静默改造、不落半截数据。
         # 边界（削掉的判别力，如实标注）：①本件只保证 `tags` 的读改写原子；同一节点上
         # **其它列**的并发读改写（如 `longterm_gate` 的 importance+tags 合并写）不归本件；
         # ②`_lock` 是**进程内**锁、跨进程无效，故此处用 DB 级 `BEGIN IMMEDIATE`（跨进程
         # 亦成立），而非复用 `_lock`；③已在事务中（嵌套调用）则不插手，交由外层边界。
+        if not isinstance(tag, str) or not tag:
+            raise ValueError(
+                "tag_node：tag 须为非空字符串（写入 nodes.tags 扁平数组），"
+                "实得 %r（%s）——列表请改多次调用或先归一为字符串" % (tag, type(tag).__name__))
         own_tx = not self.conn.in_transaction
         if own_tx:
             self.conn.execute("BEGIN IMMEDIATE")
