@@ -154,5 +154,18 @@ def main() -> int:
     return 0
 
 
+# ── pytest 腿入口 ────────────────────────────────────────────────────────────
+# 为什么保留这一层：本件是**脚本式**（模块级即执行全部断言），pytest 收不到。
+# 仓内两条守卫（test_gate_coverage / test_pytest_collection_guard）对此的要求是
+# 「走脚本腿（登记进 gate.yml SCRIPT_TESTS）**或** 走 pytest 腿（可被收集）」。
+# 原方案是改 .github/workflows/gate.yml 登记 —— 但 fork PR 修改 workflow 文件
+# 在 GitHub 侧属于需要维护者批准的敏感改动，实测该 PR 的 workflow 因此**根本
+# 没被触发**（commits/<sha>/check-runs = 0）。改成给一个 pytest 入口，两腿都通，
+# 且不需要碰 CI 配置 —— 更小的改动面，同样的覆盖。
+def test_issue940_prior_family_distinct():
+    """pytest 腿：跑完整断言组，任一失败即红（main() 返回 0 = 全过）。"""
+    assert main() == 0
+
+
 if __name__ == "__main__":
     sys.exit(main())
