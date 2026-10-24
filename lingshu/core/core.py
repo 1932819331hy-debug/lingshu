@@ -13738,6 +13738,11 @@ class SpacetimeMemoryEngine:
                       0.30 * connection_drift + 0.15 * prediction_error)
         if d_norm is None:
             return 0.0
+        # #459：非有限（NaN/±Inf）不可判 ⇒ 归钳制区间**下界** 0.0（#402 口径：
+        # 非有限一律回落下界，不得抬到上界伪装成「最大信息差」——旧实现
+        # `min(1.0, nan)` 返回 1.0，NaN 样本进 gap_history 后被 Δ²D/趋势当满值）。
+        if not math.isfinite(d_norm):
+            d_norm = 0.0
         dn = max(0.0, min(1.0, d_norm))
         self._gap_history.append({"ts": time.time(), "d_norm": dn})
         if len(self._gap_history) > 100:
@@ -13752,7 +13757,7 @@ class SpacetimeMemoryEngine:
             self._commit_locked()
         except Exception:
             pass
-        return d_norm
+        return dn
 
     def _load_gap_history(self) -> List[Dict]:
         """D 序列跨进程恢复（OBS-REV1 / 钉死批条款4）：读库尾 100 条填内存
