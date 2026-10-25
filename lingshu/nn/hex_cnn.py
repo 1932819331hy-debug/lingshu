@@ -423,6 +423,13 @@ def save_consolidated(kernels: Dict[str, np.ndarray], meta: Dict, path: str) -> 
         if mk in ("kernels", "consolidated", "algo"):
             # #895：algo 亦属结构字段（固化档的算法标识），meta 同名键不覆盖
             payload.setdefault("_meta_%s" % mk, mv)
+        elif mk.startswith("_meta_"):
+            # F23-06（#942 清单）：`_meta_*` 是审计改道命名空间（meta 带结构字段
+            # 同名键时的回显位）。meta 自带 `_meta_*` 键若走普通写入，会把该回显
+            # 覆盖成调用方/攻击者值——读档审计者看到的「meta 曾带 kernels」证据
+            # 即被污染。改道二级命名空间：原值保留（审计不删数据）、真回显不被
+            # 覆盖；load 侧不消费 `_meta_*`（纯审计面），行为无其它变化。
+            payload["_" + mk] = _json_safe(mv)
         else:
             # #393 残余：meta 值过 _json_safe（numpy 标量/数组透明转换）
             payload[mk] = _json_safe(mv)
