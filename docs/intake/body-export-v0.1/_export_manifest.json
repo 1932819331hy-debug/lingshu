@@ -329,7 +329,7 @@
     {
      "file": "core.py",
      "src": "aeis.core",
-     "sha256": "a6e95493cd57450d",
+     "sha256": "bd490f55856d047c",
      "rewrites": 34,
      "sanitized": 2,
      "patches": 2,
@@ -360,7 +360,7 @@
     {
      "file": "longterm_gate.py",
      "src": "aeis.longterm_gate",
-     "sha256": "ff860efdcaf7ca557d9e21706ac9dee7d61f2198a3e204a25a7786f6c3c07548",
+     "sha256": "c9d95ced1236bdfa",
      "rewrites": 1,
      "sanitized": 0,
      "patches": 0,
@@ -409,7 +409,7 @@
     {
      "file": "hex_cnn.py",
      "src": "aeis.hex_cnn",
-     "sha256": "8e425dd05ab96da7",
+     "sha256": "c13f4bb2e7a79123",
      "rewrites": 0,
      "sanitized": 0,
      "patches": 0,
@@ -431,7 +431,7 @@
     {
      "file": "hex_gen.py",
      "src": "aeis.hex_gen",
-     "sha256": "3bf4105669dff09b",
+     "sha256": "c9bf6c321c921411",
      "rewrites": 3,
      "sanitized": 0,
      "patches": 0,
@@ -552,7 +552,7 @@
     {
      "file": "stcnn.py",
      "src": "wisdom.stcnn",
-     "sha256": "4b387823db3490ef",
+     "sha256": "7f2e3921459da77b",
      "rewrites": 0,
      "sanitized": 0,
      "patches": 0,
