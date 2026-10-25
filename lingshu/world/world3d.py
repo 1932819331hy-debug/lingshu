@@ -1193,21 +1193,27 @@ class World3D:
         eye = (cam.cx, cam.cy, cam.cz)
         _nrm = obj.rot_normals([(0.0, 0.0, -1.0), (0.0, 0.0, 1.0), (0.0, -1.0, 0.0),
                                 (0.0, 1.0, 0.0), (1.0, 0.0, 0.0), (-1.0, 0.0, 0.0)])
+        # dsh-bounty #1798（#311 剔除在 rot 漏网）：旧 faces 只有第 0 面用
+        # `_nrm[0]`，面 1–5 仍用**未旋转**常量法线——带 rot 的 box/pillar 唯一
+        # 可见面被错误剔除、背面目面被画出（实测 yaw=90° 后着色像素 6294→288）。
+        # 修法：6 面全部用 `rot_normals` 的旋转法线；face_center 改取四顶点均值
+        # （精确落在面平面内；轴对齐时与旧的 `center + normal*half` 逐位一致，
+        # #311/#312 既有守卫读数不变）。
         faces = [
             ((c[0], c[1], c[2], c[3]), _nrm[0]),   # 前面
-            ((c[4], c[5], c[6], c[7]), (0.0, 0.0, 1.0)),    # 后面
-            ((c[0], c[1], c[5], c[4]), (0.0, -1.0, 0.0)),   # 底面
-            ((c[3], c[2], c[6], c[7]), (0.0, 1.0, 0.0)),    # 顶面
-            ((c[1], c[2], c[6], c[5]), (1.0, 0.0, 0.0)),    # 右面
-            ((c[0], c[3], c[7], c[4]), (-1.0, 0.0, 0.0)),   # 左面
+            ((c[4], c[5], c[6], c[7]), _nrm[1]),   # 后面
+            ((c[0], c[1], c[5], c[4]), _nrm[2]),   # 底面
+            ((c[3], c[2], c[6], c[7]), _nrm[3]),   # 顶面
+            ((c[1], c[2], c[6], c[5]), _nrm[4]),   # 右面
+            ((c[0], c[3], c[7], c[4]), _nrm[5]),   # 左面
         ]
         hw, hh, hd = obj.size[0] / 2, obj.size[1] / 2, obj.size[2] / 2
         r, g, b = obj.color
         # 简单着色：面法线 → 明暗（顶面亮，侧面暗）
         for i, (face, normal) in enumerate(faces):
-            face_center = (obj.center[0] + normal[0] * hw,
-                           obj.center[1] + normal[1] * hh,
-                           obj.center[2] + normal[2] * hd)
+            face_center = (sum(p[0] for p in face) / len(face),
+                           sum(p[1] for p in face) / len(face),
+                           sum(p[2] for p in face) / len(face))
             if sum(normal[k] * (eye[k] - face_center[k]) for k in range(3)) <= 0:
                 continue        # 背对相机 ⇒ 不可见，剔除
             shade = 1.0
@@ -1259,7 +1265,14 @@ class World3D:
         # 渲染完全一样。判据来源：docs/theory/世界模型与语义时空图_完整理论整理
         # 与实现路线.md §3.2 透视投影——图元顶点须经同一投影映射（投影-关联）。
         x, y, z = obj.center
-        apex3 = (x, y + obj.size[1] / 2, z)
+        # dsh-bounty #1798：底面四角取自 `corners()`（已随 rot 旋转），塔尖却用
+        # 未旋转的 +Y 偏移——rot 含 X/Z 分量时塔尖与底面共面、四个侧面三角形
+        # 全部退化（实测 rot=(pi,0,0) 着色像素 8295→1038）。修法：塔尖偏移取
+        # `rot_normals([(0,1,0)])[0]`（局部 +Y 按同一旋转矩阵变换；无 rot 时
+        # 该向量为 (0,1,0)，与旧值逐位一致，#313 守卫读数不变）。
+        _up = obj.rot_normals([(0.0, 1.0, 0.0)])[0]
+        _hh = obj.size[1] / 2
+        apex3 = (x + _up[0] * _hh, y + _up[1] * _hh, z + _up[2] * _hh)
         apex = cam.project(apex3, sw, sh)
         if apex is None:          # 塔尖落在相机后方 ⇒ 不画
             return
