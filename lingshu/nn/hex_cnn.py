@@ -303,6 +303,13 @@ def selfsup_finetune(img_arr: np.ndarray, kernel_name: str = "center_surround",
     `epochs <= 0` 表示「不训练」：`loss_curve` 为空，`final_loss` 回落为
     `init_loss`（没有训练就不存在「训练后」的读数），核保持为输入核。
     """
+    # F23-10（#942 清单）：NaN/Inf 入参 fail-closed——块级 NaN 会让有限差分
+    # 梯度全 NaN、核整体 NaN 化后**静默返回**（无任何告警），训练面产出不可用
+    # 核。与 #788 stcnn NaN 输入闸同款口径：与其静默出伪读数不如拒收。
+    if not np.isfinite(img_arr).all():
+        raise ValueError(
+            "selfsup_finetune：img_arr 含 NaN/Inf（有限差分梯度会整体 NaN 化，"
+            "静默返回不可用核）——请先清洗输入（F23-10 fail-closed）")
     gray = (0.299 * img_arr[..., 0] + 0.587 * img_arr[..., 1]
             + 0.114 * img_arr[..., 2]).astype(np.float32) if img_arr.ndim == 3 else img_arr.astype(np.float32)
     feat, grid = image_to_grid(gray[..., None].repeat(3, axis=2), cells_across)
