@@ -9,7 +9,6 @@ import sys
 from copy import deepcopy
 
 import numpy as np
-sys.stdout.reconfigure(encoding='utf-8')
 
 
 # ============ 一、时空体素化（连续帧 → 3D 体素） ============
@@ -140,6 +139,8 @@ def frame_diff(frames, threshold=0.08):
     `frame_rise`（每个亮灭周期只保留亮起前沿）。
     """
     arr = np.asarray(frames, dtype=np.float32)
+    if arr.ndim == 4:                        # #256：(T,H,W,C) → 灰度
+        arr = arr.mean(axis=-1)              #   与 frames_to_voxel:20-21 同口径
     diffs = np.abs(np.diff(arr, axis=0))
     return (diffs > threshold).astype(np.float32)
 
@@ -152,6 +153,8 @@ def frame_rise(frames, threshold=0.08):
     的沿，这里只保留正向变化（亮起前沿）；`detect_period` 的前沿检测正是按此设计的。
     """
     arr = np.asarray(frames, dtype=np.float32)
+    if arr.ndim == 4:                        # #256：(T,H,W,C) → 灰度
+        arr = arr.mean(axis=-1)              #   与 frames_to_voxel:20-21 同口径
     rise = np.clip(np.diff(arr, axis=0), 0.0, None)
     rise[rise <= threshold] = 0.0
     return rise
@@ -402,6 +405,13 @@ def synth_blinking(frames=12, size=32, period=3):
 
 # ============ 六、主演示 ============
 if __name__ == "__main__":
+    # issue #147：编码钉法只在直跑时生效。模块顶层裸调会在导入期改写全局
+    # stdout 编码（使 PYTHONIOENCODING 失效），且 stdout 被重定向时
+    # （_io.StringIO 无 reconfigure 属性）直接 AttributeError ⇒ 导入即崩。
+    # 守卫形态与 lingshu/world/scenario_cli.py:150-152 同源。
+    for _stream in (sys.stdout, sys.stderr):
+        if hasattr(_stream, "reconfigure"):
+            _stream.reconfigure(encoding="utf-8")
     print("=== 白箱自举·多模态主线：3D 时空 CNN × 时空记忆图（零 LLM） ===\n")
     mem = SpatiotemporalMemory()
 
