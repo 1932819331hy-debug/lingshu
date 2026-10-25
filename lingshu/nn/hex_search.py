@@ -220,6 +220,14 @@ def search_report(net: HexHierNet, lat: np.ndarray, metas: List[Dict],
     det_pos_total = det_obj_total = 0
     total_nodes = total_rej = 0
     n = len(lat)
+    # F23-13（#942 清单）：`lat` 与 `metas` 逐条对位（`metas[i]["labels"]` 是
+    # `lat[i]` 的真值）。长度不一致时 zip 语义会**静默截断**——多出的样本不进
+    # 召回分母 ⇒ 召回率被稀释且无告警。fail-closed 对齐入口闸口径（#798/#151
+    # 同款：与其静默出伪读数不如拒收）。
+    if len(metas) != n:
+        raise ValueError(
+            "search_report：lat 与 metas 长度须一致（逐条真值对位），"
+            "实得 lat=%d / metas=%d" % (n, len(metas)))
     for i in range(n):
         # #453：原写法是 `recursive_search(net, lat[i:i+1], metas[i]["labels"],)
         # if False else recursive_search(net, lat[i:i+1], max_depth=max_depth)`——
