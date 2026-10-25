@@ -30,7 +30,9 @@ class LongTermMemoryGate:
     # 默认权重（可配；场景化权重调整留作后续）
     DEFAULT_WEIGHTS = {
         "novelty": 0.30,   # 新信息度（核心词新颖比例；参考集 = 全库既有知识）
-        "trust": 0.25,     # 信任（来源可信度）
+        "trust": 0.25,     # 信任（#501 如实标注：取 self_model.trust_state 的
+                           #   会话级全局信任，**非**本次快照的来源维度——
+                           #   evaluate 的 source 形参当前未参与评分）
         "d2": 0.15,        # 信息差二阶变化（加速=新领域涌现）
         "t2": 0.15,        # 信任二阶变化（信任跃升=里程碑/校准锚点）
         "mention": 0.15,   # 提及次数（重复=重要性信号）
@@ -429,6 +431,11 @@ class LongTermMemoryGate:
 
         novelty：调用方已算出的新奇度（如 prefeed 已算过）。给了就复用，
         避免对同一输入重复全库扫描（lingshu #389）。语义与内部计算一致。
+
+        #501 如实标注（审计面，判据不变）：`source` 与 `tags` 形参当前**未参与
+        评分**（保留以维持调用方契约）；`trust` 分量取 `self_model.trust_state`
+        的**会话级全局信任**，不是本次快照来源（user/assistant/external/…）的
+        可信度。把来源真正接进评分属设计裁定（改变落层行为），不在本标注内。
         """
         if novelty is None:
             novelty = self._novelty(content, existing_id)
