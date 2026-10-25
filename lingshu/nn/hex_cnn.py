@@ -213,15 +213,21 @@ def kernel_center_surround() -> np.ndarray:
 
 
 def extended_prior_family(n: int) -> List[np.ndarray]:
-    """n 个互异白箱先验核(每核唯一,无对称重复)——扩容的单元先验族。
-    构成:六方向 edge(六边形天然各向同性完备)+smooth+粗平滑+laplacian
-    +center-surround;超出时按序加微噪变体(仍互异)。
+    """扩容的单元先验族。构成:六方向 edge(六边形天然各向同性完备)
+    +smooth+粗平滑+laplacian+center-surround;超出时按序加微噪变体。
 
     #940：微噪变体的**互异性是断言并保证的**，不是声明——旧实现对常幅基核
     （如均匀 smooth）加均匀微噪再 L1 归一，扰动被归一化**恒坍缩**回原核：
     实测 idx 16/26/36 与 idx 6 逐位相同（「互异」声明不实；#339 修 grow_kernel
     回绕时探针已见 fam dup: 16/6, 26/6, 36/6）。修法：变体扰动**逐档加强**
     （×10 递进）并在落位前 `array_equal` 复核，仍重合才落位——互异由构造保证。
+
+    F23-02（#942 清单）如实标注：①「互异」指**逐位不同**——基族前 6 个 edge
+    核是**三对反向对**（fam[3]=-fam[0]、fam[4]=-fam[1]、fam[5]=-fam[2]），
+    旧 docstring「无对称重复」对基族本身不成立；微噪变体段（#940）的互异
+    才是断言保证的。②HexNet 的默认初始化集自 #339 起为 family[0..3]
+    （四方向 edge，非 DEFAULT_KERNELS 的具名核）——由
+    tests/test_issue942_f23_02_default_family_guard.py 钉住。
     """
     fam: List[np.ndarray] = []
     for d in range(6):                                   # 六方向 edge
