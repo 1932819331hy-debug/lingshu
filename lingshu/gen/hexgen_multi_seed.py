@@ -304,7 +304,10 @@ def summarize(reads, items):
     return {
         "n_prompt": len(by_sid), "n_img": len(reads),
         "n_img_empty": n_empty,
-        "empty_rate": round(n_empty / max(1, len(reads)), 4),
+        # F23-25（#942 清单）：零样本（len(reads)==0）时 empty_rate 记 None——
+        # 与同 return 的 stability/honored「无定义 ⇒ null，不伪造读数」的 #356
+        # 口径一致（旧 max(1,·) 记 0.0＝伪造「无空读」满分）。打印面同步适配。
+        "empty_rate": (round(n_empty / len(reads), 4) if reads else None),
         "stability": {k: round(float(np.mean(v)), 4) if v else None
                       for k, v in stab.items()},
         "honored": {k: round(float(np.mean(v)), 4) if v else None
@@ -398,7 +401,8 @@ def main():
         w = s["within_vs_between"]
         print(f"    ③ 件内方差/类间差 中位比 **{w['median_ratio']}**"
               f"（最差 5 维 {w['worst_dims']}）")
-        print(f"    ④ 空读件 {s['n_img_empty']}/{s['n_img']}（{s['empty_rate']:.1%}）")
+        er = s["empty_rate"]
+    print(f"    ④ 空读件 {s['n_img_empty']}/{s['n_img']}（" + (f"{er:.1%}" if er is not None else "无样本") + "）")
     os.makedirs(os.path.dirname(a.out) or ".", exist_ok=True)
     with io.open(a.out, "w", encoding="utf-8") as f:
         json.dump(rep, f, ensure_ascii=False, indent=1,
