@@ -324,6 +324,10 @@ def selfsup_finetune(img_arr: np.ndarray, kernel_name: str = "center_surround",
     # `w -= lr*grad` 后 `lr*grad ≫ |w|`，紧接着的 L1 归一化把旧核整段抹掉 ⇒ 每步核
     # 只由上一步的 `-grad/‖grad‖₁` 决定、与 lr 无关（lr 跨 5000 倍核几乎不动）。
     # 归一化后梯度 ~O(1)，lr 恢复为真实的步长量纲。
+    # F23-09（#942 清单）如实标注（审计面，行为不变）：此处**无条件 /255**，即
+    # 输入域契约=uint8 图像（0..255）。0..1 浮点图会被**二次归一**（信号缩至
+    # 1/255，训练近乎空转——#351 的镜像失效面）。仓内调用方全 uint8（无实害）；
+    # 0..1 域是否自适应属行为面裁定，不在本标注内。
     lum = feat[..., :1] / 255.0                          # 亮度通道 (rows,cols,1)，0..1
     rng = np.random.default_rng(seed)
     # #593：评估掩码——训练前抽一次、全程固定，`init_loss` / `final_loss` 都在它下面

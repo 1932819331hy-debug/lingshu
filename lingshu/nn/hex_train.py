@@ -428,6 +428,11 @@ def train_infogap(net: HexNet, x: np.ndarray, y: np.ndarray,
         if log_every and step % log_every == 0 and verbose:
             print(f"  [step {step}] D={d:.4f} 死区={dead_zone:.4f} 冻结{sample.size - updates}/{sample.size}")
 
+    # F23-12（#942 清单）如实标注（审计面，行为不变）：判停读数（每步的 d，在
+    # 随机切片 xb/yb 上测）与 final_D（固定切片 x[:batch]/y[:batch] 上测）**不是
+    # 同一批次**——两者不可直接比较（rel_drop 判停同理跨批）。仓内默认
+    # batch=128 且调用点样本量 ≤128 ⇒ 切片=全量、无差异；len(x)>batch 的场景
+    # 使用前须知此口径。切片统一属行为面裁定，不在本标注内。
     # #335：final_D 必须是**最终模型**的损失——旧实现取 `history[-1]["D"]`，那是
     # 最后一次参数更新**前**测的 d（更新后 d 不再复算），`final_D` 与 `net` 的实际
     # 状态不一致（实测 2 步训练报 0.676、模型实际 0.636）。现在循环结束后对最终
