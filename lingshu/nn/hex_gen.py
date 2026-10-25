@@ -238,6 +238,24 @@ def _match_attr(seg: str, table: Dict[str, tuple]) -> Optional[str]:
             return key
     return None
 
+# #307：方位词/花纹词/尺寸词里的单字（心/方/条/圆/星/菱）会被形状词表误配
+# （「中心」→heart、「右下方」→square、「条纹」→stripe）。`_match_open` 的最长
+# 匹配解决不了单字碰撞——必须先整词扣掉这些「非形状词」再匹配形状。
+# 「右下方」要整段扣（只扣「右下」会留下「方」仍误配 square），故正则带可选「方」。
+_NONSHAPE_POS = ("左上", "上中", "右上", "左中", "中心", "中央",
+                 "右中", "左下", "下中", "右下", "中间",
+                 "左", "右", "上", "下")
+_NONSHAPE_WORDS = _NONSHAPE_POS + tuple(
+    w for words in PATTERN_WORDS.values() for w in words) + tuple(
+    w for words in SIZE_WORDS.values() for w in words)
+_NONSHAPE_RE = re.compile(
+    "(?:%s)方?" % "|".join(sorted(set(_NONSHAPE_WORDS), key=len, reverse=True)))
+
+
+def _strip_nonshape(seg: str) -> str:
+    """扣掉方位词/花纹词/尺寸词，只留可能承载形状词的正文（#307）。"""
+    return _NONSHAPE_RE.sub("", seg)
+
 
 def compile_description(text: str) -> Dict:
     """中文描述 → {parts: [{shape, color, zone, pattern, size}], defaults_applied}。
@@ -277,7 +295,11 @@ def compile_description(text: str) -> Dict:
         for bg_w in sorted(BACKGROUND_WORDS, key=len, reverse=True):
             if bg_w in seg_parts:
                 seg_parts = seg_parts.replace(bg_w, "")
-        has_part_word = bool(_match_open(seg_parts, OPEN_SHAPES)
+        # #307：形状匹配只认「扣掉方位/花纹/尺寸词」后的正文，否则「中心」→心、
+        # 「右下方」→方、「条纹」→条 会被当成用户写的形状词。颜色仍用原句。
+        # 与上游 #306 的 seg_parts 叠加：先剥背景词（#306），再剥方位/花纹/尺寸（#307）。
+        shape_seg = _strip_nonshape(seg_parts)
+        has_part_word = bool(_match_open(shape_seg, OPEN_SHAPES)
                              or _match_open(seg_parts, OPEN_COLORS)
                              or (pos is not None)
                              or cl.get("shape") or cl.get("color") or pos)
@@ -287,7 +309,7 @@ def compile_description(text: str) -> Dict:
                 if zcn in seg_parts:
                     pos = ZONE_CN[zcn]
                     break
-        given = {"shape": (_match_open(seg_parts, OPEN_SHAPES)
+        given = {"shape": (_match_open(shape_seg, OPEN_SHAPES)
                            if has_part_word else None) or cl.get("shape"),
                  "color": _match_open(seg_parts, OPEN_COLORS) or cl.get("color"),
                  "zone": pos,
@@ -361,7 +383,22 @@ def render_relations(parts: List[Dict], size: int = 48, seed: int = 7,
                     "pattern": pattern, "size": size_attr,
                     "pattern_period": period, "center": (cx, cy)})
     if noise:
-        img += (rng.random(img.shape) * 18).astype(np.uint8)
+        # issue #150：旧实现 `img += (rng.random(img.shape) * 18).astype(np.uint8)` 是
+        # **uint8 原地加** ⇒ 超过 255 的像素按模 256 回绕。噪声幅度 0..17，故凡基色 >237
+        # 的像素都会回绕：白（245）在 noise>=11 时 245+11=256→0，白盘/白底因此出现
+        # 近黑散点（实测 white disk min channel-sum=1、n(sum<100)=35/529；
+        # clean_white 背景 567/9216=6.15%，理论值 (7/18)^3=5.88%）。
+        # 修法：先在 int16 上做**饱和**加法再夹回 0..255 —— 噪声的语义是「亮度微扰」，
+        # 不是模运算；回绕是 uint8 容器的溢出，不是设计。
+        # 判据来源：issue #150 正文（white disk 变黑 / clean_white 背景变黑）；
+        # 仓内无任何守卫或 docstring 把回绕钉为有意行为（`git grep 回绕` 仅命中
+        # hexgen_pack_certify / hex_gen:725 两处**无关**语义）。
+        # 削掉的判别力：基色接近 255 的像素不再出现「亮变暗」；其余颜色（基色 ≤237）
+        # 的逐像素输出**完全不变**（回绕概率为 0，夹取不触发）。rng 抽样次数与顺序未动
+        # ⇒ 同 seed 的噪声序列与旧实现逐位相同。
+        img = np.clip(img.astype(np.int16)
+                      + (rng.random(img.shape) * 18).astype(np.int16),
+                      0, 255).astype(np.uint8)
     if supersample > 1:
         # R44 软边缘：高分辨率渲染→LANCZOS 降采（自动抗锯齿）
         from PIL import Image as _Im

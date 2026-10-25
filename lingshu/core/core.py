@@ -4117,7 +4117,7 @@ class LayeredStore:
         {"语义", "含义", "意思", "意义", "概念"},
         {"识别", "检测", "感知", "探测", "发现"},
         {"转换", "转化", "映射", "变换"},
-        {"实验", "试验", "集成", "实现", "验证", "测试"},
+        {"实验", "试验", "集成", "验证", "测试"},
         {"评测", "评估", "跑分", "基准", "benchmark", "评审", "考核"},
         {"记忆", "记录", "库"},
         {"智能", "智能体", "灵枢", "AI"},
@@ -4138,6 +4138,12 @@ class LayeredStore:
         本件只收口 ASCII 词内误命中，不引入中文分词。
         """
         if not word:
+            return False
+        # #132（建议 1 后半）：中文**单字**不得触发（「库」这类单字泛词把无关候选
+        # 灌进 LIKE 预筛——`数据库迁移` 曾展开出 `记忆/记录/库`）。不引入分词器：
+        # 只要求中文词长度 ≥2 才算一个「词」。C 组口径不受影响——`记忆库` 仍由
+        # 两字词 `记忆` 触发整组，展开结果照旧含 `记忆/记录/库`。
+        if not word.isascii() and len(word) < 2:
             return False
         if word.isascii() and any(ch.isalnum() or ch == "_" for ch in word):
             start = query.find(word)
@@ -4539,10 +4545,20 @@ class LayeredStore:
         # 同一事务：多进程 0 异常但标签静默丢失」＋ 其修法建议「把标签改动收进单条 SQL
         # （同一事务内读改写，或 BEGIN IMMEDIATE）」。取后者（IMMEDIATE）——不改
         # `nodes.tags` 的**整列覆盖**语义，只把读改写收进一个原子边界。
+        # #928：`tag` 必须是**非空字符串**——旧实现来者不拒，传 list 时整个列表被
+        # 当作**一个元素** append 进 tags（`["甲"]` ⇒ `[["甲"]]`），串行两次即得嵌套
+        # `[[甲],[乙]]`；`get_nodes_by_tag` 对嵌套形态匹配必失配 ⇒ 按标签检索丢节点。
+        # 跨进程+字符串 tag 本身无恙（#344 的 BEGIN IMMEDIATE 保证），损坏源是
+        # **类型未校验**，与进程数无关。fail-closed：非 str/空串当场 ValueError，
+        # 不静默改造、不落半截数据。
         # 边界（削掉的判别力，如实标注）：①本件只保证 `tags` 的读改写原子；同一节点上
         # **其它列**的并发读改写（如 `longterm_gate` 的 importance+tags 合并写）不归本件；
         # ②`_lock` 是**进程内**锁、跨进程无效，故此处用 DB 级 `BEGIN IMMEDIATE`（跨进程
         # 亦成立），而非复用 `_lock`；③已在事务中（嵌套调用）则不插手，交由外层边界。
+        if not isinstance(tag, str) or not tag:
+            raise ValueError(
+                "tag_node：tag 须为非空字符串（写入 nodes.tags 扁平数组），"
+                "实得 %r（%s）——列表请改多次调用或先归一为字符串" % (tag, type(tag).__name__))
         own_tx = not self.conn.in_transaction
         if own_tx:
             self.conn.execute("BEGIN IMMEDIATE")
@@ -6584,6 +6600,21 @@ def _filter_min_score(scored, min_score):
 # =============================================================================
 # 时空记忆引擎（SpacetimeMemoryEngine）
 # =============================================================================
+
+# #500：验证标准参数的**读取点登记表**（不是「允许的参数表」——任何 param 都能写入
+# `_verifier_config`）。语义：该集合内的参数在引擎内确有读取点（会改变可观测行为）；
+# 集合外者当前**只登记、不影响行为**（幻影旋钮），结构层记录必须如实标注这一点，
+# 不能让记录读起来像「已生效」。
+# 判据来源：本件普查（`git grep deviation_threshold` 全仓 19 处，无一为读取：
+# 定义 core.py:6667 / 回放赋值 6729 / 终裁赋值 13540 / 注释 13546 + 5 份测试的断言与
+# fixture）＋ 行为实验（应用 0.99 后 `_reflect_verify` 偏差判定、`check_escalation`
+# 对 ESC-004 条件串、`_dedup_static` 逐项不变；对照组 `dedup_static` 可被检出变化）。
+# 未查到仓内对该参数「取向属设计裁定」的先例（`docs/` 无命中、`tests/` 无相关守卫），
+# 故按「只钉事实」处置，**不**让该参数真的去影响判据（那属设计裁定）。
+_VERIFIER_PARAMS_WITH_READERS = frozenset({"dedup_static"})
+
+# 结构层记录里对「无读取点」参数的如实标注（#500）。
+_NO_READER_NOTE = "无读取点：仅登记，当前不影响行为"
 
 class SpacetimeMemoryEngine:
     """
@@ -8652,13 +8683,17 @@ class SpacetimeMemoryEngine:
                                   "ts": now, "count": 1})
 
     def consume_events(self) -> Dict:
-        """P1-4：批量消费事件标记（定时轮询优先；P0 危机期间暂停）"""
+        """P1-4：批量消费事件标记（定时轮询优先；P0 危机期间暂停）。
+
+        #54：paused 时**不消费也不清空**队列——事件保留到恢复后一并处理；
+        旧实现先清空再判 paused ⇒ paused 期间排队的事件被静默丢弃。"""
+        if self._lifecycle and self._lifecycle.state == "paused":
+            return {"status": "paused", "consumed": 0,
+                    "pending": len(self._event_queue),
+                    "note": "P0 危机期间暂停非 P0 处理（3.4 节）；队列保留"}
         events = list(self._event_queue)
         self._event_queue = []
         consumed = 0
-        if self._lifecycle and self._lifecycle.state == "paused":
-            return {"status": "paused", "consumed": 0,
-                    "note": "P0 危机期间暂停非 P0 处理（3.4 节）"}
         for ev in events:
             if ev["type"] in ("perception", "write", "condition_switch") and self._flywheel:
                 try:
@@ -11200,6 +11235,16 @@ class SpacetimeMemoryEngine:
         ——只兜这一类可预期降级（**不**用宽 `except`，以免把真实缺陷一并吞掉），
         并如实降级为「未登记」文案（反思链是既有公开 API，登记是新增观测面，
         不得让它反噬主流程）。
+
+        #503：`verification` 形参此前**在函数体内零引用**（只出现在签名行）——
+        签名承诺了一个并不存在的接线，「一级验证是否发现偏差」对终裁结论毫无影响。
+        本件按**审计面**最小接线，**不**接判据：把一级验证的 `deviation` / `detail`
+        **如实记入**终裁返回值（`verification_deviation` / `verification_detail`），
+        使终裁产物与其行为日志（`_archive_reflection` 记的是整个 `verdict`）不再丢失
+        一级验证读数。★**判据逐字不变**：`reversibility` / `needs_designer` / `action`
+        的取值与分支**完全不受** `verification` 影响（判定仍由可逆性 + 影响级给出，
+        #154 词表边界不变；`high` 级仍只记录不阻断）——「终裁不读一级验证」是**已声明
+        的边界**，不是遗漏；接线只补观测面，不补判别力。
         """
         # 可逆性判定（工程代理：行为类型的可逆度）
         # #154：旧实现纯子串匹配 ⇒ 「不删除」「别覆盖」等**否定式**被误判为
@@ -11237,6 +11282,10 @@ class SpacetimeMemoryEngine:
             "reversibility": reversibility,
             "needs_designer": needs_designer,
             "action": ("本次反思范围内可处理（可逆/半可逆）"),
+            # #503：一级验证读数**审计面**如实记录（不改上方任何判据字段的取值）。
+            # 见 docstring 边界段：终裁判据不读 verification，此处只补观测面。
+            "verification_deviation": (verification or {}).get("deviation"),
+            "verification_detail": (verification or {}).get("detail"),
         }
         if needs_designer:
             # #130 路 B：按 code 直查 + 登记待办（只记录不阻断）。
@@ -13511,6 +13560,12 @@ class SpacetimeMemoryEngine:
                         record = (f"{result['param']}="
                                   f"{self._verifier_config.get(result['param'], result['value'])}"
                                   f" 终裁通过（{adjudicator}）")
+                        # #500：记录必须**如实**。该参数若无读取点（幻影旋钮），
+                        # 上面这串「X=值 终裁通过（人）」会被读成「此标准已生效」，
+                        # 而实际写入后行为完全不变 ⇒ 追加如实标注，避免记录撒谎。
+                        # 只改记录文本，不动终裁返回契约、不动配置、不动任何判据。
+                        if result["param"] not in _VERIFIER_PARAMS_WITH_READERS:
+                            record += f"[{_NO_READER_NOTE}]"
                         # #130（路 B · 裁定帖原文）：本调用点此前与升级点表**零接触**
                         # ——「验证标准变更四步制衡第④步」正是内置 `ESC-005` 的
                         # condition，却从无代码按 code 去查它（`check_escalation` 的

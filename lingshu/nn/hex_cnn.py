@@ -215,7 +215,14 @@ def kernel_center_surround() -> np.ndarray:
 def extended_prior_family(n: int) -> List[np.ndarray]:
     """n 个互异白箱先验核(每核唯一,无对称重复)——扩容的单元先验族。
     构成:六方向 edge(六边形天然各向同性完备)+smooth+粗平滑+laplacian
-    +center-surround;超出时按序加微噪变体(仍互异)。"""
+    +center-surround;超出时按序加微噪变体(仍互异)。
+
+    #940：微噪变体的**互异性是断言并保证的**，不是声明——旧实现对常幅基核
+    （如均匀 smooth）加均匀微噪再 L1 归一，扰动被归一化**恒坍缩**回原核：
+    实测 idx 16/26/36 与 idx 6 逐位相同（「互异」声明不实；#339 修 grow_kernel
+    回绕时探针已见 fam dup: 16/6, 26/6, 36/6）。修法：变体扰动**逐档加强**
+    （×10 递进）并在落位前 `array_equal` 复核，仍重合才落位——互异由构造保证。
+    """
     fam: List[np.ndarray] = []
     for d in range(6):                                   # 六方向 edge
         k = np.zeros(7, dtype=np.float32)
@@ -230,10 +237,30 @@ def extended_prior_family(n: int) -> List[np.ndarray]:
     fam.append(kernel_center_surround())
     i = 0
     while len(fam) < n:                                  # 微噪变体(互异)
-        base = fam[i % 10].copy() + (i + 1) * 1e-3
-        fam.append(base / (np.abs(base).sum() + 1e-9))
+        base = fam[i % 10].copy()
+        # #940：扰动逐档加强（1e-3 → 1e-2 → 1e-1 …）；均匀底核的均匀扰动会被
+        # L1 归一坍缩 ⇒ 只扰动**非均匀分量**（对均匀核改为单点脉冲式偏移）。
+        amp = 1e-3 * (10 ** (i // 10))
+        cand = base.copy()
+        cand[1 + (i % 6)] += amp
+        cand = cand / (np.abs(cand).sum() + 1e-9)
         i += 1
-    return fam[:n]
+        if any(np.array_equal(cand, ex) for ex in fam):
+            continue                                     # 仍重合 ⇒ 换下一档
+        fam.append(cand)
+    # #940 fail-closed（#958 的**唯一增量**，不碰上面任何算法）：
+    #   main 的做法是「重合就换下一档」，但没有**最终**校验 ——
+    #   若 amp 用尽（极端 n）仍重合，会静默返回重复族，
+    #   「声明互异」与「实际互异」再次脱钩（这正是 #940 的缺陷本体）。
+    #   这里在返回前复核一遍：真出现同形核就 raise，不静默。
+    out = fam[:n]
+    for a in range(len(out)):
+        for b in range(a + 1, len(out)):
+            if np.array_equal(out[a], out[b]):
+                raise ValueError(
+                    f"extended_prior_family({n})：idx {a} 与 idx {b} 逐位相同，"
+                    f"核族互异性被破坏（不应发生，请检查变体构造）")
+    return out
 
 
 DEFAULT_KERNELS: Dict[str, np.ndarray] = {
@@ -346,6 +373,26 @@ def _consolidated_kernel(name: str, values) -> np.ndarray:
     return k
 
 
+def _json_safe(v):
+    """把 numpy 标量/数组（含嵌套容器）透明转换为 JSON 可序列化类型（#393 残余）。
+
+    np.generic → `.item()`（int64 → int、float32 → float）；ndarray → tolist()；
+    dict/list/tuple 递归。其余类型原样返回——json.dump 对它们的既有语义不变。
+    旧实现把 meta 值原样放进 payload ⇒ `{"epochs": np.int64(8)}` 这类常见形态
+    在 json.dump 处抛 TypeError：临时档虽有清理、旧档无损（#393 主修复的原子
+    性），但 fail-fast 把「可透明转换」的输入也拒了——本助手把该类输入收下。
+    """
+    if isinstance(v, np.generic):
+        return v.item()
+    if isinstance(v, np.ndarray):
+        return v.tolist()
+    if isinstance(v, dict):
+        return {k: _json_safe(x) for k, x in v.items()}
+    if isinstance(v, (list, tuple)):
+        return [_json_safe(x) for x in v]
+    return v
+
+
 def save_consolidated(kernels: Dict[str, np.ndarray], meta: Dict, path: str) -> str:
     """白箱固化：学完的核参数 + 训练元数据落盘（JSON——可直读可审计）。
 
@@ -377,7 +424,8 @@ def save_consolidated(kernels: Dict[str, np.ndarray], meta: Dict, path: str) -> 
             # #895：algo 亦属结构字段（固化档的算法标识），meta 同名键不覆盖
             payload.setdefault("_meta_%s" % mk, mv)
         else:
-            payload[mk] = mv
+            # #393 残余：meta 值过 _json_safe（numpy 标量/数组透明转换）
+            payload[mk] = _json_safe(mv)
     target = os.path.realpath(path)
     os.makedirs(os.path.dirname(target) or ".", exist_ok=True)
     tmp = os.path.join(os.path.dirname(target), f".lingshu-save.tmp-{os.getpid()}-{uuid.uuid4().hex}")
