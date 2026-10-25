@@ -316,6 +316,13 @@ def train_hier(net: HexHierNet, lat: np.ndarray, labels: Dict[str, np.ndarray],
     """L2+L3 联合监督(语义信息差+物体信息差)+L1 自监督(掩码重建),
     统一符号更新。返回信息差剖面。"""
     from .hex_train import normalize_lattices  # noqa: F401 (调用方已标准化)
+    # F23-16（#942 清单）：batch 无校验——batch=0 时 `lat[:0]` 空切片进 softmax/loss
+    # 抛零尺寸归一错误（numpy 内部错误，非领域消息）；batch<0 时 `lat[:-k]` 静默
+    # 丢弃尾部样本并把评测子集换成另一批。两者都属调用方契约违背，fail-closed
+    # 给领域消息（与 #798 最小帧数闸同款口径：与其静默返回伪读数不如拒收）。
+    if not isinstance(batch, int) or isinstance(batch, bool) or batch < 1:
+        raise ValueError(
+            "train_hier：batch 须为正整数（评测与训练切片的契约），实得 %r" % (batch,))
     rng = np.random.default_rng(seed)
     shape_idx = {s: i for i, s in enumerate(SHAPES)}
     obj_idx = {o: i for i, o in enumerate(OBJ)}
