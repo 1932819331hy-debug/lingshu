@@ -121,7 +121,11 @@ def validate_history(history, retained_entities):
                 eid = row["resolved_eid"]
                 if not isinstance(eid, str) or not eid or eid in accepted:
                     raise ValueError("accepted identity must have a unique resolved_eid")
-                accepted[eid] = list(row["measurement"]["pos"])
+                # #1011：与快照侧同一投影（world_model.perceive 落盘时逐值
+                # float() 化）——旧实现拿原始 int 测量值与 float 快照做恒等比较，
+                # >2^53 的合法整数坐标（validate_measurements 放行）使投影恒不等，
+                # v2 恢复（wm_simloop seed_from_prior 的本函数门卫）永久失败。
+                accepted[eid] = [float(v) for v in row["measurement"]["pos"]]
             elif row.get("resolved_eid") is not None:
                 raise ValueError("unresolved measurement cannot have a resolved_eid")
         projected = {eid: pos for eid, pos in accepted.items() if eid in retained_entities}
