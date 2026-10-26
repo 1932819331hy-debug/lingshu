@@ -36,7 +36,7 @@ from dataclasses import dataclass, field, asdict
 from typing import Dict, List, Optional, Tuple
 
 from .motion import ObservationWindow, recent_direction
-from .identity import inspect_frame, validate_policy
+from .identity import inspect_frame, validate_measurements, validate_policy
 
 # 3D 场景模拟器实现已迁移至 AEIS——大脑保留接口，缺失时 SceneSimulator=None
 try:
@@ -1201,6 +1201,42 @@ def _wm_traj_buf(self):
     return buf
 
 
+def _prepare_observation_frame(self, observations, tick):
+    """Check and materialize a frame before tick, RNG or lazy buffers change.
+
+    Legacy keeps float-convertible and nonfinite measurements: motion diagnostics
+    already account for those. Conservative retains its stricter existing rules.
+    This is input preflight, not rollback for arbitrary extension/runtime failures.
+    """
+    target = self.tick + 1 if tick is None else tick
+    if (isinstance(target, bool) or not isinstance(target, int) or target < 0
+            or (self.history and target <= self.tick)):
+        raise ValueError("观测 tick 必须是晚于当前世界图时刻的非负整数")
+    observations = self._observe_world() if observations is None else observations
+    if self.identity_policy == "conservative":
+        validate_measurements(observations)
+        return observations
+    if not isinstance(observations, (list, tuple)):
+        raise ValueError("observations must be a list of measurements")
+    prepared = []
+    for observation in observations:
+        if not isinstance(observation, dict):
+            raise ValueError("each observation must be a mapping")
+        if not isinstance(observation.get("conditions", {}), dict):
+            raise ValueError("conditions must be a mapping")
+        try:
+            pos = [float(value) for value in observation["pos"]]
+            str(observation["category"])
+            eid = observation.get("eid")
+            eid = str(eid) if eid is not None else None
+        except (KeyError, TypeError, ValueError, OverflowError) as error:
+            raise ValueError("invalid observation fields") from error
+        if len(pos) != 3:
+            raise ValueError("pos must contain three coordinates")
+        prepared.append({**observation, "pos": pos, "eid": eid})
+    return prepared
+
+
 def _perceive_with_traj(self, observations=None, tool="observer",
                         tick=None, timestamp=None):
     """包装：① 记轨迹缓冲（供周期检测）② 用上一轮预测对账，滚动记两种误差。
@@ -1209,6 +1245,7 @@ def _perceive_with_traj(self, observations=None, tool="observer",
     见文件尾「包装链签名契约 `wm.perceive-signature/1`」：任一层漏转，等于把
     下层的关键字参数吃掉——调用方不报错，但 `tick` 静默失效。
     """
+    observations = _prepare_observation_frame(self, observations, tick)
     buf = _wm_traj_buf(self)
     out = _ORIG_WM_PERCEIVE(self, observations, tool, tick, timestamp)
     # 本体已把匿名/默认传感器观测解析为真实 eid；所有派生视图消费同一份结果。
