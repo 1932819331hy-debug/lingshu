@@ -364,6 +364,24 @@ def _require_finite(name: str, x) -> float:
     return v
 
 
+def _normalize_limit(limit):
+    """把检索族的 limit 归一为非负 int（dsh-bounty #1795，#658 口径收口）。
+
+    #658 已把 query_nodes 族的「None＝全量、0＝空、负数＝全量（SQLite
+    `LIMIT -1`＝不限）」钉为契约并配守卫，但切片族读函数漏归一：
+      · `seq[:limit]` 对 `-1` 做 Python 负切片——静默丢掉最后一条命中
+        （实测 5 条命中 `search_content(limit=-1)` 只回 4 条）；
+      · FTS 腿 `max(int(limit) * 5, 100)` 对 `None` 抛 `TypeError`
+        （`LINGSHU_FTS=1` 时 `search_content(limit=None)` 崩溃，LIKE 腿同输入
+        却正常全量——同一公开入口两条腿行为分叉）。
+    本单点把 None／负数归一为哨兵大数 10**9（切片与 int() 两用皆安全，
+    远小于 SQLite LIMIT 上界 2^63-1）；`0` 原样保留（＝空，#658 G2 口径）。
+    判据来源：dsh-bounty #1795（含逐字读数）＋ #658 守卫
+    tests/test_issue658_limit_none_full_return_guard.py 的 G1/G2 判据。
+    """
+    return 10 ** 9 if (limit is None or limit < 0) else limit
+
+
 def _finite_clamp(x, lo: float, hi: float, default: float = None) -> float:
     """把浮点入参归一为 [lo, hi] 内的**有限**值（非有限/非数 → `default`）。
 
@@ -4216,6 +4234,9 @@ class LayeredStore:
         返回前会把命中节点的 `last_access` 刷成「现在」⇒ 同一节点的分数在两次调用
         间漂移（issue 实测 ~1.9e-08），主排序键不稳定 ⇒ 排序翻转。打分路径不写回
         打分输入（检索只计数、不刷新近因），分数即成为固定输入的纯函数。"""
+        # dsh-bounty #1795：#658「None／-1＝全量」口径在此入口收口（FTS 腿
+        # `int(limit)` 对 None 崩、两腿 `scored[:limit]` 对 -1 负切片丢尾条）。
+        limit = _normalize_limit(limit)
         q = query.strip()
         if not q:
             return []
@@ -5364,10 +5385,18 @@ class LayeredStore:
         # 不顺手扩大改动面）；受保护件既不计入 `doomed` 也不删其关联边。
         # 谓词直传入口（`node_id` + `tags`）与 `decay_cycle` 同款，判据本体同一段。
         c = self.conn.cursor()
-        c.execute("SELECT id, tags FROM nodes WHERE layer='self' AND tags LIKE ? "
-                  "ORDER BY rowid DESC", ("%self_snapshot%",))
-        rows = c.fetchall()
-        if len(rows) <= keep:
+        # #201 残留③：选面从**单标签**扩到**两类自动快照**——旧实现只选
+        # `self_snapshot`，而 `update_trust_state` 落的 `trust_snapshot` 永不入选
+        # （实测 prune(5) 后 trust_snapshot 恒 50 条不动）。keep 按**各标签分别**
+        # 生效（不是两类合计），故 self_snapshot 的既有上界语义按条数不变。
+        rows = []
+        for _tag in ("self_snapshot", "trust_snapshot"):
+            c.execute("SELECT id, tags FROM nodes WHERE layer='self' AND tags LIKE ? "
+                      "ORDER BY rowid DESC", ("%" + _tag + "%",))
+            _r = c.fetchall()
+            if len(_r) > keep:
+                rows.extend(_r[keep:])
+        if not rows:
             return 0
         # #769 ②（治理列写面补角色闸）：SELF 层在 `IMMUTABLE_LAYERS` 内——`delete_node`
         # 对 SELF 行一律返回 `False`，而本方法此前**零角色判据**直接 `DELETE` ⇒
@@ -5388,13 +5417,16 @@ class LayeredStore:
                 "#769 prune_self_snapshots 拒绝：role=%s 无权回收自我层快照"
                 "（SELF 属不可遗忘层，与 delete_node 同判据）——本次跳过 %d 条候选，"
                 "零删除；如需回收请以 PRIMARY 身份执行。"
-                % (self.role.value, len(rows) - keep),
+                % (self.role.value, len(rows)),
                 RuntimeWarning, stacklevel=2)
             return 0
         protected = set(self.get_protected_nodes())
         # keep 保留的是**最近** keep 条（rowid 降序前缀）；保护件在淘汰候选里跳过。
         doomed = []
-        for nid, tags_json in rows[keep:]:
+        # #201 残留③：`rows` 此时已是**各标签超出 keep 的候选**（选面处已按标签
+        # 各切 `[keep:]`）——此处**不得再切** `[keep:]`。旧实现 `rows` 是全量
+        # 有序列表，故原写法正确；选面改动后若沿用原写法会二次切片、几乎不删。
+        for nid, tags_json in rows:
             try:
                 _tags = json.loads(tags_json) if tags_json else []
             except (ValueError, TypeError):
@@ -8110,6 +8142,8 @@ class SpacetimeMemoryEngine:
 
     def semantic_search(self, query: str, limit: int = 10) -> List[Tuple[STNode, float]]:
         """v1.7 语义检索：优先结构化语义坐标相似度；无坐标节点回退文本相似度（D-005 降级）"""
+        # dsh-bounty #1795：同款负切片/None 收口（本方法 `scored[:limit]` 两处）。
+        limit = _normalize_limit(limit)
         if not self._semantic_provider:
             return self.store.search_content(query, limit=limit)
         q_sc = self._semantic_provider.to_semantic_coordinates(query)
@@ -8189,6 +8223,8 @@ class SpacetimeMemoryEngine:
         自身语料标定（本仓不内置）。边界：矛盾配对（`LINGSHU_CONTRADICTION=1`）
         与阈值同时启用时，低于阈值的对侧仍会被截掉（配对可能被拆开）——阈值
         优先生效，调用方需自行评估该组合。"""
+        # dsh-bounty #1795: #658 None/-1=full semantics (scored[:limit] x4 here).
+        limit = _normalize_limit(limit)
         # #787：touch=False——recall 的打分输入（last_access）不得被自己的检索腿
         # 写回（根修「分数漂移」）；候选池/排序其余口径逐位不变。
         results = self.store.search_content(context_content, limit=50, touch=False)
@@ -8229,6 +8265,12 @@ class SpacetimeMemoryEngine:
     #: 无界堆积并以普通记忆身份挤占召回。上界口径与 `SelfModel.HISTORY_MAX`
     #: （同类的状态变更历史钳制）同族；经验标定（#201 修复轮；理论章节追不到）。
     SELF_SNAPSHOT_MAX = 200
+
+    #: 信任状态快照有界保留上界（lingshu #201 残留②）。`update_trust_state` 每次
+    #: 调用新建一条 `trust_snapshot`（importance=0.85）——修前只有 `add_node`、
+    #: **无任何回收面**（实测 400 轮 → 400 条，无上界）。取值与同族
+    #: `SELF_SNAPSHOT_MAX` 同档；经验标定（#201 修复轮；理论章节追不到）。
+    TRUST_SNAPSHOT_MAX = 200
 
     #: `self_check` 的环枚举上限（lingshu #252）。`cycle_details` 只取 `cycles[:5]`，
     #: 故枚举到 5 条即可满足自检；旧实现无上限，稠密 SCC 使枚举耗时/内存随环数
@@ -8593,6 +8635,10 @@ class SpacetimeMemoryEngine:
                 "自我认知", "信任状态观测", (time.time(), time.time()+3600), "协议实例运行中"),
             importance=0.85, confidence=1.0, layer=MemoryLayer.SELF, tags=["trust_snapshot"])
         self.store.add_node(snapshot)
+        # #201 残留②：信任状态快照同样**有界保留**——旧实现只有 add_node、
+        # 无任何回收面（实测 400 轮后 trust_snapshot 400 条，无上界；对照
+        # self_snapshot 被 SELF_SNAPSHOT_MAX 钳住）。上界取同族 TRUST_SNAPSHOT_MAX。
+        self.store.prune_self_snapshots(self.TRUST_SNAPSHOT_MAX)
         return snapshot
 
     # ==================== v1.11 知识飞轮（FLYWHEEL-REV1） ====================
@@ -8667,7 +8713,12 @@ class SpacetimeMemoryEngine:
                 "DELETE FROM flywheel_reuse WHERE rowid NOT IN"
                 " (SELECT rowid FROM flywheel_reuse ORDER BY rowid DESC LIMIT ?)",
                 (self.FLYWHEEL_REUSE_MAX_ROWS,))
-            conn.commit()
+            # #665 同款（dsh-bounty #1794）：本方法是 `@_transactional`，体内裸
+            # `conn.commit()` 会提交整条事务并销毁外层 SAVEPOINT——`recall`/
+            # `search_content` 等读 API 在调用方外层事务内命中时会以
+            # `no such savepoint` 崩溃。改走 `_commit_locked()`（委托 store，
+            # 只有最外层真提交）。此处位于 try 内：观测落库失败仍静默。
+            self._commit_locked()
         except Exception:
             pass  # 观测落库失败静默（不阻断检索）
 
@@ -10030,7 +10081,10 @@ class SpacetimeMemoryEngine:
         - path: 定义巡逻路径
         - perceive: 理解端口（外部 observations 或沙盒观测；可传 tick/timestamp）
         - perceive_visual: 把该 tick 的视觉重建对象送入同一理解端口
+        - identity: 只读检查 observations 的整帧身份候选（tick 可选）
+        - identity_policy: 查询/设置 legacy 或 conservative 关联策略
         - generate: 生成端口（世界图→候选未来，顺序语义外推+不确定边界）
+        - counterfactual: 隔离比较 seek/flee 关系条件（horizon/relations，不提交真实状态）
         - verify: 验证端口（外部观察者对比→命中率）
         - run: 持续运行 n tick（generate→物理演化→perceive→verify）
         - patterns: 观测-only 行为模式推断（关系/速度/方向一致性）
@@ -10052,8 +10106,18 @@ class SpacetimeMemoryEngine:
             self._wmodel = UnifiedWorldModel(
                 size=int(p.get('size', 24)),
                 ground_level=int(p.get('ground_level', 1)),
-                seed=int(p.get('seed', 42)))
+                seed=int(p.get('seed', 42)),
+                identity_policy=p.get('identity_policy', 'legacy'))
             return {"status": "ok", "model": self._wmodel.state()}
+        if action in ("identity", "identity_policy"):
+            if not hasattr(self, '_wmodel'):
+                return {"status": "error", "error": "先 world_model init"}
+            if action == "identity":
+                return {"status": "ok", "identity": self._wmodel.inspect_identity(
+                    p.get("observations", []), tick=p.get("tick"))}
+            if "policy" in p:
+                self._wmodel.set_identity_policy(p["policy"])
+            return {"status": "ok", "identity_policy": self._wmodel.identity_policy}
         if not hasattr(self, '_wmodel'):
             self._wmodel = UnifiedWorldModel()
         if action == "create":
@@ -10084,12 +10148,18 @@ class SpacetimeMemoryEngine:
                                      tick=p.get("tick"), timestamp=p.get("timestamp"))
             visible = [obj for obj in self._world3d.objects
                        if p.get("tick") is None or obj.observed_tick == p["tick"]]
-            for obj, observation in zip(visible, r["observations"]):
-                obj.eid = observation["eid"]
+            for index, observation in enumerate(r["observations"]):
+                source_index = (observation["observation_index"]
+                                if self._wmodel.identity_policy == "conservative" else index)
+                visible[source_index].eid = observation["eid"]
             return {"status": "ok", "perceive": r}
         if action == "generate":
             r = self._wmodel.generate(horizon=int(p.get("horizon", 1)))
             return {"status": "ok", "generate": r}
+        if action == "counterfactual":
+            r = self._wmodel.counterfactual(horizon=p.get("horizon", 1),
+                                           relations=p.get("relations"))
+            return {"status": "ok", "counterfactual": r}
         if action == "verify":
             r = self._wmodel.verify()
             return {"status": "ok", "verify": r}
@@ -10108,7 +10178,7 @@ class SpacetimeMemoryEngine:
                     "history": self._wmodel.history_view(limit=int(p.get("limit", 10)))}
         if action == "state":
             return {"status": "ok", "model": self._wmodel.state()}
-        return {"status": "error", "error": f"未知动作 {action}（可用: init/create/entity/path/perceive/perceive_visual/generate/verify/run/patterns/anomalies/graph/history/state）"}
+        return {"status": "error", "error": f"未知动作 {action}（可用: init/create/entity/path/perceive/perceive_visual/identity/identity_policy/generate/verify/run/patterns/anomalies/graph/history/state）"}
 
     def world_learner(self, action: str, params: dict = None) -> dict:
         """自监督世界学习（里程碑3.2 · V-JEPA 式）：从观测序列无标注学转移函数——
@@ -10643,7 +10713,7 @@ class SpacetimeMemoryEngine:
         - graph: 认知图（L3）
         - state: 闭环状态
         - configure_action: 配置一个实体的行动目标（params: entity_id, target（目标
-          实体 id 或三维坐标）, step_size, policy, fixed_action）——参数原样转发给
+          实体 id 或三维坐标）, step_size, policy, fixed_action, feedback_policy）——参数原样转发给
           SevenLayerLoop.configure_action；与 L7 **观察策略**（init 的 policy）互不影响
         - clear_action: 关闭行动配置（转发 SevenLayerLoop.clear_action）"""
         p = params or {}
@@ -10735,10 +10805,12 @@ class SpacetimeMemoryEngine:
                 return {"status": "error",
                         "error": "target 必填（目标实体 id 或三维坐标）"}
             try:
+                feedback_options = ({"feedback_policy": p["feedback_policy"]}
+                                    if "feedback_policy" in p else {})
                 cfg = fn(entity_id, p["target"],
                          step_size=p.get("step_size", 1.0),
                          policy=p.get("policy", "predictive"),
-                         fixed_action=p.get("fixed_action", "east"))
+                         fixed_action=p.get("fixed_action", "east"), **feedback_options)
             except (ValueError, TypeError) as e:
                 # C 侧把「未知 policy / 未知动作 / 受控实体不在场 / 不合法步长」定为
                 # fail-closed（ValueError，且配置一律不变）。门面**不改**这条判据，
@@ -11702,6 +11774,8 @@ class SpacetimeMemoryEngine:
     def query_by_semantics(self, text: str, limit: int = 10,
                            modality: str = None) -> List[Tuple[STNode, float]]:
         """语义→图像（反向映射）：文本 → semantic_coordinates → 图节点检索（D-003 明确检索语义坐标）"""
+        # dsh-bounty #1795: same None/-1 normalization (scored[:limit] x2).
+        limit = _normalize_limit(limit)
         if not self._semantic_provider:
             return []
         q_sc = self._semantic_provider.to_semantic_coordinates(text)

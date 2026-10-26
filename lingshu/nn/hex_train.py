@@ -70,8 +70,13 @@ def load_cifar10_parquet(path: str, n_train: int = 2000, n_test: int = 500,
 
 def images_to_lattices(images: np.ndarray, cells_across: int = 16) -> np.ndarray:
     """批量图像 → 灰度蜂窝晶格 (N, rows, cols, 1) float32。
-    M2 用小晶格（16 列≈10 行）控制有限差分成本。"""
+    M2 用小晶格（16 列≈10 行）控制有限差分成本。
+    空批次（N=0）返回 (0, 0, 0, 1) float32 空数组（dsh-bounty #1800③：rows
+    依赖单图高度，零样本时无形状可推，用零维占位；下游按 len==0 分流）。
+    """
     from .hex_cnn import image_to_grid
+    if len(images) == 0:
+        return np.zeros((0, 0, 0, 1), dtype=np.float32)
     out = None
     for i in range(len(images)):
         img = images[i]
@@ -428,6 +433,11 @@ def train_infogap(net: HexNet, x: np.ndarray, y: np.ndarray,
         if log_every and step % log_every == 0 and verbose:
             print(f"  [step {step}] D={d:.4f} 死区={dead_zone:.4f} 冻结{sample.size - updates}/{sample.size}")
 
+    # F23-12（#942 清单）如实标注（审计面，行为不变）：判停读数（每步的 d，在
+    # 随机切片 xb/yb 上测）与 final_D（固定切片 x[:batch]/y[:batch] 上测）**不是
+    # 同一批次**——两者不可直接比较（rel_drop 判停同理跨批）。仓内默认
+    # batch=128 且调用点样本量 ≤128 ⇒ 切片=全量、无差异；len(x)>batch 的场景
+    # 使用前须知此口径。切片统一属行为面裁定，不在本标注内。
     # #335：final_D 必须是**最终模型**的损失——旧实现取 `history[-1]["D"]`，那是
     # 最后一次参数更新**前**测的 d（更新后 d 不再复算），`final_D` 与 `net` 的实际
     # 状态不一致（实测 2 步训练报 0.676、模型实际 0.636）。现在循环结束后对最终
@@ -496,6 +506,17 @@ def pretrain_selfsup(net: HexNet, x: np.ndarray, mask_ratio: float = 0.25,
     initial = recon_loss(eval_masked, evaluation, eval_hole)
     conv_vec_len = net.K * 7
     n_cells = int(x.shape[1] * x.shape[2])
+    if steps <= 0:
+        # dsh-bounty #1799：对齐同族训练入口的「0 步＝无更新」契约——
+        # train_infogap（#335「steps==0 ⇒ 无更新，仍回落 d0」）、
+        # hex_hier.train_hier、hex_cnn.selfsup_finetune（「epochs<=0 表示
+        # 『不训练』：loss_curve 为空……核保持为输入核」，有守卫
+        # tests/test_hex_selfsup_epochs_zero.py）。旧 `max(1, ...)` 把显式
+        # 0/负步钳成 1 步 ⇒ 模型被静默训练一步、核被改写（curve 非空、
+        # final != init）——本函数是该家族唯一违背者。
+        return {"algo": ALGO + "+selfsup", "init": round(initial, 5),
+                "final": round(initial, 5), "curve": [], "steps": 0,
+                "n_cells": n_cells}
     REF_CELLS = 160                     # 原 steps 标定的旧晶格规模（10×16）
     eff_steps = max(1, int(round(steps * n_cells / REF_CELLS)))
     curve = []

@@ -204,6 +204,14 @@ class HexHierNet:
             amp = np.linalg.norm(deep1, axis=1, keepdims=True)
             deep1 = deep1 / (amp + 1e-12)
             if self.amp_sep:
+                # dsh-bounty #1800②：与 stacked 分支（上方）同一处理——旧实现
+                # 在 stacked=False 配置下漏了 amp_log 中心化，该参数静默失效、
+                # 无界原始幅度直接进 head（正是 M4.4 注释声明要防的形态；
+                # stacked=False 是 make_plan 认可的受支持配置）。
+                if self.amp_log:
+                    # 固定参考点中心化(amp=1→0)——不能用 batch mean,
+                    # 否则特征 batch 依赖,训练/测试/子区域分布错乱
+                    amp = np.log1p(amp) - 0.6931471805599453
                 deep1 = np.concatenate([deep1, amp], axis=1)
         return deep1, lat.mean(axis=(1, 2))
 
@@ -316,6 +324,13 @@ def train_hier(net: HexHierNet, lat: np.ndarray, labels: Dict[str, np.ndarray],
     """L2+L3 联合监督(语义信息差+物体信息差)+L1 自监督(掩码重建),
     统一符号更新。返回信息差剖面。"""
     from .hex_train import normalize_lattices  # noqa: F401 (调用方已标准化)
+    # F23-16（#942 清单）：batch 无校验——batch=0 时 `lat[:0]` 空切片进 softmax/loss
+    # 抛零尺寸归一错误（numpy 内部错误，非领域消息）；batch<0 时 `lat[:-k]` 静默
+    # 丢弃尾部样本并把评测子集换成另一批。两者都属调用方契约违背，fail-closed
+    # 给领域消息（与 #798 最小帧数闸同款口径：与其静默返回伪读数不如拒收）。
+    if not isinstance(batch, int) or isinstance(batch, bool) or batch < 1:
+        raise ValueError(
+            "train_hier：batch 须为正整数（评测与训练切片的契约），实得 %r" % (batch,))
     rng = np.random.default_rng(seed)
     shape_idx = {s: i for i, s in enumerate(SHAPES)}
     obj_idx = {o: i for i, o in enumerate(OBJ)}

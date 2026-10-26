@@ -141,7 +141,7 @@
     {
      "file": "seven_layer_loop.py",
      "src": "aeis.seven_layer_loop",
-     "sha256": "c15d58217999f1df",
+     "sha256": "f6e8f0620c5e91ae",
      "rewrites": 8,
      "sanitized": 0,
      "patches": 0,
@@ -242,7 +242,7 @@
     {
      "file": "wm_simloop.py",
      "src": "aeis.wm_simloop",
-     "sha256": "7d33f88cf2ebcb2d",
+     "sha256": "b5cfd3b2ee73b681",
      "rewrites": 8,
      "sanitized": 0,
      "patches": 0,
@@ -279,7 +279,7 @@
     {
      "file": "world_model.py",
      "src": "aeis.world_model",
-     "sha256": "f328599573397309",
+     "sha256": "50b380c3038987d7",
      "rewrites": 4,
      "sanitized": 0,
      "patches": 0,
@@ -329,7 +329,7 @@
     {
      "file": "core.py",
      "src": "aeis.core",
-     "sha256": "bd490f55856d047c",
+     "sha256": "9dcd05bbb05f78db",
      "rewrites": 34,
      "sanitized": 2,
      "patches": 2,
@@ -360,7 +360,7 @@
     {
      "file": "longterm_gate.py",
      "src": "aeis.longterm_gate",
-     "sha256": "c0fcd97cf8fb03c8",
+     "sha256": "6f0e6156fe676ac6",
      "rewrites": 1,
      "sanitized": 0,
      "patches": 0,
@@ -409,7 +409,7 @@
     {
      "file": "hex_cnn.py",
      "src": "aeis.hex_cnn",
-     "sha256": "c13f4bb2e7a79123",
+     "sha256": "500f3db6eaed1ece",
      "rewrites": 0,
      "sanitized": 0,
      "patches": 0,
@@ -431,7 +431,7 @@
     {
      "file": "hex_gen.py",
      "src": "aeis.hex_gen",
-     "sha256": "c9bf6c321c921411",
+     "sha256": "b18f474ba9433337",
      "rewrites": 3,
      "sanitized": 0,
      "patches": 0,
@@ -442,7 +442,7 @@
     {
      "file": "hex_hier.py",
      "src": "aeis.hex_hier",
-     "sha256": "91e660d7154b2d50",
+     "sha256": "26206a35ec7fa4b7",
      "rewrites": 3,
      "sanitized": 0,
      "patches": 0,
@@ -475,7 +475,7 @@
     {
      "file": "hex_query.py",
      "src": "aeis.hex_query",
-     "sha256": "d131b775c565f233",
+     "sha256": "824fb8c4e94140f5",
      "rewrites": 1,
      "sanitized": 0,
      "patches": 0,
@@ -497,7 +497,7 @@
     {
      "file": "hex_search.py",
      "src": "aeis.hex_search",
-     "sha256": "9d48d0a555e63a6b",
+     "sha256": "41920fe9a28c7fd3",
      "rewrites": 2,
      "sanitized": 0,
      "patches": 0,
@@ -519,7 +519,7 @@
     {
      "file": "hex_train.py",
      "src": "aeis.hex_train",
-     "sha256": "06f6a45be47a5a95",
+     "sha256": "24a28f42ee93862f",
      "rewrites": 2,
      "sanitized": 1,
      "patches": 0,
@@ -552,7 +552,7 @@
     {
      "file": "stcnn.py",
      "src": "wisdom.stcnn",
-     "sha256": "7f2e3921459da77b",
+     "sha256": "03aff55ecb5bca5e",
      "rewrites": 0,
      "sanitized": 0,
      "patches": 0,
@@ -601,7 +601,7 @@
     {
      "file": "hexgen_multi_seed.py",
      "src": "experiments.hexgen_multi_seed",
-     "sha256": "7f275718a603748d",
+     "sha256": "3a20abdf8f45bbd1",
      "rewrites": 1,
      "sanitized": 1,
      "patches": 0,
