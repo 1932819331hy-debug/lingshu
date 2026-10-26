@@ -2138,7 +2138,15 @@ def _perceive_with_rot(self, observations=None, tool="observer",
             qq = _rot_qnorm(q)
         except (TypeError, ValueError):     # 四元数形状/数值不合法 ⇒ 跳过；
             continue                        # 其余异常照常抛出（不再静默掩盖）
-        buf.setdefault(eid, []).append((self.tick, qq))
+        entries = buf.setdefault(eid, [])
+        if entries and entries[-1][0] == self.tick:
+            # #1012：一 tick 一条目——同帧重复显式 eid 取帧内最后一条读数。
+            # 旧实现无条件 append 两条同 tick 条目，读侧严格递增守卫
+            # （invalid_rotation_ticks）随即拒读缓冲约 96 tick（整个老化窗口），
+            # predicted_rot 静默失效且入口无任何告警。
+            entries[-1] = (self.tick, qq)
+        else:
+            entries.append((self.tick, qq))
         buf[eid] = buf[eid][-_ROT["len"]:]
         got += 1
     if got:
