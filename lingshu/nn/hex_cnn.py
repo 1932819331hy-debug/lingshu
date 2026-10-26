@@ -213,15 +213,21 @@ def kernel_center_surround() -> np.ndarray:
 
 
 def extended_prior_family(n: int) -> List[np.ndarray]:
-    """n 个互异白箱先验核(每核唯一,无对称重复)——扩容的单元先验族。
-    构成:六方向 edge(六边形天然各向同性完备)+smooth+粗平滑+laplacian
-    +center-surround;超出时按序加微噪变体(仍互异)。
+    """扩容的单元先验族。构成:六方向 edge(六边形天然各向同性完备)
+    +smooth+粗平滑+laplacian+center-surround;超出时按序加微噪变体。
 
     #940：微噪变体的**互异性是断言并保证的**，不是声明——旧实现对常幅基核
     （如均匀 smooth）加均匀微噪再 L1 归一，扰动被归一化**恒坍缩**回原核：
     实测 idx 16/26/36 与 idx 6 逐位相同（「互异」声明不实；#339 修 grow_kernel
     回绕时探针已见 fam dup: 16/6, 26/6, 36/6）。修法：变体扰动**逐档加强**
     （×10 递进）并在落位前 `array_equal` 复核，仍重合才落位——互异由构造保证。
+
+    F23-02（#942 清单）如实标注：①「互异」指**逐位不同**——基族前 6 个 edge
+    核是**三对反向对**（fam[3]=-fam[0]、fam[4]=-fam[1]、fam[5]=-fam[2]），
+    旧 docstring「无对称重复」对基族本身不成立；微噪变体段（#940）的互异
+    才是断言保证的。②HexNet 的默认初始化集自 #339 起为 family[0..3]
+    （四方向 edge，非 DEFAULT_KERNELS 的具名核）——由
+    tests/test_issue942_f23_02_default_family_guard.py 钉住。
     """
     fam: List[np.ndarray] = []
     for d in range(6):                                   # 六方向 edge
@@ -303,6 +309,13 @@ def selfsup_finetune(img_arr: np.ndarray, kernel_name: str = "center_surround",
     `epochs <= 0` 表示「不训练」：`loss_curve` 为空，`final_loss` 回落为
     `init_loss`（没有训练就不存在「训练后」的读数），核保持为输入核。
     """
+    # F23-10（#942 清单）：NaN/Inf 入参 fail-closed——块级 NaN 会让有限差分
+    # 梯度全 NaN、核整体 NaN 化后**静默返回**（无任何告警），训练面产出不可用
+    # 核。与 #788 stcnn NaN 输入闸同款口径：与其静默出伪读数不如拒收。
+    if not np.isfinite(img_arr).all():
+        raise ValueError(
+            "selfsup_finetune：img_arr 含 NaN/Inf（有限差分梯度会整体 NaN 化，"
+            "静默返回不可用核）——请先清洗输入（F23-10 fail-closed）")
     gray = (0.299 * img_arr[..., 0] + 0.587 * img_arr[..., 1]
             + 0.114 * img_arr[..., 2]).astype(np.float32) if img_arr.ndim == 3 else img_arr.astype(np.float32)
     feat, grid = image_to_grid(gray[..., None].repeat(3, axis=2), cells_across)
@@ -311,6 +324,10 @@ def selfsup_finetune(img_arr: np.ndarray, kernel_name: str = "center_surround",
     # `w -= lr*grad` 后 `lr*grad ≫ |w|`，紧接着的 L1 归一化把旧核整段抹掉 ⇒ 每步核
     # 只由上一步的 `-grad/‖grad‖₁` 决定、与 lr 无关（lr 跨 5000 倍核几乎不动）。
     # 归一化后梯度 ~O(1)，lr 恢复为真实的步长量纲。
+    # F23-09（#942 清单）如实标注（审计面，行为不变）：此处**无条件 /255**，即
+    # 输入域契约=uint8 图像（0..255）。0..1 浮点图会被**二次归一**（信号缩至
+    # 1/255，训练近乎空转——#351 的镜像失效面）。仓内调用方全 uint8（无实害）；
+    # 0..1 域是否自适应属行为面裁定，不在本标注内。
     lum = feat[..., :1] / 255.0                          # 亮度通道 (rows,cols,1)，0..1
     rng = np.random.default_rng(seed)
     # #593：评估掩码——训练前抽一次、全程固定，`init_loss` / `final_loss` 都在它下面
@@ -423,6 +440,13 @@ def save_consolidated(kernels: Dict[str, np.ndarray], meta: Dict, path: str) -> 
         if mk in ("kernels", "consolidated", "algo"):
             # #895：algo 亦属结构字段（固化档的算法标识），meta 同名键不覆盖
             payload.setdefault("_meta_%s" % mk, mv)
+        elif mk.startswith("_meta_"):
+            # F23-06（#942 清单）：`_meta_*` 是审计改道命名空间（meta 带结构字段
+            # 同名键时的回显位）。meta 自带 `_meta_*` 键若走普通写入，会把该回显
+            # 覆盖成调用方/攻击者值——读档审计者看到的「meta 曾带 kernels」证据
+            # 即被污染。改道二级命名空间：原值保留（审计不删数据）、真回显不被
+            # 覆盖；load 侧不消费 `_meta_*`（纯审计面），行为无其它变化。
+            payload["_" + mk] = _json_safe(mv)
         else:
             # #393 残余：meta 值过 _json_safe（numpy 标量/数组透明转换）
             payload[mk] = _json_safe(mv)
