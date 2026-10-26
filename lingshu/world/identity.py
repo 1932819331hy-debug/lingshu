@@ -17,16 +17,11 @@ def validate_policy(policy):
     return policy
 
 
-def inspect_frame(nodes, predictions, observations, target_tick):
-    """Return detached receipts without allocating IDs or changing any state.
-
-    All candidates are retained. Work and diagnostic space are O(observations
-    * known entities); truncating the set could fabricate uniqueness.
-    """
+def validate_measurements(observations):
+    """Validate conservative measurements without association or state changes."""
     if not isinstance(observations, (list, tuple)):
         raise ValueError("observations must be a list of measurements")
-    rows = []
-    for index, observation in enumerate(observations):
+    for observation in observations:
         if not isinstance(observation, dict):
             raise ValueError("each observation must be a mapping")
         category, pos = observation.get("category"), observation.get("pos")
@@ -41,6 +36,18 @@ def inspect_frame(nodes, predictions, observations, target_tick):
         eid = observation.get("eid")
         if eid is not None and (isinstance(eid, bool) or not isinstance(eid, (str, int))):
             raise ValueError("eid must be a string, integer or null")
+
+
+def inspect_frame(nodes, predictions, observations, target_tick):
+    """Return detached receipts without allocating IDs or changing any state.
+
+    All candidates are retained. Work and diagnostic space are O(observations
+    * known entities); truncating the set could fabricate uniqueness.
+    """
+    validate_measurements(observations)
+    rows = []
+    for index, observation in enumerate(observations):
+        eid = observation.get("eid")
         eid = "" if eid is None else str(eid)
         rows.append({"observation_index": index, "tick": target_tick,
                      "measurement": deepcopy(observation),
