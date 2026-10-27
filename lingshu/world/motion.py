@@ -58,8 +58,9 @@ def _finite_pos(pos) -> bool:
     非法/不可解包的输入 ⇒ False（**拒绝**，不是静默放过）。
     """
     try:
-        return all(math.isfinite(float(v)) for v in list(pos)[:3])
-    except (TypeError, ValueError, IndexError):
+        values = list(pos)
+        return len(values) == 3 and all(math.isfinite(float(v)) for v in values)
+    except (TypeError, ValueError, IndexError, OverflowError):
         return False
 
 
@@ -120,7 +121,7 @@ def estimate_motion(history, eid, window, nested=False):
     return _estimate_points(points, w_start, interval_limit(window))
 
 
-def _estimate_detail(points, window_start=None, limit=None) -> Optional[Dict]:
+def _estimate_detail(points, window_start=None, limit=None, diagnostics=None) -> Optional[Dict]:
     """真实 `(tick, pos)` 序列 → 运动读数 dict；无可用位移 ⇒ None。
 
     · `w = 1` 若 `dt <= limit`，否则 `limit/dt`（**长间隔降权**，不丢弃证据）；
@@ -136,6 +137,7 @@ def _estimate_detail(points, window_start=None, limit=None) -> Optional[Dict]:
     lim = float(limit) if limit else None
     rows = []
     nonfinite = 0
+    arithmetic = 0
     for (t0, p0), (t1, p1) in zip(points, points[1:]):
         dt = t1 - t0
         if dt <= 0:
@@ -143,16 +145,34 @@ def _estimate_detail(points, window_start=None, limit=None) -> Optional[Dict]:
         if not (_finite_pos(p0) and _finite_pos(p1)):
             nonfinite += 1
             continue
-        dx = (p1[0] - p0[0]) / dt
-        dz = (p1[2] - p0[2]) / dt
-        length = math.hypot(dx, dz)
-        weight = 1.0 if (lim is None or dt <= lim) else (lim / dt)
+        try:
+            dx = (p1[0] - p0[0]) / dt
+            dz = (p1[2] - p0[2]) / dt
+            # 差先溢出但速度仍可表示时，先除真实间隔再相减。
+            if not math.isfinite(dx):
+                dx = p1[0] / dt - p0[0] / dt
+            if not math.isfinite(dz):
+                dz = p1[2] / dt - p0[2] / dt
+            length = math.hypot(dx, dz)
+            weight = 1.0 if (lim is None or dt <= lim) else (lim / dt)
+        except (TypeError, ValueError, IndexError, OverflowError):
+            arithmetic += 1
+            continue
+        if not all(math.isfinite(v) for v in (dx, dz, length, weight)) or weight <= 0.0:
+            arithmetic += 1
+            continue
         rows.append((dt, dx, dz, length, weight,
                      window_start is None or t1 >= window_start))
+    if diagnostics is not None:
+        diagnostics["arithmetic_pairs_dropped"] = arithmetic
     if not rows:
         return None
     den = sum(r[4] for r in rows)
     speed = sum(r[4] * r[3] for r in rows) / den
+    if not math.isfinite(speed):
+        peak = max(r[3] for r in rows)
+        ratio = math.fsum(r[4] * (r[3] / peak) for r in rows) / den
+        speed = peak * min(1.0, ratio)
     ux = uz = uw = 0.0
     direction = None
     for (_dt, dx, dz, length, weight, _in_window) in rows:
@@ -275,8 +295,9 @@ class ObservationWindow:
         if eid not in self._details:
             window_points = self.points.get(eid, [])
             points, n_context = self._context_points(eid, window_points)
+            diagnostics = {}
             detail = _estimate_detail(points, self.window_start,
-                                      self.interval_limit)
+                                      self.interval_limit, diagnostics)
             nonfinite = _nonfinite_points(points)
             last_obs = points[-1][0] if points else None
             stale = (self.last_tick - last_obs
@@ -294,9 +315,13 @@ class ObservationWindow:
                 "nonfinite_points": nonfinite,
                 "nonfinite_pairs_dropped": _nonfinite_pairs(points),
             }
+            arithmetic = diagnostics.get("arithmetic_pairs_dropped", 0)
+            if arithmetic:
+                out["arithmetic_pairs_dropped"] = arithmetic
             if detail is None:
                 # 全无可采纳位移：区分"读数坏了"与"真实样本不足"（不静默、可判读）
-                out["reason"] = ("nonfinite_observation" if nonfinite
+                out["reason"] = ("invalid_motion_arithmetic" if arithmetic else
+                                 "nonfinite_observation" if nonfinite
                                  else "insufficient_real_observations")
             else:
                 out.update({
@@ -366,10 +391,17 @@ def recent_direction(history, eid, nested=False) -> Optional[Tuple[float, float,
         if cur is None:
             continue
         pos = cur["pos"] if nested else cur
+        if not _finite_pos(pos):
+            newer = None
+            continue
         if newer is not None:
-            dx, dz = newer[0] - pos[0], newer[2] - pos[2]
-            length = math.hypot(dx, dz)
-            if length > 1e-6:
+            try:
+                dx, dz = newer[0] - pos[0], newer[2] - pos[2]
+                length = math.hypot(dx, dz)
+            except (TypeError, ValueError, IndexError, OverflowError):
+                newer = pos
+                continue
+            if math.isfinite(length) and length > 1e-6:
                 return dx / length, 0.0, dz / length
         newer = pos
     return None
