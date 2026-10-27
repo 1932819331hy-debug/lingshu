@@ -330,20 +330,35 @@ class SpatiotemporalMemory:
         self._written.append(written)
         return event
 
+    #: recall 可查询的字段白名单＝事件契约字段面（_EVENT_FIELDS 全集）。
+    #: #162（本件）：旧白名单只有四键（direction/moving/period/label）——
+    #  `speed`/`t_start`/`t_end` 在事件里存了值却**不可查询**（静默忽略＝
+    #  假全量）。白名单对齐事件契约全集后，查询键与召回键一一对应。
+    _QUERY_KEYS = frozenset(_EVENT_FIELDS)
+
     def recall(self, query=None):
-        """回忆：按条件查询时空记忆（白箱召回，无 LLM）"""
+        """回忆：按条件查询时空记忆（白箱召回，无 LLM）。
+
+        #162（本件）：可查询键白名单对齐 `_EVENT_FIELDS` 全集——旧白名单
+        漏掉 `t_start`/`t_end`/`speed` 等事件契约字段，按这些键查询被静默
+        忽略（返回全量＝假命中）。
+        """
+        if query is not None:
+            unknown = set(query) - self._QUERY_KEYS
+            if unknown:
+                raise ValueError(
+                    "recall：查询键 %r 不在可查询字段 %s 内——旧实现静默忽略"
+                    "（返回全量＝假命中）；如需按新键查询请先扩展事件契约"
+                    % (sorted(unknown), sorted(self._QUERY_KEYS)))
         out = []
         for e in self.events:
             if query is None:
                 out.append(e)
             else:
-                hit = all(
-                    e.get(k) == v for k, v in query.items()
-                    if k in ("direction", "moving", "period", "label"))
+                hit = all(e.get(k) == v for k, v in query.items())
                 if hit:
                     out.append(e)
         return out
-
     def verify_consistency(self):
         """自校验：回忆 vs 已记事件一致性（记忆无幻觉）。
 
