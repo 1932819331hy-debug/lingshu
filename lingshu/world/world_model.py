@@ -1137,6 +1137,7 @@ def _phase_at(seq, P, h):
     `TypeError: list indices must be integers or slices, not float`。
     ⇒ 收成一个函数，两处共用（与 #4 的纪律同一条）。
     **整数 P 走原来那一行**（逐位不变）；非整数 P 在相位上做**线性插值**。
+    跨周期的预测先回绕到最近一周期，避免目标索引越过历史后被钳成最后观测值。
     """
     if not seq:
         return None
@@ -1145,6 +1146,8 @@ def _phase_at(seq, P, h):
             return None
         h_eff = ((h - 1) % P) + 1
         return seq[h_eff - P - 1]
+    if h > P:
+        h = h % float(P) or float(P)          # 整周期保留末端观测锚点
     j = (len(seq) - 1) + h - float(P)          # 目标索引（浮点）
     if j < 0:
         return None
