@@ -87,8 +87,22 @@ def canonical_condition(domains: Dict[str, str]) -> Dict:
             continue
         v = domains[k]
         v = v.strip() if isinstance(v, str) else v   # #138：先剥空白再查同义词
-        v = SYNONYMS.get(v, v)
-        canon[k] = v if v in allowed else INVALID
+        # #1063①：本函数自己的输出是仓内一等输入形状（test_verdict_unasserted 直接
+        # 把 canonical_condition(raw) 交给 assess），但 `__UNASSERTED__` 不在 allowed
+        # 枚举里 ⇒ 二次归一被判 INVALID：cond_hash 漂移、validate_edges 把 21 个
+        # 「未声明」域全报成 E0_INVALID。此处对哨兵幂等短路（未声明仍是未声明）。
+        if v == UNASSERTED:
+            canon[k] = UNASSERTED
+            continue
+        # #1063②：类型不对（JSON 数组/对象解码后的 list/dict/set）在
+        # `SYNONYMS.get(v, v)` 处抛 unhashable TypeError——文件头第 39 行把
+        # 「类型不对」明确列为非法值的一类，应落 INVALID 而非崩溃。
+        try:
+            v = SYNONYMS.get(v, v)
+            ok = v in allowed
+        except TypeError:
+            ok = False
+        canon[k] = v if ok else INVALID
     return dict(sorted(canon.items()))
 
 
