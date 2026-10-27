@@ -121,7 +121,7 @@ def estimate_motion(history, eid, window, nested=False):
     return _estimate_points(points, w_start, interval_limit(window))
 
 
-def _estimate_detail(points, window_start=None, limit=None, diagnostics=None) -> Optional[Dict]:
+def _motion_rows(points, window_start=None, limit=None):
     """真实 `(tick, pos)` 序列 → 运动读数 dict；无可用位移 ⇒ None。
 
     · `w = 1` 若 `dt <= limit`，否则 `limit/dt`（**长间隔降权**，不丢弃证据）；
@@ -163,8 +163,13 @@ def _estimate_detail(points, window_start=None, limit=None, diagnostics=None) ->
             continue
         rows.append((dt, dx, dz, length, weight,
                      window_start is None or t1 >= window_start))
-    if diagnostics is not None:
-        diagnostics["arithmetic_pairs_dropped"] = arithmetic
+    return rows, nonfinite, arithmetic
+
+
+def _estimate_detail(points, window_start=None, limit=None) -> Optional[Dict]:
+    """保持三参估计契约；行构造另返算术拒绝计数，不改变无估计时的 None。"""
+    rows, nonfinite, arithmetic = _motion_rows(points, window_start, limit)
+    lim = float(limit) if limit else None
     if not rows:
         return None
     den = sum(r[4] for r in rows)
@@ -193,6 +198,7 @@ def _estimate_detail(points, window_start=None, limit=None, diagnostics=None) ->
         "confidence": round(den / len(rows), 6),
         "interval_limit": lim,
         "nonfinite_pairs_dropped": nonfinite,
+        "arithmetic_pairs_dropped": arithmetic,
     }
 
 
@@ -295,9 +301,8 @@ class ObservationWindow:
         if eid not in self._details:
             window_points = self.points.get(eid, [])
             points, n_context = self._context_points(eid, window_points)
-            diagnostics = {}
             detail = _estimate_detail(points, self.window_start,
-                                      self.interval_limit, diagnostics)
+                                      self.interval_limit)
             nonfinite = _nonfinite_points(points)
             last_obs = points[-1][0] if points else None
             stale = (self.last_tick - last_obs
@@ -315,7 +320,8 @@ class ObservationWindow:
                 "nonfinite_points": nonfinite,
                 "nonfinite_pairs_dropped": _nonfinite_pairs(points),
             }
-            arithmetic = diagnostics.get("arithmetic_pairs_dropped", 0)
+            arithmetic = (detail.get("arithmetic_pairs_dropped", 0) if detail is not None
+                          else _motion_rows(points, self.window_start, self.interval_limit)[2])
             if arithmetic:
                 out["arithmetic_pairs_dropped"] = arithmetic
             if detail is None:
