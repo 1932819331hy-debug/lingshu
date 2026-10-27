@@ -265,7 +265,8 @@ class AnchorVerification:
         rec["channel_conflicts"][channel] = conflict
         # 冲突 → 该通道证据清零
         rec["channel_evidence"][channel] = 0.0
-        result = self.anchor_state(anchor_id)
+        # 冲突是新的反证：返回值、摘要与稳定轮数须立即反映现有资格。
+        result = self.verify_anchor(anchor_id)
         result["conflict_detected"] = True
         result["conflict_count"] = len(rec["channel_conflicts"])
         return result
