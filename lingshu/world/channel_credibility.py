@@ -139,7 +139,13 @@ class ChannelCredibilityRegistry:
         if not self.persist_path:
             return
         try:
-            os.makedirs(os.path.dirname(self.persist_path), exist_ok=True)
+            # #1065：persist_path 为**纯文件名**时 dirname="" ⇒ makedirs("") 抛
+            # FileNotFoundError 被下方 except 静默吞——持久化静默失效（重载回
+            # 先验）。修正：无目录成分时跳过 makedirs（文件直接落 cwd），有目
+            # 录成分才建目录。
+            _dir = os.path.dirname(self.persist_path)
+            if _dir:
+                os.makedirs(_dir, exist_ok=True)
             # #651：落盘前过滤非注册键——_load 重启后只认 DEFAULT_CHANNELS
             #（构造器先建的就是这六个键），写下去也只写这批，盘面与重载面
             # 严格一致。_state 里混入的其它键（直改内部字典 / 旧版本残留）
