@@ -72,7 +72,12 @@ def value(s_delta_d: float, gain: float, gain_gate: float = 0.05) -> float:
     if gain <= 0.0:
         return 0.0
     gate = _sigmoid((gain - gain_gate) * 100.0)
-    return float(s_delta_d) * gate
+    # #1075②：非有限 ΔD 按 #402 归零（同文件 kl_binary / gain_task 的同款守卫；
+    # 旧实现原样返回 ⇒ NaN 参与排序恒 False（与零收益不可区分）、inf 恒排第一）。
+    s_delta_d = float(s_delta_d)
+    if not math.isfinite(s_delta_d):
+        return 0.0
+    return s_delta_d * gate
 
 
 class ConfirmationEvaluator:
@@ -101,8 +106,19 @@ class ConfirmationEvaluator:
                  contradiction: bool = False) -> Dict:
         """评估确认状态：返回确认度分层（weak/strong/stable）与完全确认判定。"""
         # 条件①：所有相关通道可信度达标
+        # #1075①：非数值通道（JSON/外部数据解码后的 str/None/list/…）按
+        # fail-closed 处理——与同入口对 NaN 的既有路径一致（`nan >= θ` 恒 False
+        # ⇒ 条件不满足）。旧实现直接比较 ⇒ TypeError 打断整次评估。
+        def _cred_ok(c) -> bool:
+            try:
+                c = float(c)
+            except (TypeError, ValueError):
+                return False
+            # +inf 会以「≥ 阈值」的面目静默达标（同 #402 的 NaN 放行族）⇒
+            # 非有限一律不达标。
+            return math.isfinite(c) and c >= self.conf_threshold
         ch_ok = bool(channel_creds) and all(
-            c >= self.conf_threshold for c in channel_creds.values())
+            _cred_ok(c) for c in channel_creds.values())
         # 条件②：至少一次强验证命中（realized_KL > θ_g）
         strong_ok = realized_kl > self.kl_threshold
         # 条件③：跨时间稳定
