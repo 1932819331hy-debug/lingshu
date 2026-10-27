@@ -649,6 +649,26 @@ class UnifiedWorldModel:
         判据来源：verify 端口语义（world_model.py 模块 docstring：验证端口
         「外部观察者逐 tick 对比」）+ 条件空间四维度的「时间窗口」维度。
         """
+        def finite_point(value):
+            try:
+                return (isinstance(value, (list, tuple)) and len(value) == 3
+                        and all(math.isfinite(v) for v in value))
+            except (TypeError, ValueError, OverflowError):
+                return False
+
+        def finite_bound(value):
+            try:
+                return math.isfinite(value) and value >= 0
+            except (TypeError, ValueError, OverflowError):
+                return False
+
+        def finite_mean(values):
+            combined = sum(values)
+            if math.isfinite(combined):
+                return combined / len(values)
+            scale = max(values)
+            return scale * min(1.0, math.fsum(v / scale for v in values) / len(values))
+
         snap = self._obs_snapshot
         fresh = (snap is not None and self._obs_tick is not None
                  and self._pred_tick is not None and self._obs_tick > self._pred_tick)
@@ -658,17 +678,33 @@ class UnifiedWorldModel:
         details = []
         for eid, p in self._last_prediction.items():
             actual = snap.get(eid) if fresh else None
-            if actual is None or p.get("target_tick", self._obs_tick) != self._obs_tick:
+            predicted_ok = finite_point(p["predicted"])
+            bound_ok = finite_bound(p["bound"])
+            eligible = actual is not None and p.get("target_tick", self._obs_tick) == self._obs_tick
+            reason = None
+            if not predicted_ok:
+                reason = "invalid_prediction"
+            elif not bound_ok:
+                reason = "invalid_bound"
+            elif eligible and not finite_point(actual):
+                reason = "invalid_observation"
+            dist = None
+            if eligible and reason is None:
+                dist = math.dist(p["predicted"], actual)
+                if not math.isfinite(dist):
+                    reason = "unrepresentable_distance"
+            if not eligible or reason is not None:
                 pending += 1
                 d = {"entity": eid, "mode": p["mode"],
-                     "predicted": p["predicted"], "actual": None,
-                     "bound": p["bound"], "distance": None,
+                     "predicted": p["predicted"] if predicted_ok else None, "actual": None,
+                     "bound": p["bound"] if bound_ok else None, "distance": None,
                      "hit": None, "status": "pending"}
+                if reason is not None:
+                    d["unverifiable_reason"] = reason
                 if stale:
                     d["stale"] = True
                 details.append(d)
                 continue
-            dist = math.dist(p["predicted"], actual)
             hit = dist < p["bound"]
             point_hits += dist < self.hit_threshold
             distances.append(dist)
@@ -685,8 +721,8 @@ class UnifiedWorldModel:
                          "hit_rate": rate, "pending": pending,
                          "bound_coverage": rate,
                          "point_hit_rate": round(point_hits / total, 4) if total else None,
-                         "mean_distance": round(sum(distances) / total, 4) if total else None,
-                         "mean_bound": round(sum(bounds) / total, 4) if total else None,
+                         "mean_distance": round(finite_mean(distances), 4) if total else None,
+                         "mean_bound": round(finite_mean(bounds), 4) if total else None,
                          "details": details}
         if snap is None:
             self._compare["no_observation"] = True
